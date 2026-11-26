@@ -30,7 +30,7 @@ Open the library management view in **System settings → Skills** and choose a 
 - **Folder**: select the skill directory, preserving script and reference paths.
 - **Git**: provide an HTTPS/SSH repository URL and, optionally, a ref and subdirectory. Inspect detected skills before importing. Private repositories use Git credentials or SSH configuration on the backend host; do not place tokens in URLs.
 
-A ZIP is **one** Skill package: either `SKILL.md` at the archive root, or one top-level folder that contains `SKILL.md`. It may hold at most 500 entries (files and directory records — the same 500-file cap as [Runtime behavior](../reference/runtime-behavior.md)); a repository-wide ZIP that holds several skills, or more than 500 entries, is refused with the actual entry count and the cap, so import that whole repository with **Git** instead.
+A ZIP is **one** Skill package: either `SKILL.md` at the archive root, or one top-level folder that contains `SKILL.md`. It may hold at most 500 entries (files and directory records) and the archive itself may be at most 25 MiB — the same caps as [Runtime behavior](../reference/runtime-behavior.md). A repository-wide ZIP that holds several skills, or more than 500 entries, is refused with the actual entry count and the cap, so import that whole repository with **Git** instead.
 
 Open the imported Skill and inspect its name, instructions, and supporting files. Packaging a script does not execute it or install Python/R dependencies. Dependencies remain managed through scientific environments.
 
