@@ -55,6 +55,11 @@ export function subagentTimelineEntries(subagent: Subagent): RunTimelineEntry[] 
 
     if (step.kind === "tool") {
       const output = status !== "running" || (step.input !== undefined && step.content !== step.input) ? step.content : undefined;
+      // The terminal result already repeats the captured stream for a shell
+      // step (#1431), so a finished step keeps the progress prefix only when
+      // it says something the result does not.
+      const progress = step.progress?.trim() ?? "";
+      const repeatsProgress = status !== "running" && progress !== "" && (output ?? "").includes(progress);
       entries.push({
         ...(output ? { preview: evidencePreview(output), ...(status === "running" ? { liveFailure: reportedFailure(output) } : {}) } : {}),
         expanded: status === "running",
@@ -63,7 +68,7 @@ export function subagentTimelineEntries(subagent: Subagent): RunTimelineEntry[] 
           id: `${subagent.id}:${step.toolCallId ?? step.id}`,
           ...(step.input !== undefined ? { input: step.input } : {}),
           name: step.toolName ?? "tool",
-          ...(output !== undefined ? { output: status !== "running" && step.progress ? `${step.progress}\n\n---\n\n${output}` : output } : {}),
+          ...(output !== undefined ? { output: status !== "running" && step.progress && !repeatsProgress ? `${step.progress}\n\n---\n\n${output}` : output } : {}),
           ...(step.args ? { args: step.args } : {}),
           status,
         },

@@ -166,6 +166,20 @@ test("completed child tool details retain progress without keeping a live failur
   assert.equal(entry.liveFailure, undefined);
 });
 
+test("a finished child step does not print its streamed output twice", () => {
+  // The terminal result carries the captured stream for a shell step (#1431),
+  // so the progress prefix would repeat the same line under one heading.
+  const entries = subagentTimelineEntries(buildSubagent({ steps: [{
+    id: "shell", createdAt: timestamp, input: "printf 'batch1 written'", kind: "tool", status: "completed",
+    content: "stdout:\nbatch1 written\nstderr:", progress: "batch1 written\n", toolName: "run_shell",
+  }] }));
+  const entry = entries[0];
+  assert.ok(entry?.type === "tool");
+  assert.equal(entry.trace.output, "stdout:\nbatch1 written\nstderr:");
+  assert.equal((entry.trace.output.match(/batch1 written/g) ?? []).length, 1);
+});
+
+
 test("child snapshots distinguish pending input, live evidence, and terminal results", () => {
   const entry = (extra: Record<string, unknown>) => subagentTimelineEntries(buildSubagent({ status: "running", steps: [{
     id: "tool", createdAt: timestamp, kind: "tool", status: "running", content: "query", input: "query", ...extra,
