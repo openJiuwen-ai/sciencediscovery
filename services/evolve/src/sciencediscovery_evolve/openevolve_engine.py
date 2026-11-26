@@ -39,11 +39,11 @@ from .engine import RunSpec
 from .measurement import Dataset, missing_candidate_runtime
 from .events import Emit, finite
 from .logging_config import get_logger
+from .outcome import SCORE_KEY, normalized_criteria, raw_measurements
 from .vendor.openevolve import (
     OpenEvolveAggregator,
     OpenEvolveArchive,
     OpenEvolveStrategy,
-    SCORE_KEY,
     make_propose,
     make_run,
     make_reward,
@@ -280,10 +280,11 @@ class OpenEvolveEngine:
                     aggregator.on_event, lambda level, message: reporter.emit(events.log(level, message)), memory,
                 )
             aggregator.seed()
-            baseline.update({
-                key: float(value) for key, value in archive.best().metrics.items()
-                if isinstance(value, (int, float)) and key != SCORE_KEY
-            })
+            # The raw measurements, not the aggregate: `relative_to_baseline`
+            # divides by these, and a criterion literally named `score` is here
+            # under its own id even though the flat dict's `score` is the
+            # aggregate.
+            baseline.update(raw_measurements(archive.best().metrics))
             return aggregator
 
         common: Dict[str, Any] = {
@@ -541,11 +542,12 @@ class _Reporter:
             inspiration_indexes=[inspiration_iteration] if inspiration_iteration is not None else None,
         ))
         if valid:
-            criteria = {
-                key: float(value) for key, value in metrics.items()
-                if isinstance(value, (int, float))
-                and key not in (SCORE_KEY, "seconds")
-            }
+            # The event's `criteria` is the documented normalised half, so a
+            # criterion named `score` is published instead of being filtered
+            # out with the aggregate it shares a name with. The raw half rides
+            # alongside it: the event log is the audit record, and 0.6 behind a
+            # normalised 0.3 has to survive the process.
+            criteria = normalized_criteria(metrics)
             reward = float(self.domain.reward(metrics))
             # Only the gate score is measured here: the archive's held-out
             # evaluation produces it, and no per-node rollout aggregate survives
@@ -556,6 +558,7 @@ class _Reporter:
             self.emit(events.evaluated(
                 program.iteration, reward, criteria,
                 gate_score=float(raw_score),
+                raw_criteria=raw_measurements(metrics),
             ))
 
     def _best(self, payload: Dict[str, Any]) -> None:

@@ -131,9 +131,14 @@ def test_non_finite_numbers_never_reach_a_property() -> None:
 
 
 def test_criteria_are_flattened_into_queryable_properties() -> None:
+    # The event carries both halves: normalised `criteria` (0.0055 for a
+    # reciprocal runtime) and the evaluator's `rawCriteria` (180 seconds). The
+    # graph's `crit_*` properties are raw, because that is the unit its own
+    # queries are written in.
     result = plan([record(5, {
-        "criteria": {"f1": 0.62, "runtime": 180.0}, "nodeIndex": 1,
-        "reward": 0.6, "type": "evaluated",
+        "criteria": {"f1": 0.62, "runtime": 0.0055},
+        "rawCriteria": {"f1": 0.62, "runtime": 180.0},
+        "nodeIndex": 1, "reward": 0.6, "type": "evaluated",
     })])
 
     node = result.nodes[0]
@@ -142,6 +147,19 @@ def test_criteria_are_flattened_into_queryable_properties() -> None:
     assert node["crit_f1"] == 0.62
     assert node["crit_runtime"] == 180.0
     assert node["reward"] == 0.6
+
+
+def test_an_older_event_keeps_its_criteria_as_the_raw_measurements() -> None:
+    # Events written before `rawCriteria` existed carried the raw
+    # measurements in `criteria`; reading it as the fallback keeps a replay's
+    # units right.
+    result = plan([record(6, {
+        "criteria": {"f1": 0.62, "runtime": 180.0}, "nodeIndex": 2,
+        "reward": 0.6, "type": "evaluated",
+    })])
+
+    node = result.nodes[0]
+    assert node["crit_runtime"] == 180.0
 
 
 def test_an_accepted_candidate_moves_the_elected_edge() -> None:

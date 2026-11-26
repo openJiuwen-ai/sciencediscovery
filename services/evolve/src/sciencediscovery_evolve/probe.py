@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .engine import RunSpec
 from .logging_config import get_logger
 from .measurement import GATE, Dataset, DatasetError, load_dataset, shard_indices
+from .outcome import SCORE_KEY, raw_measurements
 
 log = get_logger("probe")
 
@@ -106,11 +107,18 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
     if mode == "custom_script":
         from .script_domain import ScriptError, script_domain
 
+        # Held by the domain and filled in below, exactly as the engine's
+        # seeding code fills it — the same gap this probe refuses to have in the
+        # dataset path below. Without it a `relative_to_baseline` criterion is
+        # normalised against each candidate itself, so the damaged copy and the
+        # starting point both land on 0.5 and a working evaluator reads as flat.
+        reference: Dict[str, float] = {}
         try:
             domain = script_domain(
                 scorecard=spec.scorecard, script=spec.script, capability=spec.sandbox,
                 baseline_code=spec.baseline_code,
                 candidate_timeout=spec.candidate_timeout_seconds,
+                baseline=reference,
             )
         except ScriptError as error:
             raise ProbeError(str(error)) from error
@@ -129,7 +137,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         # both called "the starting point".
         shards = _gate_slots(spec)
         try:
-            baseline, _raw, why = _measure(domain.evaluate, spec.baseline_code, shards)
+            baseline, raw, why = _measure(domain.evaluate, spec.baseline_code, shards)
         except ScriptError as error:
             raise ProbeError(
                 f"the evaluator could not even finish on the starting point: {error}"
@@ -140,6 +148,9 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
                 "score in the search is measured relative to it. "
                 + (f"The script reported: {why}" if why.strip() else "The script gave no reason.")
             )
+        # Frozen before the damaged copy is scored, so the comparison this probe
+        # exists to make is the one the search will make.
+        reference.update(raw)
         damaged, damage_label = _damage(spec.baseline_code)
         try:
             worsened, _damaged_raw, damaged_why = _measure(domain.evaluate, damaged, shards)
@@ -298,22 +309,31 @@ def _probe_gated(spec: RunSpec) -> Dict[str, Any]:
         raise ProbeError(f"the workspace has no {entrypoint or 'entrypoint file'}, so the probe has nothing to start from")
 
     original = (workspace / entrypoint).read_text(encoding="utf-8")
+    # Same wiring as the scripted probe: the gate is handed the reference map
+    # the domain normalises against, and the starting point's raw measurements
+    # fill it before the damaged copy is scored. Left empty, a
+    # `relative_to_baseline` criterion divides the damaged copy by itself, both
+    # readings land on the same number and the probe reports a working gate as
+    # flat.
+    reference: Dict[str, float] = {}
     try:
         domain = test_gate_domain(
             scorecard=spec.scorecard, workspace=workspace, capability=spec.sandbox,
             entrypoint_path=entrypoint, candidate_timeout=spec.candidate_timeout_seconds,
+            baseline=reference,
         )
     except TestGateError as error:
         raise ProbeError(str(error)) from error
 
     groups = tuple(_gate_groups(spec))
-    baseline, _raw, why = _measure(domain.evaluate, original, groups)
+    baseline, raw, why = _measure(domain.evaluate, original, groups)
     if baseline is None:
         raise ProbeError(
             "the project's current implementation does not even get the tests to run, "
             "so there is no starting point to compare against. "
             + (f"The suite reported: {why}" if why.strip() else "The suite gave no reason.")
         )
+    reference.update(raw)
     worsened = _score(domain.evaluate, _hollow_out(original), groups)
 
     flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
@@ -443,10 +463,10 @@ def _measure(
     if not valid:
         return None, {}, error
     raw = {
-        key: float(value) for key, value in metrics.items()
-        if key != "score" and isinstance(value, (int, float)) and math.isfinite(float(value))
+        key: value for key, value in raw_measurements(metrics).items()
+        if math.isfinite(value)
     }
-    value = metrics.get("score")
+    value = metrics.get(SCORE_KEY)
     return (float(value) if isinstance(value, (int, float)) else None), raw, error
 
 

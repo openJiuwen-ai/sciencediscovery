@@ -73,8 +73,9 @@ from .measurement import (
     shard_indices,
 )
 from .judge_domain import grader, judge_domain
+from .outcome import SCORE_KEY, normalized_criteria, raw_measurements
 from .scorecard import KNOWN_NORMALIZE
-from .scorecard_domain import SCORE_KEY, scorecard_domain
+from .scorecard_domain import scorecard_domain
 from .text_candidate import extract_text
 from .prompt import repair_prompt, with_promise_request
 from .vendor.puct.program import extract_program, read_promise
@@ -357,10 +358,10 @@ class PuctEngine:
                     aggregator.on_event, lambda level, message: reporter.emit(events.log(level, message)), memory,
                 )
             aggregator.seed()
-            baseline.update({
-                key: float(value) for key, value in tree.root().program.metrics.items()
-                if isinstance(value, (int, float)) and key != SCORE_KEY
-            })
+            # Raw measurements, not the aggregate: the reference a
+            # `relative_to_baseline` criterion divides by, including a criterion
+            # whose own id is `score`.
+            baseline.update(raw_measurements(tree.root().program.metrics))
             return aggregator
 
         common: Dict[str, Any] = {
@@ -747,17 +748,19 @@ class _Reporter:
             promise=node.promise,
         ))
         if valid:
-            criteria = {
-                key: float(value) for key, value in metrics.items()
-                if isinstance(value, (int, float)) and key not in (SCORE_KEY, "seconds")
-            }
-            # Both numbers are the held-out one under PUCT: a node is scored on
-            # the gate shards and ranked on that same score. Saying so with two
-            # equal fields beats inventing a rollout figure that is not measured.
+            # The event's `criteria` is the documented normalised half, so a
+            # criterion named `score` is published rather than filtered out;
+            # `rawCriteria` carries the measurement behind it into the audit
+            # record. Both numbers are the held-out one under PUCT: a node is
+            # scored on the gate shards and ranked on that same score. Saying so
+            # with two equal fields beats inventing a rollout figure that is not
+            # measured.
+            criteria = normalized_criteria(metrics)
             self.emit(events.evaluated(
                 node.index, float(metrics[SCORE_KEY]), criteria,
                 gate_score=float(metrics[SCORE_KEY]),
                 rollout_score=float(metrics[SCORE_KEY]),
+                raw_criteria=raw_measurements(metrics),
             ))
         self._sweep.append((node, metrics))
 

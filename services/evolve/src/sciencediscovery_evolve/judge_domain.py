@@ -52,6 +52,7 @@ import statistics
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .logging_config import get_logger
+from .outcome import GRADINGS_KEY, SCORE_KEY, SPREAD_KEY, UNDECIDABLE_KEY, VIOLATED_KEY, build_outcome
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
 from .vendor.puct.domain import Domain
@@ -59,8 +60,6 @@ from .vendor.puct.program import Program
 from .vendor.puct.tree import finite as _finite
 
 log = get_logger("judge")
-
-SCORE_KEY = "score"
 
 #: Below this many gradings a spread is not a measurement of anything. The
 #: design's own floor, and the same argument as four gate shards.
@@ -118,31 +117,29 @@ def judge_domain(
 
         median = statistics.median(gradings)
         spread = (max(gradings) - min(gradings)) if len(gradings) > 1 else 0.0
-        metrics: Dict[str, Any] = {
-            criterion["id"]: median,
-            "gradings": len(gradings),
-            "spread": spread,
-        }
+        raw = {criterion["id"]: median}
+        scored = score_candidate(scorecard, raw, reference or raw)
+        metrics = build_outcome(
+            raw=raw,
+            scored=scored,
+            extra={GRADINGS_KEY: len(gradings), SPREAD_KEY: spread},
+        )
 
         if spread > variance_threshold:
             # Undecidable, not bad. Recording it as a low score would turn the
             # judge's noise into a ranking signal.
             metrics[SCORE_KEY] = float("-inf")
-            metrics["undecidable"] = True
+            metrics[UNDECIDABLE_KEY] = True
             return False, metrics, (
                 f"the spread across {len(gradings)} gradings, {spread:.3f}, is over the "
                 f"{variance_threshold:.3f} threshold, so this candidate is undecidable "
                 f"(which is not the same as graded badly)"
             )
 
-        raw = {criterion["id"]: median}
-        scored = score_candidate(scorecard, raw, reference or raw)
-        metrics[SCORE_KEY] = scored.reward
-
         violations = evaluate_constraints(scorecard, raw, reference or raw)
         if violations:
             metrics[SCORE_KEY] = float("-inf")
-            metrics["violated"] = violations[0].constraint_id
+            metrics[VIOLATED_KEY] = violations[0].constraint_id
             return False, metrics, violations[0].detail
         return True, metrics, ""
 

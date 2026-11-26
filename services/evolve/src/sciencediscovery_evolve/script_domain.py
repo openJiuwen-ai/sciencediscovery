@@ -67,6 +67,7 @@ from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional, Seque
 
 from .cancellation import CAUSE_TEXT, mark_cancelled, stop_reason_of
 from .logging_config import get_logger
+from .outcome import SCORE_KEY, VIOLATED_KEY, build_outcome
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
 from .vendor.puct.domain import Domain
@@ -77,8 +78,6 @@ from .shard_roles import cases_for, total_slots
 from .vendor.puct.tree import finite as _finite
 
 log = get_logger("script")
-
-SCORE_KEY = "score"
 
 #: The three names the evaluator reads. Environment rather than argv because a
 #: candidate imported into the same process sees both, and the environment is
@@ -190,12 +189,12 @@ def script_domain(
 
         raw = {key: value for key, value in values.items() if isinstance(value, (int, float))}
         scored = score_candidate(scorecard, raw, reference or raw)
-        metrics: Dict[str, Any] = {**raw, SCORE_KEY: scored.reward}
+        metrics = build_outcome(raw=raw, scored=scored)
 
         violations = evaluate_constraints(scorecard, raw, reference or raw)
         if violations:
             metrics[SCORE_KEY] = float("-inf")
-            metrics["violated"] = violations[0].constraint_id
+            metrics[VIOLATED_KEY] = violations[0].constraint_id
             return False, metrics, violations[0].detail
         return True, metrics, _diagnosis(payload)
 

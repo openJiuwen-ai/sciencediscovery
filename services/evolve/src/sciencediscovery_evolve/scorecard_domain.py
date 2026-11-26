@@ -47,6 +47,12 @@ from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional, Seque
 from .cancellation import mark_cancelled, stop_reason_of
 from .logging_config import get_logger
 from .measurement import Dataset, Measurement, measure_shards, shard_indices, TEST
+from .outcome import (
+    SCORE_KEY,
+    SECONDS_KEY,
+    VIOLATED_KEY,
+    build_outcome,
+)
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
 from .vendor.puct.domain import Domain
@@ -55,10 +61,6 @@ from .vendor.puct.sandbox import SandboxCapability
 from .vendor.puct.tree import finite as _finite
 
 log = get_logger("domain")
-
-#: The key the tree ranks on. Upstream's contract, and the reason the scorecard's
-#: aggregate has to be oriented before it lands here.
-SCORE_KEY = "score"
 
 
 def scorecard_domain(
@@ -99,18 +101,18 @@ def scorecard_domain(
 
         raw = dict(result.values)
         scored = score_candidate(scorecard, raw, reference or raw)
-        metrics: Dict[str, Any] = {
-            **raw,
-            SCORE_KEY: scored.reward,
-            "seconds": result.seconds,
-        }
+        metrics = build_outcome(
+            raw=raw,
+            scored=scored,
+            extra={SECONDS_KEY: result.seconds},
+        )
 
         violations = evaluate_constraints(scorecard, raw, reference or raw)
         if violations:
             # Illegal, not merely bad. `-inf` keeps it out of `best()` the same
             # way a crash does, and the constraint's id survives to the event.
             metrics[SCORE_KEY] = float("-inf")
-            metrics["violated"] = violations[0].constraint_id
+            metrics[VIOLATED_KEY] = violations[0].constraint_id
             return False, metrics, violations[0].detail
         return True, metrics, ""
 
