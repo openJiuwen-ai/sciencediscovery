@@ -12,7 +12,7 @@ import unittest.mock
 import urllib.error
 from pathlib import Path
 
-from sciencediscovery_evolve.vendor.idea_tree.research import IdeaTreeEngine, Interrupted, ResearchStore, node, now, parse_json
+from sciencediscovery_evolve.vendor.idea_tree.research import BudgetReached, IdeaTreeEngine, Interrupted, ResearchStore, node, now, parse_json
 from sciencediscovery_evolve.vendor.idea_tree.research_service import Settings
 from sciencediscovery_evolve.vendor.idea_tree.templates import snapshot
 
@@ -263,6 +263,88 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Used 0 of', self.state['reason'])
         self.assertFalse(self.state['usageKnown'])
         self.assertGreater(self.state['unreportedBudgetEstimate'], 0)
+
+    async def test_a_user_end_outranks_a_budget_exhaustion(self):
+        # Issue #1455: a stop request can land after run()'s last check_stop() and before
+        # the budget reservation, which then raises BudgetReached. The irreversible end
+        # request must win and stay terminal instead of becoming a resumable pause.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        from fastapi import HTTPException
+
+        class StopBeforeBudgetLock(asyncio.Lock):
+            """Set the user's stop at that suspension point, as a concurrent stop does."""
+            async def acquire(self):
+                engine.stop_action = 'end'
+                return await super().acquire()
+
+        self.state['settings']['maxTokens'] = 1
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        engine.usage_lock = StopBeforeBudgetLock()
+        await engine.run()
+        self.assertEqual(self.state['status'], 'ended')
+        self.assertEqual(self.state['reason'], 'Ended by user')
+        self.assertNotIn('token budget', self.state['reason'])
+        self.assertEqual(self.calls, [])
+        # `ended` is irreversible: a `continue` must be refused, unlike `paused`.
+        with patch.object(service, '_store', self.store), \
+                patch.object(service, 'start', side_effect=AssertionError('must not start')):
+            continuation = service.Command(projectId='p', sessionId='s', researchId='research-test',
+                                           operation='continue', llm=dict(url='http://localhost', token='local'))
+            with self.assertRaises(HTTPException) as conflict:
+                await service.command(continuation)
+            self.assertEqual(conflict.exception.status_code, 409)
+            self.assertIn('has ended', conflict.exception.detail)
+
+    async def test_a_user_pause_outranks_a_budget_exhaustion(self):
+        # The pause request must resolve as the user's pause, not as the budget's
+        # terminal `budget_exhausted` state.
+        class StopBeforeBudgetLock(asyncio.Lock):
+            async def acquire(self):
+                engine.stop_action = 'pause'
+                return await super().acquire()
+
+        self.state['settings']['maxTokens'] = 1
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        engine.usage_lock = StopBeforeBudgetLock()
+        await engine.run()
+        self.assertEqual(self.state['status'], 'paused')
+        self.assertEqual(self.state['reason'], 'Paused by user')
+        self.assertEqual(self.calls, [])
+
+    async def test_budget_exhaustion_without_a_stop_request_stays_terminal(self):
+        # Control: the fix must not turn plain budget exhaustion into a resumable pause.
+        self.state['settings']['maxTokens'] = 1
+        await IdeaTreeEngine(self.state, self.store, {}, self.model).run()
+        self.assertEqual(self.state['status'], 'budget_exhausted')
+        self.assertIn('Remaining token budget cannot fund the next stage', self.state['reason'])
+        self.assertIn('Used 0 of 1 tokens', self.state['reason'])
+
+    async def test_service_end_while_a_stage_hits_the_budget_settles_ended(self):
+        # The user-visible journey: `end` reaches the in-flight engine as a flag, then
+        # the in-flight stage raises BudgetReached before any stop check.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def ask(engine, role, payload, check=None):
+            entered.set()
+            await release.wait()
+            raise BudgetReached('Remaining token budget cannot fund the next stage')
+
+        with patch.object(service, '_store', self.store), patch.object(IdeaTreeEngine, 'ask', ask):
+            created = await service.command(service.Command(projectId='p', sessionId='s', operation='create',
+                                                            objective='Goal', llm=dict(url='http://localhost', token='local')))
+            identifier = created['research']['id']
+            await entered.wait()
+            ending = await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier,
+                                                           operation='end'))
+            self.assertEqual(ending['research']['status'], 'pausing')
+            release.set()
+            await service._running[identifier][1]
+            settled = service.state_for('p', 's', identifier)
+            self.assertEqual(settled['status'], 'ended')
+            self.assertEqual(settled['reason'], 'Ended by user')
 
     async def test_a_branch_at_the_ceiling_records_the_direction_it_could_not_place(self):
         """F8: a candidate parent at maxDepth - 1 leaves allowance 0, so the candidate
