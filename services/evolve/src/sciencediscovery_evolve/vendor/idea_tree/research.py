@@ -560,6 +560,17 @@ class IdeaTreeEngine:
         depth = self.state['settings']['maxDepth'] if depth is None else depth
         return max(0, depth - parent['depth'] - 1)
 
+    def expansion_constraints(self, parent):
+        """Describe the path budget using the same allowance as insertion's safety trim."""
+        depth = self.state['settings']['maxDepth']
+        direction_required = parent['kind'] == 'candidate' or (parent['id'] == 'ROOT' and depth > 1)
+        path_steps = self.proposal_allowance(parent, depth)
+        direction_steps = len(self.proposal_head(dict(parentId=parent['id'], direction=''), parent, depth))
+        return dict(parentId=parent['id'], remainingDepth=depth - parent['depth'],
+                    maxPathSteps=path_steps, directionRequired=direction_required,
+                    directionNodeAllowed=direction_steps > 0 and path_steps > 0,
+                    maxRefinements=max(0, path_steps - direction_steps))
+
     def trimmed_direction(self, proposal):
         """The direction the ceiling removed, or None when every step fit.
 
@@ -646,7 +657,7 @@ class IdeaTreeEngine:
                     # otherwise healthy run. `round` still advances, so skipping cannot
                     # loop forever, and the activity record keeps the failure visible.
                     try:
-                        ideas = await self.ask('ideate', {**self.context(), 'template': dict(id=s['template']['id'], label=s['template']['label'], assessors=[item['label'] for item in s['template']['assessors']]), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']}, check_proposals)
+                        ideas = await self.ask('ideate', {**self.context(), 'template': dict(id=s['template']['id'], label=s['template']['label'], assessors=[item['label'] for item in s['template']['assessors']]), 'nodes': self.overview(selected), 'selectedParentIds': s['selectedDirectionIds'], 'selectedParentConstraints': [self.expansion_constraints(parent) for parent in selected], 'round': s['round'] + 1, 'maximumCandidates': count, 'maxDepth': s['settings']['maxDepth'], 'scoreDirection': s['settings']['scoreDirection']}, check_proposals)
                     except ValueError as error:
                         s['round'] += 1
                         s['batch'] = []
