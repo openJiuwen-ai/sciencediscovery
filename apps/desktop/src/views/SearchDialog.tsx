@@ -77,8 +77,13 @@ export function SearchDialog({
     <div
       className="search-overlay"
       onMouseDown={(event) => {
-        // A click outside the panel closes it; a click inside does not.
-        if (event.target === event.currentTarget) onClose();
+        // A click outside the panel closes it; a click inside does not. The
+        // default is prevented because mousedown would move the focus to this
+        // overlay — which cannot hold it — and take it away again from the
+        // magnifier that closing hands it back to.
+        if (event.target !== event.currentTarget) return;
+        event.preventDefault();
+        onClose();
       }}
     >
       <div aria-label={TEXT.sidebar.searchLabel} aria-modal="true" className="search-panel" role="dialog">

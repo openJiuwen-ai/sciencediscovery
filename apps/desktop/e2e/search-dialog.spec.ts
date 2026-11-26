@@ -284,16 +284,20 @@ test("an archived hit disappears when its listing lands after the answer", async
   await expect(page.locator(".search-hit-label")).toHaveText("晶体结构分析");
 });
 
-test("a click on the overlay closes 搜索, and the page keeps its own focus", async ({ page }) => {
+test("a click on the overlay closes 搜索, and the magnifier keeps the focus", async ({ page }) => {
   await installMockApi(page, seed());
   await page.goto("/");
 
-  await page.locator(".side-head .side-head-button").click();
+  const magnifier = page.locator(".side-head .side-head-button");
+  await magnifier.click();
   const dialog = page.locator(".search-panel");
   await expect(dialog).toBeVisible();
 
   // The overlay is the dialog's background, so a click outside the panel closes
-  // it — the gesture a mouse reader expects without hunting for the ×.
+  // it — the gesture a mouse reader expects without hunting for the ×. The
+  // magnifier keeps the focus afterwards: a mousedown on the overlay would
+  // otherwise leave it on `<body>`, which is where keyboard readers get stranded.
   await page.mouse.click(8, 8);
   await expect(dialog).toBeHidden();
+  await expect(magnifier).toBeFocused();
 });
