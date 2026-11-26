@@ -7,9 +7,10 @@ import assert from "node:assert/strict";
 import { StubClient, split } from "./api-stub.js";
 import { searchWorkbench } from "../src/api/workbench.js";
 import {
-  artifactHitPlan, bareSearchId, flatResults, groupSearchResults, isSearchable, moveHit, pendingArtifactHit, searchDetail,
+  artifactHitPlan, bareSearchId, flatResults, groupSearchResults, isSearchable, moveHit, pendingArtifactHit,
+  searchDetail, withoutArchivedHits,
 } from "../src/app/session-search.js";
-import type { SessionArtifactOutput, WorkbenchSearchResult } from "../src/api/types.js";
+import type { WorkbenchSearchResponse, SessionArtifactOutput, WorkbenchSearchResult } from "../src/api/types.js";
 
 function hit(kind: WorkbenchSearchResult["kind"], label: string, over: Partial<WorkbenchSearchResult> = {}) {
   return { detail: "", id: `${kind}-1`, kind, label, projectId: "p1", ...over } as WorkbenchSearchResult;
@@ -55,6 +56,40 @@ test("an empty query is not sent, and an archived result is marked", () => {
   assert.equal(isSearchable("  "), false);
   assert.equal(isSearchable("晶"), true);
   assert.equal(hit("session", "a", { archived: true }).archived, true);
+});
+
+test("the page drops an archived Session's hits and its artifacts, and counts what it dropped", () => {
+  // The route answers archived hits — the flag is there for a client that marks
+  // them — and the page keeps the rule that they are not searchable. What it
+  // drops is what `total` over-counts, so the count has to lose them first.
+  const answer = {
+    hasMore: false,
+    limit: 20,
+    offset: 0,
+    results: [
+      hit("session", "在跑的", { id: "session:live", sessionId: "live" }),
+      hit("session", "已归档", { id: "session:gone", sessionId: "gone" }),
+      hit("artifact", "归档图", { id: "artifact:gone", sessionId: "gone" }),
+    ],
+    total: 3,
+  } as WorkbenchSearchResponse;
+
+  const kept = withoutArchivedHits(answer, new Set(["gone"]));
+  assert.deepEqual(kept.answer.results.map((result) => result.label), ["在跑的"]);
+  assert.equal(kept.dropped, 2);
+  assert.equal(kept.answer.total, 1, "the count no longer includes what will never be drawn");
+
+  // A hit with no Session — a Project — is kept whatever the archived set holds.
+  const project = withoutArchivedHits(
+    { ...answer, results: [hit("project", "材料")], total: 1 } as WorkbenchSearchResponse,
+    new Set(["gone"]),
+  );
+  assert.equal(project.dropped, 0);
+  assert.equal(project.answer.results.length, 1);
+
+  // And an empty archived set is a pass-through, not a copy.
+  const untouched = withoutArchivedHits(answer, new Set());
+  assert.equal(untouched.answer, answer);
 });
 
 test("the arrow keys walk the grouped order and wrap", () => {
