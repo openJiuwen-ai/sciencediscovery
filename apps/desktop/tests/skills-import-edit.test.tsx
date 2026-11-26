@@ -173,6 +173,48 @@ test("one SKILL.md goes up as the multipart field the route reads", async () => 
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+/** Pick a file in the dialog and press 确定, then hand back the markup the
+ *  refusal left on the pane. */
+async function refusalMarkup(reason: unknown): Promise<string> {
+  const stub = new StubClient().fail(reason);
+  const view = await mount(
+    <SkillUploadView client={stub.asClient()} onCancel={() => {}} onImported={() => {}} />,
+  );
+  try {
+    const file = new File(["PK"], "skills-main.zip", { type: "application/zip" });
+    const input = view.root.findAllByType("input").find((node) => node.props.type === "file");
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { files: [file] } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.onClick(); });
+    return JSON.stringify(view.toJSON());
+  } finally { await act(async () => { view.unmount(); }); }
+}
+
+test("an archive over the entry cap shows the count beside the cap, in the pane's language", async () => {
+  const markup = await refusalMarkup(new ApiRequestError(
+    "Skill archive exceeds 500 entries",
+    413,
+    "SKILL_PACKAGE_REFUSED",
+    { refusal: { actual: 1200, cap: 500, limit: "entries", reason: "too-large" } },
+  ));
+  const text = TEXT.settings.skills.uploadDialog.refusals;
+  assert.ok(markup.includes(text.entries(1200, 500)), "the count and the cap are not beside each other");
+  assert.ok(markup.includes(text.onePackage), "the Git import route is not offered");
+  assert.ok(!markup.includes("Skill archive exceeds 500 entries"), "the server's English sentence was shown verbatim");
+});
+
+test("a repository ZIP with no root SKILL.md says one package and points at Git import", async () => {
+  const markup = await refusalMarkup(new ApiRequestError(
+    "Skill ZIP package root must contain SKILL.md",
+    400,
+    "SKILL_PACKAGE_REFUSED",
+    { refusal: { reason: "missing-root" } },
+  ));
+  const text = TEXT.settings.skills.uploadDialog.refusals;
+  assert.ok(markup.includes(text.missingRoot), "the missing root is not named");
+  assert.ok(markup.includes(text.onePackage), "the reader is not told that one ZIP is one package, or how to import a repository");
+});
+
 test("the drop zone is the label of the file input, so a click opens the picker", async () => {
   const view = await mount(
     <SkillUploadView client={new StubClient().asClient()} onCancel={() => {}} onImported={() => {}} />,

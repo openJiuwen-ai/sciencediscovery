@@ -638,3 +638,39 @@ export interface JiuwenSwarmSkillsStateResponse {
   enabled: boolean;
   results: JiuwenSwarmSkillSwitchResult[];
 }
+
+/** The cap a Skill import refused to cross. */
+export type SkillPackageLimit =
+  | "entries"
+  | "files"
+  | "archive-bytes"
+  | "entry-bytes"
+  | "extracted-bytes"
+  | "markdown-bytes"
+  | "resource-bytes"
+  | "runtime-text-bytes";
+
+/**
+ * Why `POST /api/skills/import` refused an archive, as facts rather than
+ * prose (`code: "SKILL_PACKAGE_REFUSED"`, `details.refusal`).
+ *
+ * The server's `error` sentence stays English and names the cap without the
+ * count that was over it; a localized surface writes its own sentence from
+ * this record. `missing-root` is the case the importer's one-package rule was
+ * built for: a repository-wide ZIP has no SKILL.md at the archive root, and
+ * the Git import is the route that accepts a whole repository.
+ */
+export type SkillPackageRefusal =
+  | {
+      reason: "too-large";
+      limit: SkillPackageLimit;
+      /** What the caller's package carried. */
+      actual: number;
+      /** The cap it exceeded. */
+      cap: number;
+      /** The offending entry, when the refusal knows it. */
+      path?: string;
+    }
+  | { reason: "missing-root" }
+  | { reason: "several-roots" }
+  | { reason: "outside-root" };

@@ -4561,6 +4561,52 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value with units."));
 });
 
+test("a refused upload answers with the count and the package shape, not just the cap", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `skill-refusal-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+
+  const upload = (files: Record<string, Uint8Array>): FormData => {
+    const form = new FormData();
+    form.set("file", new Blob([Buffer.from(zipSync(files))], { type: "application/zip" }), "skills-main.zip");
+    return form;
+  };
+  const refusalOf = async (form: FormData): Promise<{
+    code?: string;
+    details?: { refusal?: unknown };
+    error?: string;
+    status: number;
+  }> => {
+    const response = await fetch(`${origin}/api/skills/import`, { body: form, headers: authorization, method: "POST" });
+    return { ...(await response.json() as { code?: string; details?: { refusal?: unknown }; error?: string }), status: response.status };
+  };
+
+  // A repository-wide ZIP reaches the entry cap first. The client cannot write
+  // "N 个条目，上限 500" from a sentence that only names the cap.
+  const repositoryZip: Record<string, Uint8Array> = {
+    "skills-main/SKILL.md": strToU8("---\nname: many\ndescription: Many entries.\n---\n\nBody.\n"),
+    "skills-main/alpha/SKILL.md": strToU8("---\nname: alpha\ndescription: One.\n---\n"),
+    "skills-main/beta/SKILL.md": strToU8("---\nname: beta\ndescription: Two.\n---\n"),
+  };
+  for (let index = 0; index < 498; index += 1) repositoryZip[`skills-main/references/${index}.md`] = strToU8("#");
+  const entries = await refusalOf(upload(repositoryZip));
+  assert.equal(entries.status, 413);
+  assert.equal(entries.code, "SKILL_PACKAGE_REFUSED");
+  assert.equal(entries.error, "Skill archive exceeds 500 entries");
+  assert.deepEqual(entries.details?.refusal, { actual: 501, cap: 500, limit: "entries", reason: "too-large" });
+
+  // Under the cap, the same repository ZIP fails the one-package shape: the
+  // skills sit in subdirectories and there is no SKILL.md at the root.
+  const shape = await refusalOf(upload({
+    "skills-main/alpha/SKILL.md": strToU8("---\nname: alpha\ndescription: One.\n---\n"),
+    "skills-main/beta/SKILL.md": strToU8("---\nname: beta\ndescription: Two.\n---\n"),
+  }));
+  assert.equal(shape.status, 400);
+  assert.equal(shape.code, "SKILL_PACKAGE_REFUSED");
+  assert.deepEqual(shape.details?.refusal, { reason: "missing-root" });
+});
+
 test("ART-001 a missing artifact version answers 404 on provenance and diff like content", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `artifact-version-missing-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

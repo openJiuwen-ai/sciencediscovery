@@ -1254,13 +1254,25 @@ export const ZH = {
       closeDialog: "关闭",
       /** 技能 › 上传技能, as the handoff's dialog. */
       uploadDialog: {
-        hint: "文件夹或者.zip需要包含Skill.md文件，.md 文件需包含 YAML 格式的技能名称和描述。",
+        hint: "文件夹或 .zip 需要包含 SKILL.md，单个 .md 文件需要有 YAML 格式的名称和描述；一个压缩包只能装一个技能包，整个仓库请用「从 GitHub 导入」。",
         chooseFile: "选择文件",
         dropTitle: "选择Skill.md文件",
         dropHint: "点击或拖动压缩包或文件到此处",
         reselect: "重新选择",
         cancel: "取消",
         confirm: "确定",
+        /** 上传被服务端拒绝时，按拒绝的事实写出的句子。 */
+        refusals: {
+          entries: (actual: number, cap: number) => `压缩包里有 ${actual} 个条目，上限是 ${cap} 个。`,
+          files: (actual: number, cap: number) => `技能包里有 ${actual} 个文件，上限是 ${cap} 个。`,
+          archiveBytes: (actual: string, cap: string) => `压缩包大小是 ${actual}，超过了 ${cap} 的上限。`,
+          extractedBytes: (actual: string, cap: string) => `解压后的内容有 ${actual}，超过了 ${cap} 的上限。`,
+          fileBytes: (path: string, cap: string) => `「${path}」超过了单个文件 ${cap} 的上限。`,
+          missingRoot: "压缩包的根目录里没有 SKILL.md。",
+          severalRoots: "压缩包的顶层不是单个技能包目录。",
+          outsideRoot: "压缩包里有技能包根目录之外的文件。",
+          onePackage: "一个压缩包只能导入一个技能包。如果这是装着多个技能的仓库，请改用「从 GitHub 导入」，先选择要导入的技能。",
+        },
       },
       /** 技能 › 从 GitHub 导入, as the handoff's dialog. */
       gitDialog: {

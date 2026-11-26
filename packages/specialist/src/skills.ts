@@ -49,6 +49,7 @@ import type {
   SkillDescriptor,
   SkillDetail,
   SkillPackageFileBytes,
+  SkillPackageRefusal,
   SkillResource,
   SkillResourceContent,
   SkillResourceKind,
@@ -637,9 +638,18 @@ export async function checkoutGitSkillRepository(
   }
 }
 
-function payloadTooLarge(message: string): NodeJS.ErrnoException {
+/** Attach the structured reason to an error that already carries the prose.
+ *  The property is deliberately not part of the public error contract: only
+ *  the HTTP layer reads it, to pass the reason on to the client. */
+function refused<T extends Error>(error: T, refusal: SkillPackageRefusal): T {
+  (error as T & { skillRefusal?: SkillPackageRefusal }).skillRefusal = refusal;
+  return error;
+}
+
+function payloadTooLarge(message: string, refusal?: SkillPackageRefusal): NodeJS.ErrnoException {
   const error = new Error(message) as NodeJS.ErrnoException;
   error.code = "PAYLOAD_TOO_LARGE";
+  if (refusal) (error as NodeJS.ErrnoException & { skillRefusal?: SkillPackageRefusal }).skillRefusal = refusal;
   return error;
 }
 
@@ -751,7 +761,12 @@ export function validateSkillPackage(
   } = {},
 ): LoadedPackage {
   if (!sourceFiles.size) throw validationError("Skill package is empty");
-  if (sourceFiles.size > SKILL_LIMITS.files) throw payloadTooLarge(`Skill package exceeds ${SKILL_LIMITS.files} files`);
+  if (sourceFiles.size > SKILL_LIMITS.files) {
+    throw payloadTooLarge(
+      `Skill package exceeds ${SKILL_LIMITS.files} files`,
+      { reason: "too-large", limit: "files", actual: sourceFiles.size, cap: SKILL_LIMITS.files },
+    );
+  }
   const files = new Map<string, Buffer>();
   let extractedBytes = 0;
   for (const [rawPath, sourceBytes] of sourceFiles) {
@@ -759,10 +774,18 @@ export function validateSkillPackage(
     if (files.has(path)) throw validationError(`Duplicate normalized skill package path: ${path}`);
     const bytes = Buffer.from(sourceBytes);
     const limit = path === "SKILL.md" ? SKILL_LIMITS.skillMarkdownBytes : SKILL_LIMITS.resourceBytes;
-    if (bytes.length > limit) throw payloadTooLarge(`${path} exceeds ${limit} bytes`);
+    if (bytes.length > limit) {
+      throw payloadTooLarge(
+        `${path} exceeds ${limit} bytes`,
+        { reason: "too-large", limit: path === "SKILL.md" ? "markdown-bytes" : "resource-bytes", actual: bytes.length, cap: limit, path },
+      );
+    }
     extractedBytes += bytes.length;
     if (extractedBytes > SKILL_LIMITS.extractedBytes) {
-      throw payloadTooLarge(`Skill package exceeds ${SKILL_LIMITS.extractedBytes} extracted bytes`);
+      throw payloadTooLarge(
+        `Skill package exceeds ${SKILL_LIMITS.extractedBytes} extracted bytes`,
+        { reason: "too-large", limit: "extracted-bytes", actual: extractedBytes, cap: SKILL_LIMITS.extractedBytes },
+      );
     }
     files.set(path, bytes);
   }
@@ -910,7 +933,10 @@ async function writePackageDirectory(root: string, files: ReadonlyMap<string, Bu
 
 function inspectZip(bytes: Buffer): void {
   if (bytes.length > SKILL_LIMITS.archiveBytes) {
-    throw payloadTooLarge(`Skill archive exceeds ${SKILL_LIMITS.archiveBytes} bytes`);
+    throw payloadTooLarge(
+      `Skill archive exceeds ${SKILL_LIMITS.archiveBytes} bytes`,
+      { reason: "too-large", limit: "archive-bytes", actual: bytes.length, cap: SKILL_LIMITS.archiveBytes },
+    );
   }
   let eocd = -1;
   for (let offset = Math.max(0, bytes.length - 65_557); offset <= bytes.length - 22; offset += 1) {
@@ -920,7 +946,12 @@ function inspectZip(bytes: Buffer): void {
   const entries = bytes.readUInt16LE(eocd + 10);
   const centralOffset = bytes.readUInt32LE(eocd + 16);
   if (entries === 0xffff || centralOffset === 0xffffffff) throw validationError("ZIP64 skill archives are not supported");
-  if (entries > SKILL_LIMITS.files) throw payloadTooLarge(`Skill archive exceeds ${SKILL_LIMITS.files} entries`);
+  if (entries > SKILL_LIMITS.files) {
+    throw payloadTooLarge(
+      `Skill archive exceeds ${SKILL_LIMITS.files} entries`,
+      { reason: "too-large", limit: "entries", actual: entries, cap: SKILL_LIMITS.files },
+    );
+  }
   let offset = centralOffset;
   let extractedBytes = 0;
   for (let index = 0; index < entries; index += 1) {
@@ -941,11 +972,18 @@ function inspectZip(bytes: Buffer): void {
       throw validationError("Skill ZIP cannot contain symlinks");
     }
     if (originalSize > SKILL_LIMITS.resourceBytes) {
-      throw payloadTooLarge(`Skill ZIP entry exceeds ${SKILL_LIMITS.resourceBytes} bytes`);
+      const entryPath = bytes.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
+      throw payloadTooLarge(
+        `Skill ZIP entry exceeds ${SKILL_LIMITS.resourceBytes} bytes`,
+        { reason: "too-large", limit: "entry-bytes", actual: originalSize, cap: SKILL_LIMITS.resourceBytes, path: entryPath },
+      );
     }
     extractedBytes += originalSize;
     if (extractedBytes > SKILL_LIMITS.extractedBytes) {
-      throw payloadTooLarge(`Skill archive exceeds ${SKILL_LIMITS.extractedBytes} extracted bytes`);
+      throw payloadTooLarge(
+        `Skill archive exceeds ${SKILL_LIMITS.extractedBytes} extracted bytes`,
+        { reason: "too-large", limit: "extracted-bytes", actual: extractedBytes, cap: SKILL_LIMITS.extractedBytes },
+      );
     }
     offset += 46 + nameLength + extraLength + commentLength;
   }
@@ -966,7 +1004,15 @@ function extractZip(bytes: Buffer): Map<string, Buffer> {
         extractedBytes += chunk.length;
         if (fileBytes > SKILL_LIMITS.resourceBytes || extractedBytes > SKILL_LIMITS.extractedBytes) {
           file.terminate();
-          throw payloadTooLarge(`Skill archive exceeds extracted byte limits`);
+          throw fileBytes > SKILL_LIMITS.resourceBytes
+            ? payloadTooLarge(
+              `Skill archive exceeds extracted byte limits`,
+              { reason: "too-large", limit: "resource-bytes", actual: fileBytes, cap: SKILL_LIMITS.resourceBytes, path },
+            )
+            : payloadTooLarge(
+              `Skill archive exceeds extracted byte limits`,
+              { reason: "too-large", limit: "extracted-bytes", actual: extractedBytes, cap: SKILL_LIMITS.extractedBytes },
+            );
         }
         chunks.push(Buffer.from(chunk));
       }
@@ -986,15 +1032,21 @@ function extractZip(bytes: Buffer): Map<string, Buffer> {
 function stripArchiveRoot(files: ReadonlyMap<string, Buffer>): { directoryName?: string; files: Map<string, Buffer> } {
   if (files.has("SKILL.md")) return { files: cloneFiles(files) };
   const firstSegments = new Set([...files.keys()].map((path) => path.split("/")[0]!));
-  if (firstSegments.size !== 1) throw validationError("Skill ZIP must contain one package root");
+  if (firstSegments.size !== 1) {
+    throw refused(validationError("Skill ZIP must contain one package root"), { reason: "several-roots" });
+  }
   const directoryName = [...firstSegments][0]!;
   const prefix = `${directoryName}/`;
   const stripped = new Map<string, Buffer>();
   for (const [path, bytes] of files) {
-    if (!path.startsWith(prefix)) throw validationError("Skill ZIP contains entries outside its package root");
+    if (!path.startsWith(prefix)) {
+      throw refused(validationError("Skill ZIP contains entries outside its package root"), { reason: "outside-root" });
+    }
     stripped.set(path.slice(prefix.length), Buffer.from(bytes));
   }
-  if (!stripped.has("SKILL.md")) throw validationError("Skill ZIP package root must contain SKILL.md");
+  if (!stripped.has("SKILL.md")) {
+    throw refused(validationError("Skill ZIP package root must contain SKILL.md"), { reason: "missing-root" });
+  }
   return { directoryName, files: stripped };
 }
 

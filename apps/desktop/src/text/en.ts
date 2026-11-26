@@ -1229,13 +1229,25 @@ export const EN: Text = {
       closeDialog: "Close",
       /** 技能 › 上传技能, as the handoff's dialog. */
       uploadDialog: {
-        hint: "A folder or .zip must contain SKILL.md; a .md file must carry the skill name and description in YAML.",
+        hint: "A folder or .zip must contain SKILL.md; a lone .md needs the name and description in YAML. One archive holds one skill package — import a whole repository with \"Import from GitHub\".",
         chooseFile: "Choose file",
         dropTitle: "Choose a SKILL.md file",
         dropHint: "Click, or drag a package or file here",
         reselect: "Choose again",
         cancel: "Cancel",
         confirm: "OK",
+        /** What the server refused, written from the facts in its refusal. */
+        refusals: {
+          entries: (actual: number, cap: number) => `The archive has ${actual} entries; the import accepts at most ${cap}.`,
+          files: (actual: number, cap: number) => `The package has ${actual} files; the import accepts at most ${cap}.`,
+          archiveBytes: (actual: string, cap: string) => `The archive is ${actual}; the limit is ${cap}.`,
+          extractedBytes: (actual: string, cap: string) => `The unpacked package is ${actual}; the limit is ${cap}.`,
+          fileBytes: (path: string, cap: string) => `"${path}" is over the ${cap} per-file limit.`,
+          missingRoot: "The archive has no SKILL.md at its root.",
+          severalRoots: "The archive's top level is not one package directory.",
+          outsideRoot: "The archive contains files outside the package root.",
+          onePackage: "One archive imports one skill package. To import a whole repository, use \"Import from GitHub\" and pick the skills you want.",
+        },
       },
       /** 技能 › 从 GitHub 导入, as the handoff's dialog. */
       gitDialog: {
