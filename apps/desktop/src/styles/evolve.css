@@ -1121,18 +1121,55 @@
   background: #fff;
 }
 
+/* Full screen is the same column escaping the shell, the way the structure
+   viewer's full screen escapes it. It stays mounted, so the chart, the tree
+   and the selected node are the ones the reader left. */
+.evolve-detail.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 390;
+}
+
+/* The column is hidden below the shell's narrow-window breakpoint, and its
+   host would take the full-screen sheet with it. The mode is the sheet, not the
+   column, so lay the host over the window while it is open — including when
+   the window was narrowed after the mode was entered. */
+.workspace-panel:has(.evolve-detail.is-fullscreen) {
+  display: flex !important;
+  position: fixed;
+  inset: 0;
+  z-index: 389;
+  flex: none;
+  width: auto;
+  margin: 0;
+}
+
 .evolve-task-head {
   flex: 0 0 auto;
   min-height: 56px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
-  padding: 0 20px;
+  padding: 10px 20px 12px;
   border-bottom: 1px solid #f0f0f0;
 }
 
-.evolve-task-head h2 {
+.evolve-task-heading {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.evolve-task-eyebrow {
+  color: #8a8a8a;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.evolve-task-head h2 {
   min-width: 0;
   margin: 0;
   overflow: hidden;
@@ -1144,7 +1181,42 @@
   white-space: nowrap;
 }
 
-.evolve-task-stop {
+/* The title is one line because the column is narrow; the task is not. The
+   disclosure keeps it in the header, where the title it expands sits. */
+.evolve-task-goal {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.evolve-task-goal summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.evolve-task-goal summary:hover { color: #1968f0; }
+
+.evolve-task-goal p {
+  max-height: 160px;
+  margin: 6px 0 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.evolve-task-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.evolve-task-stop,
+.evolve-task-fullscreen {
   flex: 0 0 auto;
   height: 30px;
   padding: 0 14px;
@@ -1153,6 +1225,17 @@
   background: #fff;
   color: #4d4d4d;
   font-size: 12px;
+}
+
+.evolve-task-fullscreen:hover {
+  border-color: #c9c9c9;
+  background: #f7f7f7;
+}
+
+.evolve-task-fullscreen[aria-pressed="true"] {
+  border-color: #1968f0;
+  background: #eef4ff;
+  color: #1968f0;
 }
 
 .evolve-task-stop:hover:not(:disabled) {
@@ -2012,6 +2095,7 @@
   .evolve-unisolated-body { padding-inline: 20px; }
 
   .evolve-detail-scroll { padding-inline: 14px; }
+  .evolve-task-head { padding-inline: 14px; }
   .evolve-source-backdrop { padding: 12px; }
 }
 

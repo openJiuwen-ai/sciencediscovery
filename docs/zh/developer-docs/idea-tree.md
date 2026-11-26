@@ -21,7 +21,7 @@ Idea Tree 在现有 evolve Python 服务内运行，使用一个 ASGI worker。A
 - `services/api/src/idea-tree/research.ts`：研究 HTTP 客户端和临时模型代理凭证。
 - `apps/web/src/IdeaResearchPanel.tsx`：已有树面板中的研究控制。
 
-唯一持久状态位于 Python 服务的 `$SCIENCE_AGENT_DATA_DIR/idea-research/<projectId>/<sessionId>/<researchId>.json`，原子替换保存。文件包含材料、预算、节点、阶段结果和用量，不含模型密钥。新路径不使用外部 revision、租约、childDigest、SHA 校验或结果句柄。旧树继续通过旧读取接口查看，写操作返回只读错误；不自动迁移旧执行状态。
+唯一持久状态位于 Python 服务的 `$SCIENCE_AGENT_DATA_DIR/idea-research/<projectId>/<sessionId>/<researchId>.json`，原子替换保存。文件包含材料、预算、节点、阶段结果和用量，不含模型密钥。同一会话的 `.summaries/<researchId>.json` 保存列表卡片所需字段（不含节点和材料），轮询列表因此不再解析或重建每棵完整树；显式 `get` 仍读取完整文档并构建完整图。新路径不使用外部 revision、租约、childDigest、SHA 校验或结果句柄。旧树继续通过旧读取接口查看，写操作返回只读错误；不自动迁移旧执行状态。
 
 公共入口为 `POST /api/sessions/:sessionId/idea-tree/research`，`operation` 支持 create/get/list/pause/continue/end/defaults。GET 同一路径列出研究。直接向聊天消息 API 发送 Idea Tree 命令会得到引导到研究入口的 409，不会悄悄启动 Lead。
 

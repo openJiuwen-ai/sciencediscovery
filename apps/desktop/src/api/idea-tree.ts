@@ -17,39 +17,43 @@
  *
  * `GET /research` lists the session's researches, `POST /research` takes one
  * `operation` (`get`, `pause`, `continue`, `end`, …), and `…/research/:id/events`
- * is an SSE stream whose every frame is a whole `{ research, graph }` view — there is
- * no event id and no replay, so a reconnect refetches instead of resuming.
+ * is an SSE stream. There is no event id and no replay, so a reconnect refetches
+ * instead of resuming.
+ *
+ * A stream frame is not a whole view: it carries the research state and only the
+ * graph changes since the frame before it, with the first frame of every stream
+ * carrying the whole tree. `applyIdeaResearchFrame` folds those frames into the
+ * view a consumer already holds; a frame it cannot apply means frames were lost,
+ * and the subscription refetches a whole view instead of showing a tree with holes.
  *
  * Everything that can be absent stays absent: `usageKnown` false means the engine has
  * not reported tokens, which is not the same as zero, and a node with no `stages`
  * entry has not been designed yet, which is not a score of 0.
  */
 
-import type { IdeaResearchState, IdeaResearchView, IdeaTreeGraph } from "@sciencediscovery/schema";
+import type { IdeaResearchFrame, IdeaResearchState, IdeaResearchSummary, IdeaResearchView, IdeaTreeGraph } from "@sciencediscovery/schema";
+import { applyIdeaResearchFrame, reconcileIdeaResearchFrame } from "@sciencediscovery/schema";
 import type { ApiClient } from "./client.js";
 import { SseFrameDecoder } from "./stream.js";
 
 export interface IdeaResearchList {
-  items: IdeaResearchView[];
+  items: IdeaResearchSummary[];
 }
 
-/** The list route answers with `{ items }`; older engines answer with a bare view. */
-function viewsOf(payload: IdeaResearchList | IdeaResearchView | IdeaResearchState): IdeaResearchView[] {
+/** The list route answers with `{ items }`; older engines answer with a bare view.
+ *  A summary is enough for the cards and the live poll: only `get` answers the tree. */
+function summariesOf(payload: IdeaResearchList | IdeaResearchView | IdeaResearchState): IdeaResearchSummary[] {
   if (Array.isArray((payload as IdeaResearchList).items)) return (payload as IdeaResearchList).items;
-  if ((payload as IdeaResearchView).research) return [payload as IdeaResearchView];
-  if ((payload as IdeaResearchState).id) return [{ research: payload as IdeaResearchState, graph: emptyGraph() }];
+  if ((payload as IdeaResearchView).research) return [{ research: (payload as IdeaResearchView).research }];
+  if ((payload as IdeaResearchState).id) return [{ research: payload as IdeaResearchState }];
   return [];
 }
 
-function emptyGraph(): IdeaTreeGraph {
-  return { edges: [], nodes: [], objective: "", revision: 0, treeId: "", updatedAt: "" };
-}
-
-export async function listIdeaResearches(client: ApiClient, sessionId: string): Promise<IdeaResearchView[]> {
+export async function listIdeaResearches(client: ApiClient, sessionId: string): Promise<IdeaResearchSummary[]> {
   const payload = await client.request<IdeaResearchList | IdeaResearchView | IdeaResearchState>(
     `/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`,
   );
-  return viewsOf(payload);
+  return summariesOf(payload);
 }
 
 export async function getIdeaResearch(client: ApiClient, sessionId: string, researchId: string): Promise<IdeaResearchView> {
@@ -90,8 +94,9 @@ export async function getIdeaTreeGraph(client: ApiClient, sessionId: string, tre
  * Follow one research until its stream closes.
  *
  * The server closes the stream once the status is no longer `running`/`pausing`, and
- * each frame carries the full view, so the last frame is the resting state — no
- * replay request is needed on reconnect, a refetch is.
+ * the last frame it sends carries that resting state — no replay request is needed on
+ * reconnect, a refetch is. Frames arrive as deltas after the first one, so they are
+ * merged into the view held here rather than handed to `onView` one by one.
  */
 export async function subscribeIdeaResearchEvents(
   client: ApiClient,
@@ -108,13 +113,31 @@ export async function subscribeIdeaResearchEvents(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const frames = new SseFrameDecoder();
+  /** The tree as this stream has built it. It starts empty, because the first frame
+   *  of a stream is the whole tree. */
+  let view: IdeaResearchView | undefined;
+  const apply = async (frame: IdeaResearchFrame) => {
+    const merged = applyIdeaResearchFrame(view, frame);
+    if (merged !== undefined) return merged;
+    // A delta the held tree is too old for means frames were lost (a torn frame, or
+    // one the server wrote while the connection stalled). One whole view answers
+    // that, and it is newer than the frame that exposed the gap: the read wins.
+    const restored = await getIdeaResearch(client, sessionId, researchId);
+    return reconcileIdeaResearchFrame(restored, frame);
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
       const decoded = frames.push(decoder.decode(value, { stream: !done }));
       for (const frame of done ? [...decoded, ...frames.flush()] : decoded) {
-        // A torn frame is stepped over: the next one carries a whole view again.
-        try { onView(JSON.parse(frame.data) as IdeaResearchView); } catch { /* skip */ }
+        let payload: IdeaResearchFrame;
+        // A torn frame is stepped over: the frame after it no longer applies, and
+        // that gap is what fetches a whole view.
+        try { payload = JSON.parse(frame.data) as IdeaResearchFrame; } catch { continue; }
+        const next = await apply(payload);
+        if (next === undefined) continue;
+        view = next;
+        onView(next);
       }
       if (done) break;
     }

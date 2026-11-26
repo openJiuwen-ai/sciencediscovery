@@ -13,9 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ...logging_config import get_logger
 from . import prompts
 from .research_tree import ResearchTree
 from .templates import snapshot
+
+log = get_logger('idea_research')
 
 
 def now() -> str:
@@ -144,14 +147,20 @@ class ResearchStore:
                 raise ValueError("Invalid research scope")
         return self.root / project / session / f"{research}.json"
 
-    def save(self, state: dict) -> None:
-        path = self.path(state['projectId'], state['sessionId'], state['id'])
+    def summary_path(self, project: str, session: str, research: str) -> Path:
+        """The list projection's companion file, beside the full document.
+
+        It lives in a subdirectory so the full-document scans (`list`, restart
+        reconciliation) never mistake it for a research.
+        """
+        return self.path(project, session, research).parent / '.summaries' / f'{research}.json'
+
+    def _write(self, path: Path, value: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        state['updatedAt'] = now()
         with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False, encoding='utf-8') as out:
             temporary = out.name
             try:
-                json.dump(state, out, ensure_ascii=False, allow_nan=False)
+                json.dump(value, out, ensure_ascii=False, allow_nan=False)
                 out.flush()
                 os.fsync(out.fileno())
             except BaseException:
@@ -162,6 +171,54 @@ class ResearchStore:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+
+    def write_summary(self, state: dict) -> None:
+        document = self.path(state['projectId'], state['sessionId'], state['id']).stat()
+        summary = {key: value for key, value in state.items() if key not in ('nodes', 'materials', 'revision')}
+        # The marker ties the projection to the document it was built from. Size and
+        # nanosecond mtime catch a truncated or replaced document without reading it;
+        # this is not a cryptographic digest, so a same-size rewrite with a preserved
+        # timestamp remains a documented residual limit.
+        summary['_document'] = {'size': document.st_size, 'mtimeNs': document.st_mtime_ns}
+        self._write(self.summary_path(state['projectId'], state['sessionId'], state['id']), summary)
+
+    def read_summary(self, project: str, session: str, research: str) -> dict | None:
+        """The projection, only when it is an object whose marker still matches."""
+        full, companion = self.path(project, session, research), self.summary_path(project, session, research)
+        try:
+            document = full.stat()
+            summary = json.loads(companion.read_text(encoding='utf-8'))
+            # Any valid JSON is not necessarily a projection: a truncated or
+            # hand-edited file can be `[]`, `null`, a string or a number. Treat
+            # that as stale/corrupt so `list` falls back to the document.
+            if not isinstance(summary, dict):
+                return None
+            marker = summary.pop('_document', None)
+            if not isinstance(marker, dict) or marker.get('size') != document.st_size or marker.get('mtimeNs') != document.st_mtime_ns:
+                return None
+            return summary
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+
+    def summary_is_current(self, project: str, session: str, research: str) -> bool:
+        return self.read_summary(project, session, research) is not None
+
+    def save(self, state: dict) -> None:
+        path = self.path(state['projectId'], state['sessionId'], state['id'])
+        # One durable checkpoint, one revision. A live frame names the revision its
+        # changes were computed from, so the counter has to move with every save
+        # rather than with the tree shape: token counts and activities change too.
+        state['revision'] = int(state.get('revision', 0)) + 1
+        state['updatedAt'] = now()
+        # `list` is polled every few seconds while a research is live. Persist its
+        # projection beside the document so that read never parses or rebuilds the
+        # full tree; an explicit `get` still reads the document and builds the graph.
+        self._write(path, state)
+        try:
+            self.write_summary(state)
+        except Exception as error:  # noqa: BLE001 - the projection is a cache, the document is already durable
+            log.warning('could not write research summary %s/%s/%s: %s',
+                        state['projectId'], state['sessionId'], state['id'], error)
 
         # Publish only after the checkpoint is durable. Each subscriber needs the
         # latest state, not a backlog of full trees while its network is slow.
@@ -176,14 +233,73 @@ class ResearchStore:
         return json.loads(self.path(project, session, research).read_text(encoding='utf-8'))
 
     def list(self, project: str, session: str) -> list[dict]:
+        """The session's researches as their saved projections.
+
+        The projection excludes `nodes`, `materials` and the tree `revision`; a
+        document written before this companion file existed falls back to one full
+        read and is projected in memory, never rewritten by a read.
+        """
         directory = self.path(project, session, 'unused').parent
-        return sorted((json.loads(p.read_text(encoding='utf-8')) for p in directory.glob('*.json')), key=lambda s: s['createdAt'], reverse=True)
+        records = []
+        for path in directory.glob('*.json'):
+            state = self.read_summary(project, session, path.stem)
+            if state is None:
+                state = json.loads(path.read_text(encoding='utf-8'))
+                state = {key: value for key, value in state.items() if key not in ('nodes', 'materials', 'revision')}
+            records.append(state)
+        return sorted(records, key=lambda s: s['createdAt'], reverse=True)
 
 
 def node(identifier: str, parent: str | None, hypothesis: str, kind: str, depth: int) -> dict:
     return dict(id=identifier, parentId=parent, hypothesis=hypothesis, kind=kind, depth=depth,
                 status='pending', score=None, insight=None, insightRecords=[], stages={}, childrenIds=[],
                 searchStatus='active', priority=0.0, createdAt=now(), updatedAt=now())
+
+
+def graph_node(n: dict, heavy: bool = True) -> dict:
+    """One node in the shape the read models expose.
+
+    `heavy=False` is the shape a live frame carries: `result` is a serialisation of
+    `stages` the tree view never draws (it duplicates, it does not summarise), and
+    `insightRecords` is the engine's own learning log. Both grow with the research
+    rather than with what changed, so a frame leaves them out; both stay available
+    on an explicit `get`.
+    """
+    view = {**n, 'searchStatus': n.get('searchStatus', 'active'), 'priority': n.get('priority', 0),
+            'attemptCount': n.get('attemptCount', 0), 'artifactRefs': [], 'activeExecutionId': None,
+            'lastExecutionId': None, 'completedResultHandle': None, 'pruneReason': n.get('pruneReason')}
+    if heavy:
+        # Serialised only for an explicit `get`: a frame never builds the string it
+        # would drop, which is the whole point of the lean shape.
+        view['result'] = json.dumps(n['stages'], ensure_ascii=False) if n['stages'] else None
+    else:
+        view.pop('insightRecords', None)
+    return view
+
+
+def node_signature(n: dict) -> tuple:
+    """Everything a frame's node carries, as something cheap to compare.
+
+    A delta frame only serialises a node whose signature moved, so every mutable
+    node field has to be named here: a field this misses is a change no connected
+    client would ever see. A stage object is compared by its own text and score, so
+    a rewritten stage is still a change; stages hold opaque strings, which compare
+    in O(1) when they are the same object and by length first when they are not.
+    """
+    return (n.get('parentId'), n.get('hypothesis'), n.get('kind'), n.get('depth'), n.get('status'),
+            n.get('score'), n.get('insight'), n.get('searchStatus', 'active'), n.get('priority', 0),
+            n.get('pruneReason'), n.get('attemptCount', 0), tuple(n['childrenIds']),
+            tuple((role, value.get('text'), value.get('score')) for role, value in n['stages'].items()),
+            n.get('createdAt'), n.get('updatedAt'),
+            n.get('cycleComplete'), tuple(n.get('propagatedTo', ())), n.get('trimmedDirection'),
+            tuple(n.get('derivedFromCandidateIds', ())), tuple(n.get('addressesInsightIds', ())),
+            n.get('targetedWeakness'), n.get('explorationType'))
+
+
+def graph_edges(nodes: list[dict], only: set[str] | None = None) -> list[dict]:
+    """The tree's child edges, in node order; `only` limits them to the given targets."""
+    return [dict(source=n['parentId'], target=n['id'], type='child', ordinal=i)
+            for i, n in enumerate(nodes) if n['parentId'] and (only is None or n['id'] in only)]
 
 
 def is_permanent_quota(detail: str) -> bool:
@@ -780,9 +896,32 @@ class IdeaTreeEngine:
                 s.pop('pendingStop', None)
             self.save()
 
-    def graph(self):
+    @property
+    def revision(self) -> int:
+        return int(self.state.get('revision', 0))
+
+    def graph(self, heavy: bool = True):
+        """The whole tree, as a command answer (`heavy`) or as a frame's first read."""
         s = self.state
-        nodes = []
-        for n in s['nodes']:
-            nodes.append({**n, 'searchStatus': n.get('searchStatus', 'active'), 'priority': n.get('priority', 0), 'attemptCount': n.get('attemptCount', 0), 'artifactRefs': [], 'activeExecutionId': None, 'lastExecutionId': None, 'completedResultHandle': None, 'pruneReason': n.get('pruneReason'), 'result': json.dumps(n['stages'], ensure_ascii=False) if n['stages'] else None})
-        return dict(treeId=s['id'], objective=s['objective'], revision=0, updatedAt=s['updatedAt'], nodes=nodes, edges=[dict(source=n['parentId'], target=n['id'], type='child', ordinal=i) for i, n in enumerate(nodes) if n['parentId']])
+        return dict(treeId=s['id'], objective=s['objective'], revision=self.revision, updatedAt=s['updatedAt'],
+                    nodes=[graph_node(n, heavy) for n in s['nodes']], edges=graph_edges(s['nodes']))
+
+    def graph_frame(self, seen: tuple[int, dict] | None):
+        """The graph part of the next live frame, and the state the next one compares with.
+
+        A new stream (`seen is None`) gets the whole compact tree. After that only the
+        nodes whose signature moved since the previous frame are serialised, and
+        `since` names the revision they moved from, so one frame carries the change
+        instead of the tree. The service keeps the returned cursor per stream: a
+        listener that attaches later starts from the whole tree again.
+        """
+        s = self.state
+        nodes = s['nodes']
+        signatures = {n['id']: node_signature(n) for n in nodes}
+        head = dict(treeId=s['id'], objective=s['objective'], revision=self.revision, updatedAt=s['updatedAt'])
+        if seen is None:
+            return dict(head, full=True, nodes=[graph_node(n, False) for n in nodes],
+                        edges=graph_edges(nodes), removed=[]), (self.revision, signatures)
+        changed = {n['id'] for n in nodes if seen[1].get(n['id']) != signatures[n['id']]}
+        return dict(head, full=False, since=seen[0], nodes=[graph_node(n, False) for n in nodes if n['id'] in changed],
+                    edges=graph_edges(nodes, changed), removed=[i for i in seen[1] if i not in signatures]), (self.revision, signatures)

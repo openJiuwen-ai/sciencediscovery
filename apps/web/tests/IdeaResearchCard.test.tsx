@@ -149,3 +149,44 @@ test("a delayed research list cannot replace a newer paused stream update", asyn
     else Reflect.deleteProperty(globalThis, "window");
   }
 });
+
+test("a summary list fetches the displayed tree instead of treating it as empty", async () => {
+  // #1470: the polled list is a summary now. The card still renders the tree and
+  // candidate counts, so it must read that one research with `get`; an empty
+  // placeholder graph would silently show zero candidates.
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  let renderer: ReactTestRenderer | undefined;
+  const research = {
+    id: "r", status: "completed", objective: "Summary objective", phase: "completed", round: 1,
+    settings: { maxRounds: 1 }, batch: [], batchCompleted: 0, tokens: 0, usageKnown: true,
+  };
+  const full = {
+    research,
+    graph: { treeId: "r", updatedAt: "2026-11-26T00:00:00Z", edges: [],
+      nodes: [{ id: "ROOT", kind: "direction" }, { id: "candidate-1", kind: "candidate", status: "done" }] },
+  };
+  const calls: Array<{ operation: string; researchId: string }> = [];
+  const client = {
+    listIdeaResearch: async () => ({ items: [{ research }] }),
+    ideaResearchCommand: async (_session: string, body: { operation: string; researchId: string }) => {
+      calls.push(body);
+      return full;
+    },
+  };
+  try {
+    await act(async () => {
+      renderer = create(createElement(IdeaResearchCard, { client: client as any, sessionId: "s", onError: () => undefined }));
+    });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    assert.deepEqual(calls, [{ operation: "get", researchId: "r" }]);
+    const rendered = JSON.stringify(renderer!.toJSON());
+    assert.match(rendered, /Summary objective/);
+    assert.match(rendered, /1 candidates completed/);
+  } finally {
+    if (renderer) await act(async () => renderer?.unmount());
+    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});

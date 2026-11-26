@@ -164,9 +164,42 @@ def reconcile_orphaned_researches():
     return settled
 
 
+def research_view(s):
+    """The research's own state, without the tree (and without the tree's revision)."""
+    return {k: copy.deepcopy(v) for k, v in s.items() if k not in ['nodes', 'materials', 'revision']}
+
+
+def backfill_research_summaries():
+    """Create list projections for documents saved before they existed.
+
+    This is a boot-time migration, not a read side effect: `list` stays
+    read-only, and after this pass a legacy research no longer costs a full
+    document parse on every 5 s poll. Returns how many projections were written.
+    """
+    root = store().root
+    if not root.is_dir():
+        return 0
+    written = 0
+    for path in sorted(root.glob('*/*/*.json')):
+        project, session, identifier = path.parts[-3], path.parts[-2], path.stem
+        if store().summary_is_current(project, session, identifier):
+            continue
+        try:
+            store().write_summary(store().read(project, session, identifier))
+        except Exception as error:  # noqa: BLE001 - one damaged file must not stop the rest
+            log.warning('could not backfill research summary %s/%s/%s: %s',
+                        project, session, identifier, error)
+            continue
+        written += 1
+    if written:
+        log.info('created %d research summary projection(s)', written)
+    return written
+
+
 def view(s):
+    """A command's answer: the research and the whole tree, heavy fields included."""
     engine = IdeaTreeEngine(s, store(), {})
-    return dict(research={k: copy.deepcopy(v) for k, v in s.items() if k not in ['nodes', 'materials']}, graph=engine.graph())
+    return dict(research=research_view(s), graph=engine.graph())
 
 
 def start(s, llm):
@@ -208,8 +241,21 @@ async def command(c: Command):
         if c.operation == 'defaults':
             return dict(prompts=DEFAULTS, criteria=CRITERIA)
         if c.operation == 'list':
-            states = [state_for(c.projectId, c.sessionId, s['id']) for s in store().list(c.projectId, c.sessionId)]
-            return dict(items=[view(s) for s in states])
+            # The desktop re-lists every few seconds while a research is live. Read
+            # only the persisted projections (or the in-memory state of a research
+            # this process is driving): the list must not parse every full document
+            # or rebuild every graph. An explicit `get` above still does both.
+            items = []
+            for saved in store().list(c.projectId, c.sessionId):
+                active = _running.get(saved['id'])
+                if active:
+                    state = active[0].state
+                    if state['projectId'] != c.projectId or state['sessionId'] != c.sessionId:
+                        raise HTTPException(404, 'Research not found')
+                else:
+                    state = saved
+                items.append(dict(research=research_view(state)))
+            return dict(items=items)
         if c.operation == 'create':
             if not c.objective.strip():
                 raise ValueError('Research objective is required')
@@ -270,11 +316,20 @@ async def events(c: Command):
     listeners.add(queue)
 
     async def stream():
+        # Per-stream cursor: a listener that attaches mid-research starts from the
+        # whole (compact) tree, and every later frame carries only what changed since
+        # the frame before it. Two listeners therefore keep independent cursors.
+        cursor = None
         try:
             while True:
                 s = state_for(c.projectId, c.sessionId, c.researchId)
-                yield 'data: ' + json.dumps(view(s), ensure_ascii=False) + '\n\n'
-                if s['status'] not in ['running', 'pausing']:
+                research = research_view(s)
+                graph, cursor = IdeaTreeEngine(s, store(), {}).graph_frame(cursor)
+                yield 'data: ' + json.dumps(dict(research=research, graph=graph), ensure_ascii=False) + '\n\n'
+                # The frame just sent decides whether this stream is done: the engine
+                # mutates its state in place, so re-reading `s` here could see a status
+                # the client has not been told about and close on a running frame.
+                if research['status'] not in ['running', 'pausing']:
                     return
                 try:
                     await asyncio.wait_for(queue.get(), timeout=15)

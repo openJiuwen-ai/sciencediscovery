@@ -164,7 +164,12 @@ test("继续 followed by closing the panel still reports the answer", async () =
 });
 
 test("a live stream frame replaces the view without refetching", async () => {
-  const stopped = { ...view("completed"), research: { ...view("running").research, status: "completed", usageKnown: true, tokens: 900 } };
+  const stopped = {
+    ...view("completed"),
+    research: { ...view("running").research, status: "completed", usageKnown: true, tokens: 900 },
+    // The first frame of a stream is the whole tree; later frames are deltas.
+    graph: { ...view("completed").graph, full: true, removed: [] },
+  };
   const api = fakeClient({ streamBody: `data: ${JSON.stringify(stopped)}\n\n` });
   let panel!: ReactTestRenderer;
   await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
