@@ -145,6 +145,8 @@ test("autonomous research presents stage results without legacy execution fields
   assert.doesNotMatch(english, /[\u4e00-\u9fff]/);
   const chinese = renderToStaticMarkup(createElement(LocaleProvider, { initialLocale: "zh-CN" as const }, explorer));
   assert.match(chinese, /综合评估/);
+  assert.match(chinese, /aria-label="研究思路树 /);
+  assert.ok(!chinese.includes("Idea Tree"), "the zh canvas label is not English");
   assert.match(english, /Prefer recoverable materials/);
   assert.doesNotMatch(english, /Result handle|Active execution|revision 4/);
 });

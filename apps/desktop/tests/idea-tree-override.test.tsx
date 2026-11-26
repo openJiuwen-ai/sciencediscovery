@@ -88,6 +88,9 @@ test("the card starts from the global settings and offers the five fields", asyn
     for (const label of ["研究模板", "探索强度", "评分方向", "最大深度", "最大节点数"]) {
       assert.match(markup(), new RegExp(label), `${label} is offered`);
     }
+    // The heading names the feature the way the Chinese interface does.
+    const heading = view.root.findByProps({ id: "idea-tree-override-title" });
+    assert.equal(heading.children.join(""), "研究思路树参数");
     // The per-call cap #1281 removed is not offered any more.
     assert.doesNotMatch(markup(), /单次调用 token/);
     // The values shown are the global ones.

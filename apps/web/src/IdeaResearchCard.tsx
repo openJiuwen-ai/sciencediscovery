@@ -183,7 +183,7 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
   return <section ref={element} className="idea-research-panel" aria-label={t("ideaResearch.controlsAria")}>
     {error && <p role="alert">{error} <button className="secondary-button compact-button" type="button" onClick={() => { void load(); setReconnect(n => n + 1); }}>{t("ideaResearch.reconnect")}</button></p>}
     <button className="idea-tree-view" type="button" onClick={() => setOpen(true)}>
-      <span className="idea-tree-view-header"><strong>Idea Tree</strong><em>{ideaResearchStatusLabel(t, r.status)}</em></span>
+      <span className="idea-tree-view-header"><strong>{t("ideaResearch.cardTitle")}</strong><em>{ideaResearchStatusLabel(t, r.status)}</em></span>
       <span className="idea-tree-view-objective">{r.objective}</span>
       <span className="idea-tree-view-stats">{t("ideaResearch.round", {round: r.round, total: r.settings.maxRounds})} · {t("ideaResearch.candidatesDone", {count: view.graph.nodes.filter(n => n.kind === "candidate" && n.status === "done").length})}</span>
       <span className="idea-tree-view-stats">{r.activities?.filter(a => a.status === "running").map(a => ideaResearchPhaseLabel(t, r, a.role)).join(" · ") || ideaResearchPhaseLabel(t, r, r.phase)}</span>

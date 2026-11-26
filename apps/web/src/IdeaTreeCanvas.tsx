@@ -229,7 +229,7 @@ export function IdeaTreeCanvas({
 
   return <div className="idea-tree-canvas" ref={hostRef}>
     <svg
-      aria-label={`Idea Tree ${graph.treeId}`}
+      aria-label={t("ideaTree.canvas.ariaLabel", { id: graph.treeId })}
       height={size.height}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

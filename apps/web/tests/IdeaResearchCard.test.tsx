@@ -104,6 +104,32 @@ test('budget exhaustion is ended, explains the used/limit tokens, and offers no 
   }
 });
 
+test("the research card header follows the reader's language", async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
+  const research = { id: "r", status: "completed", objective: "synthetic", phase: "completed", round: 1, settings: { maxRounds: 1 }, batch: [], batchCompleted: 0, usageKnown: false, tokens: 0 };
+  const client = { listIdeaResearch: async () => ({ items: [{ research, graph: { treeId: "r", nodes: [], edges: [] } }] }) };
+  const render = async (locale: "en" | "zh-CN") => {
+    let renderer: ReactTestRenderer | undefined;
+    await act(async () => {
+      renderer = create(createElement(LocaleProvider, { initialLocale: locale },
+        createElement(IdeaResearchCard, { client: client as unknown as ApiClient, sessionId: "s", onError: () => undefined })));
+    });
+    const json = JSON.stringify(renderer!.toJSON());
+    await act(async () => { renderer!.unmount(); });
+    return json;
+  };
+  try {
+    assert.match(await render("en"), /Idea Tree/);
+    const chinese = await render("zh-CN");
+    assert.match(chinese, /研究思路树/);
+    assert.ok(!chinese.includes("Idea Tree"), "the zh card does not fall back to the English name");
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "window", previous);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
 test("a delayed research list cannot replace a newer paused stream update", async () => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   Object.defineProperty(globalThis, "window", { configurable: true, value: new EventTarget() });
