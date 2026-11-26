@@ -570,9 +570,22 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   if (backgroundImport && dialog !== "git") {
     const job = backgroundImport;
     const enableProblem = enableFailure?.jobId === job.id ? enableFailure : undefined;
-    const enableNote = enableProblem === undefined
-      ? undefined
-      : TEXT.settings.skills.backgroundImportEnableFailed(job.imported.length, enableProblem.count);
+    // A failed switch-on is its own problem with its own remedy: the import
+    // retry re-runs subdirectories, and only the enable retry switches on the
+    // packages that arrived. When a job has both, both are offered — the
+    // import retry cannot do the enable run's work.
+    const pushEnableRetry = (target: typeof job, problem: GitSkillImportEnableFailure) => {
+      toasts.push({
+        id: `git-enable-${target.id}`,
+        kind: "error",
+        message: TEXT.settings.skills.backgroundImportEnableFailed(target.imported.length, problem.count),
+        detail: problem.message,
+        onClose: () => dismissGitSkillImportJob(),
+        onRetry: () => {
+          void retryEnableCreatedSkills(client, target).then(() => loaded.reload());
+        },
+      });
+    };
     if (job.status === "queued" || job.status === "running") {
       if (dismissedProgress !== job.id) {
         toasts.push({
@@ -589,15 +602,12 @@ export function SkillsSettings({ client, onConfirm }: Props) {
         message: job.status === "failed"
           ? TEXT.settings.skills.toastGitFailed
           : TEXT.settings.skills.backgroundImportPartial(job.imported.length, job.failures.length),
-        detail: [
-          job.failures.length
-            ? TEXT.settings.skills.backgroundImportFailures(
-              job.failures.slice(0, 3).map((failure) => failure.subdirectory).join("、"),
-              job.failures.length,
-            )
-            : undefined,
-          enableNote,
-        ].filter((part): part is string => part !== undefined).join(" ") || undefined,
+        detail: job.failures.length
+          ? TEXT.settings.skills.backgroundImportFailures(
+            job.failures.slice(0, 3).map((failure) => failure.subdirectory).join("、"),
+            job.failures.length,
+          )
+          : undefined,
         onClose: () => dismissGitSkillImportJob(),
         ...(lastGitRequest
           ? {
@@ -609,20 +619,12 @@ export function SkillsSettings({ client, onConfirm }: Props) {
           }
           : {}),
       });
+      if (enableProblem !== undefined) pushEnableRetry(job, enableProblem);
     } else if (enableProblem !== undefined) {
       // The packages are installed, but a new one that stays switched off is
       // not the success the reader asked for; say what is still off and let
       // the switch-on step run again.
-      toasts.push({
-        id: `git-result-${job.id}`,
-        kind: "error",
-        message: TEXT.settings.skills.backgroundImportEnableFailed(job.imported.length, enableProblem.count),
-        detail: enableProblem.message,
-        onClose: () => dismissGitSkillImportJob(),
-        onRetry: () => {
-          void retryEnableCreatedSkills(client, job).then(() => loaded.reload());
-        },
-      });
+      pushEnableRetry(job, enableProblem);
     } else {
       toasts.push({
         id: `git-result-${job.id}`,

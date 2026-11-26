@@ -15,10 +15,15 @@
 import React from "react";
 import assert from "node:assert/strict";
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-import type { ApiClient } from "../src/api/client.js";
-import type { SkillDescriptor, SkillDetail } from "../src/api/types.js";
+import { ApiRequestError, type ApiClient } from "../src/api/client.js";
+import type { GitSkillImportJob, SkillDescriptor, SkillDetail } from "../src/api/types.js";
 import { SkillForm } from "../src/views/settings/SkillForm.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
+import {
+  dismissGitSkillImportJob,
+  GIT_SKILL_IMPORT_JOB_KEY,
+  resumeGitSkillImport,
+} from "../src/app/git-skill-import-job.js";
 import { TEXT } from "../src/text.js";
 import { StubClient, json } from "./api-stub.js";
 import { act, create, type ReactTestRenderer } from "./support/dom-renderer.js";
@@ -35,6 +40,14 @@ Object.defineProperty(globalThis, "document", { configurable: true, writable: tr
   addEventListener() {}, removeEventListener() {},
 } });
 Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: true });
+// The job store remembers a running import here, which is how a pane that
+// mounts after a reload picks the job up again.
+const stored = new Map<string, string>();
+Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: {
+  getItem: (key: string) => stored.get(key) ?? null,
+  removeItem: (key: string) => { stored.delete(key); },
+  setItem: (key: string, value: string) => { stored.set(key, value); },
+} });
 const text = (view: ReactTestRenderer) => JSON.stringify(view.toJSON());
 
 async function mount(client: ApiClient): Promise<ReactTestRenderer> {
@@ -437,4 +450,47 @@ test("a single switch moves on the press and returns when JiuwenSwarm refuses it
     assert.equal(write?.path, "/api/jiuwenswarm/skills-by-id/alpha");
     assert.deepEqual(json(write!), { enabled: false });
   } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a partial import that also left a package switched off still offers the enable retry", async () => {
+  stored.set(GIT_SKILL_IMPORT_JOB_KEY, "job-partial");
+  const partial: GitSkillImportJob = {
+    done: 1,
+    failures: [{ message: "SKILL.md is invalid", subdirectory: "broken" }],
+    id: "job-partial",
+    imported: [{ created: true, id: "fresh" }],
+    startedAt: "2026-11-20T00:00:00.000Z",
+    status: "done",
+    total: 2,
+  };
+  const stub = new StubClient()
+    // Resuming the finished job: one subdirectory failed, one package was
+    // created, and the switch-on step then could not reach the runtime.
+    .reply(partial)
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .fail(new ApiRequestError("JiuwenSwarm is unreachable", 503))
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  try {
+    await resumeGitSkillImport(stub.asClient());
+    const view = await mount(stub.asClient());
+    const markup = text(view);
+    assert.ok(markup.includes(TEXT.settings.skills.backgroundImportPartial(1, 1)), "no import failure notice");
+    assert.ok(markup.includes(TEXT.settings.skills.backgroundImportEnableFailed(1, 1)),
+      "no enable failure notice");
+    // The import's retry re-runs subdirectories; only the enable retry can
+    // switch on the package that arrived. Merging the two notes without an
+    // enable action would leave the package off with no way to fix it.
+    const retry = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.toastRetry));
+    assert.ok(retry, "the combined notice offers no way to switch the package on");
+    stub.reply({ backend: "jiuwenswarm", skills: [] }).reply({});
+    await act(async () => { retry.props.onClick(); await Promise.resolve(); });
+    const enables = stub.calls.filter((call) =>
+      call.path === "/api/jiuwenswarm/skills-by-id/fresh" && call.init.method === "PUT");
+    assert.equal(enables.length, 2, "the retry did not run the switch-on step again");
+    assert.equal(stub.calls.some((call) => call.path === "/api/skills/import-git/jobs"), false,
+      "the retry started a new import");
+    await act(async () => { view.unmount(); });
+  } finally { dismissGitSkillImportJob(); }
 });
