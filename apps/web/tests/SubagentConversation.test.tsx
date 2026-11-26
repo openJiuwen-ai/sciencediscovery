@@ -22,6 +22,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { SubagentConversation, subagentTimelineEntries } from "../src/SubagentConversation.js";
+import { parseToolResultSections } from "../src/timeline/tool-result-sections.js";
+import { ToolIoSections } from "../src/timeline/ToolIoSections.js";
 
 const timestamp = "2026-07-15T00:00:00.000Z";
 
@@ -177,6 +179,59 @@ test("a finished child step does not print its streamed output twice", () => {
   assert.ok(entry?.type === "tool");
   assert.equal(entry.trace.output, "stdout:\nbatch1 written\nstderr:");
   assert.equal((entry.trace.output.match(/batch1 written/g) ?? []).length, 1);
+});
+
+
+test("a delegated shell step keeps its envelope in Result and its output once in stdout", () => {
+  // The shape the J4 journey produces: a completed run_shell whose captured
+  // progress repeats the streamed stdout, and whose result text is the
+  // execution envelope followed by the runner's labelled streams. Before
+  // #1444 the projection prefixed the progress and a `---` rule, so the same
+  // line appeared twice and Result was not JSON.
+  const childMarker = "J4-CHILD-1770000000000";
+  const command = `test "$(cat private/context.txt)" = 'private context' && echo PRIVATE-FILE-VERIFIED && echo ${childMarker}`;
+  const content = [
+    '{"executionId":"shell:j4","state":"completed","exitCode":0,"recovery":{"schemaVersion":1,"capability":"unknown","reason":"NOT_REPORTED"}}',
+    "stdout:",
+    "PRIVATE-FILE-VERIFIED",
+    childMarker,
+    "stderr:",
+  ].join("\n");
+  const entry = subagentTimelineEntries(buildSubagent({ steps: [{
+    args: { command },
+    content,
+    createdAt: timestamp,
+    id: "shell",
+    input: "mkdir -p review private",
+    kind: "tool",
+    progress: `PRIVATE-FILE-VERIFIED\n${childMarker}\n`,
+    status: "completed",
+    toolCallId: "call-shell",
+    toolName: "run_shell",
+  }] }))[0];
+  assert.ok(entry?.type === "tool");
+  const output = entry.trace.output ?? "";
+  assert.equal(output.includes("\n\n---\n\n"), false, "the removed progress separator must not come back");
+  assert.equal(output.split("PRIVATE-FILE-VERIFIED").length - 1, 1, "the streamed line is projected once");
+
+  const sections = parseToolResultSections(output, entry.trace.status);
+  assert.deepEqual(sections.map((section) => section.id), ["result", "stdout"]);
+  // Result is the execution envelope itself, so it parses as the completed run.
+  const envelope = JSON.parse(sections[0]!.content.trim()) as { exitCode?: number; state?: string };
+  assert.deepEqual({ exitCode: envelope.exitCode, state: envelope.state }, { exitCode: 0, state: "completed" });
+  // The command's own output lives under the stdout label, with both markers.
+  assert.match(sections[1]!.content, /PRIVATE-FILE-VERIFIED/);
+  assert.match(sections[1]!.content, new RegExp(childMarker));
+
+  // What the card actually draws: the Input section spells the command out, and
+  // that command itself contains `echo PRIVATE-FILE-VERIFIED`. The task text is
+  // not a repeated output line, so the card shows the marker exactly twice —
+  // once as the command, once as the single stdout line asserted above.
+  const markup = renderToStaticMarkup(createElement(ToolIoSections, { outputText: output, trace: entry.trace }));
+  assert.equal(String(entry.trace.args?.command), command);
+  assert.equal(markup.split("PRIVATE-FILE-VERIFIED").length - 1, 2, "command in Input once, output once");
+  assert.equal(markup.split(childMarker).length - 1, 2, "command in Input once, output once");
+  assert.equal(markup.includes("\n\n---\n\n"), false);
 });
 
 
