@@ -86,11 +86,15 @@ test("MCP card menus and details keep keyboard, authorization recovery and busy 
     await details.getByRole("button", { name: "取消授权", exact: true }).click();
     await expect(details.getByRole("button", { name: "授权", exact: true })).toBeEnabled();
     await page.route(`**/api/mcp/servers/${id}/oauth/clear`, route => route.fulfill({ status: 503, json: { error: "Clear temporarily refused" } }), { times: 1 });
-    await details.getByRole("button", { name: "清除授权", exact: true }).click();
+    const clearAuthorization = details.getByRole("button", { name: "清除授权", exact: true });
+    await clearAuthorization.click();
     await expect(details.getByRole("alert")).toHaveText("Clear temporarily refused");
     await expect(details.getByRole("alert")).toBeInViewport();
-    await details.getByRole("button", { name: "清除授权", exact: true }).click(); await expect.poll(() => clearRequests).toBe(1);
+    await clearAuthorization.click();
+    await expect.poll(() => clearRequests).toBe(1);
+    await expect(clearAuthorization).toBeEnabled();
     await page.keyboard.press("Escape");
+    await expect(details).toBeHidden();
   });
   await journey.step("Recover a refused connection test", "Both service and action controls are locked while the request is pending, then recover with the refusal visible.", async () => {
     let release!: () => void; const pending = new Promise<void>(resolve => { release = resolve; });
@@ -131,7 +135,14 @@ test("MCP service switches and edits stay synchronized while defaults remain ind
   const editor = page.getByRole("dialog", { name: "编辑服务器", exact: true });
   const details = page.getByRole("dialog", { name: "服务器详情", exact: true });
   const edit = async () => { await card().getByRole("button", { name: "Control Echo的更多操作" }).click(); await card().getByRole("menuitem", { name: "编辑", exact: true }).click(); };
-  const inspectDefaults = async (value: boolean) => { await card().getByRole("button", { name: "查看Control Echo详情" }).click(); await expect(details.getByRole("switch", { name: "默认使用", exact: true })).toHaveAttribute("aria-checked", String(value)); await page.keyboard.press("Escape"); };
+  const defaultSwitch = details.getByRole("switch", { name: "默认使用", exact: true });
+  const inspectDefaults = async (value: boolean) => {
+    await card().getByRole("button", { name: "查看Control Echo详情" }).click();
+    await expect(defaultSwitch).toHaveAttribute("aria-checked", String(value));
+    await expect(defaultSwitch).toBeEnabled();
+    await page.keyboard.press("Escape");
+    await expect(details).toBeHidden();
+  };
   journey.scenario({ goal: "Persist one consistent enable state while keeping defaults independent", preconditions: ["Disabled STDIO server with stored credentials and exact legacy arguments"] });
   await journey.step("Enable and reload", "Editing reflects saved enablement while arguments, secrets and defaults stay intact.", async () => {
     await expect(service()).not.toBeChecked(); await inspectDefaults(false);
@@ -152,8 +163,12 @@ test("MCP service switches and edits stay synchronized while defaults remain ind
     }
   });
   await journey.step("Recover a refusal and cancel a draft", "Default selection neither enables the service nor changes on refused service writes; retry persists and cancellation discards the edit.", async () => {
-    await card().getByRole("button", { name: "查看Control Echo详情" }).click(); await details.getByRole("switch", { name: "默认使用", exact: true }).click();
-    await expect(details.getByRole("switch", { name: "默认使用", exact: true })).toBeChecked(); await page.keyboard.press("Escape");
+    await card().getByRole("button", { name: "查看Control Echo详情" }).click();
+    await defaultSwitch.click();
+    await expect(defaultSwitch).toBeChecked();
+    await expect(defaultSwitch).toBeEnabled();
+    await page.keyboard.press("Escape");
+    await expect(details).toBeHidden();
     await service().click(); await expect(service()).not.toBeChecked(); await inspectDefaults(true);
     await page.route(`**/api/mcp/servers/${id}`, route => route.fulfill({ status: 503, json: { error: "Enable temporarily refused" } }), { times: 1 });
     await service().click(); await expect(panel.getByRole("alert")).toContainText("Enable temporarily refused"); await expect(service()).not.toBeChecked(); await inspectDefaults(true);
