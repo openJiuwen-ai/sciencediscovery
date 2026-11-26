@@ -42,12 +42,24 @@ export function McpActionMenu({ name, busy, onTry, tryDisabled, onEdit, onDelete
     }}>
     <button aria-label={TEXT.settings.system.mcp.more(name)} aria-haspopup="menu" aria-expanded={open}
       aria-controls={open ? id : undefined} className="mcp-more-button" type="button" disabled={busy} ref={trigger}
-      onClick={() => { if (busy) return; last.current = false; setOpen((value) => !value); }}><span aria-hidden="true">⋮</span></button>
+      onClick={() => {
+        if (busy) {
+          return;
+        }
+        last.current = false;
+        setOpen((value) => !value);
+      }}><span aria-hidden="true">⋮</span></button>
     {open ? <div id={id} role="menu" aria-label={TEXT.settings.system.mcp.more(name)} className="mcp-action-popover">
       {actions.map(({ label, action, disabled, path }) => <button key={label} role="menuitem" type="button" disabled={disabled || busy}
         title={disabled ? TEXT.settings.system.mcp.tryUnavailable : undefined}
         className={label === TEXT.menu.delete ? "is-danger" : undefined}
-        onClick={() => { if (busy || disabled) return; close(); action(); }}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>{label}</button>)}
+        onClick={() => {
+          if (busy || disabled) {
+            return;
+          }
+          close();
+          action();
+        }}><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>{label}</button>)}
       {tryDisabled ? <small>{TEXT.settings.system.mcp.tryUnavailable}</small> : null}
     </div> : null}
   </div>;

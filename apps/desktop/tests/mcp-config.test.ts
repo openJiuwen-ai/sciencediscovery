@@ -14,14 +14,15 @@ test("JSON prefilling preserves argument boundaries, secret values and protocol 
   } }));
   assert.equal(result.error, undefined);
   const [echo, search, events] = result.drafts;
-  assert.equal(echo!.enabled, false, "import is reviewed before explicitly enabling a service");
-  assert.equal(echo!.timeoutSeconds, "73");
-  assert.deepEqual(inputOf({ ...echo!, description: "edited" }).args, args);
-  assert.deepEqual(inputOf(echo!).env, { TOKEN: " secret with spaces " });
-  assert.equal(search!.transport, "http");
-  assert.deepEqual(inputOf(search!).headers, { Authorization: "Bearer fixture" });
-  assert.equal(events!.transport, "sse");
-  assert.equal(events!.oauth.clientSecret, "fixture");
+  assert.ok(echo && search && events, "all three servers produce drafts");
+  assert.equal(echo.enabled, false, "import is reviewed before explicitly enabling a service");
+  assert.equal(echo.timeoutSeconds, "73");
+  assert.deepEqual(inputOf({ ...echo, description: "edited" }).args, args);
+  assert.deepEqual(inputOf(echo).env, { TOKEN: " secret with spaces " });
+  assert.equal(search.transport, "http");
+  assert.deepEqual(inputOf(search).headers, { Authorization: "Bearer fixture" });
+  assert.equal(events.transport, "sse");
+  assert.equal(events.oauth.clientSecret, "fixture");
 });
 
 test("invalid JSON structure and typed fields never become silently truncated drafts", () => {
