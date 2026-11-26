@@ -34,6 +34,8 @@ import { getLanguage, setLanguage, TEXT } from "../src/text.js";
 import { writeSettingsCache } from "../src/app/settings-cache.js";
 import { StubClient } from "./api-stub.js";
 import { GeneralSettings } from "../src/views/settings/GeneralSettings.js";
+import { SandboxDirectSettings } from "../src/views/settings/SandboxDirectSettings.js";
+import { act, create } from "./support/dom-renderer.js";
 import { ModelForm } from "../src/views/ModelForm.js";
 import { ModelPicker, ModelSettings, providerChoices } from "../src/views/settings/ModelSettings.js";
 import { ListSelect } from "../src/views/settings/ListSelect.js";
@@ -337,6 +339,259 @@ describe("the language picker", () => {
     // The row already says 界面语言; a caption would say it a second time and
     // push the control down a line.
     assert.ok(!markup.includes("list-select-caption"), "the field is named twice");
+  });
+
+  it("[U5c] draws no sandbox status row when the shell never answered", () => {
+    // [mac-direct] The block moved to the 沙箱网络 group (设置 › 连接) —
+    // GeneralSettings no longer carries it, so this static render of 通用
+    // cannot contain it either; the live assertion now runs against
+    // SandboxDirectSettings itself. Static rendering runs no effect, so the
+    // bridge pull has not resolved and the status row stays hidden — a
+    // settings page cannot state a sandbox nobody probed. What must also
+    // hold: the row (and the switch section) never render in a plain
+    // browser at all, because the section is gated on direct.available,
+    // which is false without a darwin shell.
+    const sandboxMarkup = renderToStaticMarkup(<SandboxDirectSettings />);
+    assert.ok(!sandboxMarkup.includes(TEXT.settings.network.sandbox.status.field),
+      "the sandbox status row rendered without a shell answer");
+    assert.ok(!sandboxMarkup.includes("sandbox-status-dot"), "the status dot rendered without a shell answer");
+    // And 通用 is now clean of the sandbox vocabulary by construction.
+    assert.ok(!markup.includes("沙箱"), "通用 must not carry sandbox copy after the move");
+  });
+});
+
+describe("[U5c] the sandbox status row (settings-only surface)", () => {
+  // [F16] The row's state derives from BOTH inputs — the probe verdict AND
+  // the session's effective mode (`directActive`, the spawn-time snapshot)
+  // — because a row that reads only the probe would claim "sandboxed" on
+  // an opted-in install whose probe passed. [F18] The effective mode is
+  // the spawn-time snapshot, not the persisted switch: right after a
+  // mid-session toggle the live stack is still in its old mode and the
+  // row must keep stating the old mode. The hook is exercised through the
+  // component: the bridge is installed on globalThis.window before render,
+  // and react-test-renderer lets the mount effect run so the pull resolves.
+  // [mac-direct] The block lives in SandboxDirectSettings (设置 › 沙箱网络)
+  // after the 2026-11-25 move from 通用.
+
+  async function renderedStatus(answer: unknown, enabled = false): Promise<string> {
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      sdShell: {
+        directExecution: { get: async () => ({ available: true, enabled }) },
+        seatbeltStatus: async () => answer,
+      },
+    };
+    let tree: import("react-test-renderer").ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        tree = create(<SandboxDirectSettings />);
+      });
+      return JSON.stringify(tree?.toJSON());
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
+  }
+
+  it("shows the amber failure line (with the localized cause) when the probe failed and the stack runs direct", async () => {
+    const json = await renderedStatus({
+      kind: "failed", platform: "darwin",
+      reason: "sandbox-exec 退出码 71", diagnostics: ["/usr/bin/sandbox-exec …"],
+      detail: { failCode: "exit-code", exitCode: 71 },
+      directActive: true,
+    });
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.field), "the status row is missing");
+    assert.ok(json.includes("sandbox-status-dot"), "the status dot is missing");
+    assert.ok(json.includes('"data-kind":"failed"'), "the dot must carry the failed kind for the amber tone");
+    // [F12] The structured cause is localized into the hint; the raw reason
+    // + diagnostics ride the dot's tooltip.
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.failCause["exit-code"]), "the localized cause is missing from the hint");
+    assert.ok(json.includes("sandbox-exec 退出码 71"), "the raw reason must ride the tooltip");
+  });
+
+  it("shows the green line when the stack was spawned sandboxed", async () => {
+    const json = await renderedStatus({ kind: "ok", platform: "darwin", directActive: false });
+    assert.ok(json.includes('"data-kind":"ok"'), "the dot must carry the ok kind for the green tone");
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.ok), "the ok sentence is missing");
+  });
+
+  it("[hint-split] renders the lead sentence plus a collapsed details block carrying every blast-radius point", async () => {
+    // The switch row keeps one lead sentence in its hint; the full impact
+    // list is a sibling <details> block. Collapsed by default (the whole
+    // point: passing readers pay one sentence), and every bullet is still
+    // in the markup — the [U5c] red line is presence, not visibility.
+    // [F29] The restart clause moved back into the lead hint, so it is no
+    // longer one of the details bullets — the [F29] test below pins it to
+    // the always-visible hint itself.
+    const json = await renderedStatus({ kind: "ok", platform: "darwin", directActive: false });
+    const direct = TEXT.settings.network.sandbox.directExecution;
+    assert.ok(json.includes(direct.hint), "the lead sentence is missing from the hint");
+    assert.ok(json.includes('"details"'), "the details block is missing");
+    assert.ok(!json.includes('"open"'), "the details block must render collapsed by default");
+    assert.ok(json.includes(direct.showDetails), "the expand label is missing");
+    for (const line of direct.hintDetails) {
+      assert.ok(json.includes(line), `the blast-radius bullet is missing: ${line}`);
+    }
+  });
+
+  it("[F29] the restart clause rides the always-visible lead hint, not the collapsed details", () => {
+    // The switch flip gives no immediate feedback: the status row keeps
+    // stating the spawn-time mode until the next spawn, so right after the
+    // user flips the switch ON the visible pair would say both "leaves the
+    // sandbox" (hint) and "executes sandboxed" (green row) — the restart
+    // clause is the only thing that explains that window, and it matters
+    // precisely in the moment it is hidden behind the collapsed block.
+    // The combined hint+hintDetails render assertion cannot tell "always
+    // visible" from "one click away" (that blindness is how F29 slipped
+    // through in the first place), so this pins the clause to the hint
+    // constant itself — in both dictionaries, since the zh dictionary is
+    // the Text type's source and the en one mirrors it. ([hint-split] above
+    // already proves the hint renders; this test pins where the clause
+    // lives.)
+    const direct = TEXT.settings.network.sandbox.directExecution;
+    assert.ok(direct.hint.includes("重启应用后生效"), "[F29] the zh lead hint must carry the restart clause");
+    assert.ok(!direct.hintDetails.includes("重启应用后生效"), "[F29] the clause must not hide in the zh details bullets");
+    const previous = getLanguage();
+    try {
+      setLanguage("en");
+      const directEn = TEXT.settings.network.sandbox.directExecution;
+      assert.ok(directEn.hint.includes("Applies after a restart"), "[F29] the en lead hint must carry the restart clause");
+      assert.ok(!directEn.hintDetails.includes("Applies after a restart"), "[F29] the clause must not hide in the en details bullets");
+    } finally { setLanguage(previous); }
+  });
+
+  it("[dot-beside] the status dot sits in a right-column status row, never under its label", async () => {
+    // The base row grid is one column, so a control wraps under its label —
+    // for a 10px status dot that read as a stray mark below the text. The
+    // status rows use `is-status`: two columns (label 1fr, dot auto),
+    // vertically centred. Pinned so a future tone refactor cannot quietly
+    // strand the dot under the sentence again. (The renderer's JSON form
+    // carries className unquoted, so the assertion matches the bare token.)
+    const json = await renderedStatus({ kind: "ok", platform: "darwin", directActive: false });
+    assert.ok(/class[=:]"?[^"]*is-status/.test(json) || json.includes("is-status"), "the status row must carry the is-status class");
+    assert.ok(!json.includes("is-stack"), "the status row must not use the stack layout");
+  });
+
+  it("[F16] says opted-out — NOT sandboxed — when the stack runs direct with a passing probe", async () => {
+    // The ordinary opt-in path: the switch was on at spawn, the probe
+    // passed, the session runs direct. A row that claims "sandboxed" here
+    // would state the opposite of the truth.
+    const json = await renderedStatus({ kind: "ok", platform: "darwin", directActive: true }, true);
+    assert.ok(json.includes('"data-kind":"opted-out"'), "the dot must carry the opted-out kind");
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.optedOut), "the opted-out sentence is missing");
+    assert.ok(!json.includes(TEXT.settings.network.sandbox.status.ok), "the ok sentence must NOT appear when the stack runs direct");
+  });
+
+  it("[F18] keeps the green line right after a mid-session toggle to ON", async () => {
+    // The user just flipped the switch to ON, but the running stack was
+    // spawned sandboxed and a restart applies the change — so the row must
+    // keep stating the mode the live stack is actually in, not the switch's
+    // new value.
+    const json = await renderedStatus({ kind: "ok", platform: "darwin", directActive: false }, true);
+    assert.ok(json.includes('"data-kind":"ok"'), "the dot must stay green while the live stack is still sandboxed");
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.ok), "the ok sentence must stay while the live stack is still sandboxed");
+    assert.ok(!json.includes(TEXT.settings.network.sandbox.status.optedOut), "the row must not claim direct before the restart actually happens");
+  });
+
+  it("[F18] keeps the failed line right after a mid-session toggle to OFF", async () => {
+    // Mirror window: the user flipped the switch OFF, but the stack was
+    // spawned direct (probe-failure boot). The row stays amber-failed with
+    // its cause; the switch hint explains the restart.
+    const json = await renderedStatus({
+      kind: "failed", platform: "darwin",
+      reason: "r", diagnostics: ["d"],
+      detail: { failCode: "spawn-error" },
+      directActive: true,
+    }, false);
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.failed), "the failed sentence must stay while the live stack still runs direct");
+    assert.ok(!json.includes(TEXT.settings.network.sandbox.status.ok), "the row must not claim sandboxed before the restart actually happens");
+  });
+
+  it("[F21] a failed verdict renders the amber line even when the flag says the spawn was not direct", async () => {
+    // The attach-to-external-stack window: this shell never ran
+    // darwinDirectEnv, so directActive stayed false — but the session's
+    // probe DID fail, and the verdict is the fact the row exists to show.
+    // A render keyed on directActive first would fall into the green
+    // branch and claim "sandboxed" here; the verdict must win.
+    const json = await renderedStatus({
+      kind: "failed", platform: "darwin",
+      reason: "r", diagnostics: ["d"],
+      detail: { failCode: "exit-code", exitCode: 71 },
+      directActive: false,
+    });
+    assert.ok(json.includes('"data-kind":"failed"'), "the dot must carry the failed kind, not the ok kind");
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.failed), "the failed sentence must render");
+    assert.ok(!json.includes(TEXT.settings.network.sandbox.status.ok), "the green sentence must never appear on a failed verdict");
+  });
+
+  it("[F22] the direct-but-switch-off window tells the user to restart, not to turn off a switch that is already off", async () => {
+    // Probe passed, stack spawned direct (opt-in at spawn), and the user
+    // has since turned the switch OFF: the row must name the restart as
+    // the way back, never "(the switch below is ON)".
+    const json = await renderedStatus({ kind: "ok", platform: "darwin", directActive: true }, false);
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.optedOutSwitchOff), "the switch-off variant must render");
+    assert.ok(!json.includes(TEXT.settings.network.sandbox.status.optedOut), "the 'switch is ON' variant must not claim a switch state that is not true");
+    // [F24] The sentence is unreachable on a failed verdict (the failed
+    // branch wins), so it must not carry a probe clause it can never
+    // honestly state — a probe cause belongs to the amber row alone.
+    assert.ok(!json.includes("探测失败"), "[F24] the switch-off variant must not mention a probe failure it can never represent");
+    assert.ok(!json.includes("or its probe failed"), "[F24] the switch-off variant must not mention a probe failure it can never represent (en)");
+  });
+
+  it("[F26] an adopted stack renders the attached hedge, never an asserted ok/optedOut sentence", async () => {
+    // This session attached to an already-running backend: whatever the
+    // inference says, the ok ("sandboxed") and optedOut sentences assert a
+    // mode this shell cannot know — the row must hedge instead, in BOTH
+    // directActive shapes (the inference is not the survivor's env).
+    const attachedOk = await renderedStatus({ kind: "ok", platform: "darwin", directActive: false, modeKnown: false });
+    assert.ok(attachedOk.includes('"data-kind":"attached"'), "the dot must carry the attached kind for the neutral tone");
+    assert.ok(attachedOk.includes(TEXT.settings.network.sandbox.status.attached), "the attached sentence must render");
+    // [F26-followup-2] The stop advice must name a concrete route — the app
+    // exposes no user-facing control that stops an adopted backend (quit
+    // stops only a stack this shell spawned), so an unnamed route would
+    // strand the user at a truthful-but-vacuous instruction. The zh row
+    // names the terminal and Activity Monitor; en says the same in its
+    // words (verified by the en assertion below).
+    assert.ok(attachedOk.includes("活动监视器"), "[F26-followup-2] the zh stop route (Activity Monitor) must be named");
+    assert.ok(!attachedOk.includes(TEXT.settings.network.sandbox.status.ok), "the green sentence must not assert over an unverified mode");
+    const attachedDirect = await renderedStatus({ kind: "ok", platform: "darwin", directActive: true, modeKnown: false });
+    assert.ok(attachedDirect.includes('"data-kind":"attached"'), "the directActive shape must hedge too");
+    assert.ok(!attachedDirect.includes(TEXT.settings.network.sandbox.status.optedOut), "the opted-out sentence must not assert over an unverified mode");
+    assert.ok(!attachedDirect.includes(TEXT.settings.network.sandbox.status.optedOutSwitchOff), "the switch-off sentence must not assert over an unverified mode");
+  });
+
+  it("[F26-followup-2] the en attached sentence names its stop route too", async () => {
+    // zhaozhaozz (round 15): "stop that backend process" is truthful but
+    // leaves the user to find the process themselves. The fix is per-locale
+    // copy, and the en row must carry the same concreteness the zh row
+    // pins above — rendered under setLanguage("en") so the proxy resolves
+    // the EN dictionary for this render.
+    const previous = getLanguage();
+    try {
+      setLanguage("en");
+      const attachedEn = await renderedStatus({ kind: "ok", platform: "darwin", directActive: false, modeKnown: false });
+      assert.ok(attachedEn.includes("Activity Monitor"), "[F26-followup-2] the en stop route (Activity Monitor) must be named");
+      assert.ok(attachedEn.includes("terminal"), "[F26-followup-2] the en stop route (terminal) must be named");
+    } finally { setLanguage(previous); }
+  });
+
+  it("[F26] a failed verdict still asserts on an adopted stack — the probe is this session's own fact", async () => {
+    // The probe ran in THIS session; its failure is true regardless of
+    // whose process the stack is. modeKnown:false must not downgrade the
+    // amber row.
+    const json = await renderedStatus({
+      kind: "failed", platform: "darwin",
+      reason: "r", diagnostics: ["d"],
+      detail: { failCode: "spawn-error" },
+      directActive: true, modeKnown: false,
+    });
+    assert.ok(json.includes('"data-kind":"failed"'), "the failed kind must stay");
+    assert.ok(json.includes(TEXT.settings.network.sandbox.status.failed), "the failed sentence must stay");
+    assert.ok(!json.includes(TEXT.settings.network.sandbox.status.attached), "the attached hedge must not replace a failed verdict");
+  });
+
+  it("shows no row when the bridge errors or predates U5c", async () => {
+    const json = await renderedStatus(null);
+    assert.ok(!json.includes("sandbox-status-dot"), "a null answer must not render a row");
   });
 });
 
@@ -769,5 +1024,61 @@ describe("each settings page", () => {
     }
     // The Runner list has no heading of its own now; the group is the heading.
     assert.ok(!runtime.includes('"heading":"Runner"'));
+  });
+
+  it("[mac-direct] the sandbox opt-in vocabulary lives in 网络, not in 通用", () => {
+    // User call 2026-11-25: everything that governs the sandbox belongs
+    // behind one 「沙箱」 entrance, so the direct-execution block moved from
+    // 通用 to the 沙箱网络 group. The copy itself is unchanged — this pins
+    // the relocation, not the sentences: the keys must be reachable under
+    // network.sandbox and must NOT remain under general.
+    const network = JSON.stringify(TEXT.settings.network);
+    assert.ok(network.includes("无沙箱运行本地代码"), "the switch's field label must live in 网络");
+    assert.ok(network.includes("沙箱状态"), "the status row's field label must live in 网络");
+    const general = JSON.stringify(TEXT.settings.general);
+    assert.ok(!general.includes("无沙箱运行本地代码"), "通用 still carries the switch's label");
+    assert.ok(!general.includes("沙箱状态"), "通用 still carries the status row's label");
+  });
+
+  it("[mac-direct] the sandbox block renders inside 网络, ahead of the network rows", async () => {
+    // Round 17 review: the relocation pin above proves where the strings
+    // live, not where the page draws them. This mounts the real NetworkSettings
+    // (LoadGate mid-read, so the network rows are hidden) with the shell
+    // bridge stubbed to a darwin shell, and asserts the opt-in block renders
+    // on that page — the placement itself, not the vocabulary.
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      sdShell: {
+        directExecution: { get: async () => ({ available: true, enabled: false }) },
+        seatbeltStatus: async () => ({ kind: "ok", platform: "darwin", directActive: false }),
+      },
+    };
+    let tree: import("react-test-renderer").ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        tree = create(
+          <NetworkSettings client={client} onConfirm={noConfirm} toast={() => {}} />,
+        );
+      });
+      const json = JSON.stringify(tree?.toJSON());
+      assert.ok(json.includes(TEXT.settings.network.sandbox.directExecution.field),
+        "the opt-in switch row must render on the 网络 page");
+      assert.ok(json.includes(TEXT.settings.network.sandbox.status.ok),
+        "the sandbox status row must render on the 网络 page");
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+    }
+  });
+
+  it("[heading-split] the two Groups on 网络 carry different headings, not the same one twice", () => {
+    // Round 17 review: the opt-in Group reusing the page-level 沙箱网络
+    // heading drew the same section rule twice with the same label. The
+    // opt-in Group now carries directExecution.heading (沙箱/Sandbox) while
+    // the network Group keeps 沙箱网络 — pinned here as a vocabulary pair so
+    // neither heading can silently fall back to the other.
+    const sandbox = TEXT.settings.network.sandbox;
+    assert.ok(sandbox.directExecution.heading && sandbox.directExecution.heading !== sandbox.heading,
+      "the opt-in heading must be its own, not the page-level 沙箱网络 heading");
+    assert.equal(sandbox.directExecution.heading, "沙箱");
   });
 });

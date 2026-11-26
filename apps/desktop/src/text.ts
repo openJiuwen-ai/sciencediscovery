@@ -55,12 +55,14 @@ let language: Language = initialLanguage();
 const listeners = new Set<() => void>();
 
 /**
- * Hand the current language to the Electron shell when one is hosting us:
- * the fail-closed error page lives on a file:// origin and cannot read
- * this origin's localStorage, so the shell persists the locale on our
- * behalf and passes it to that page via its query (review F13; F16: the
- * report must also happen at BOOT, not only on change — the shell has no
- * other way to learn the stored choice until the user flips the setting).
+ * Hand the current language to the Electron shell when one is hosting us.
+ * [F25] History: this mirror was built for the retired fail-closed error
+ * page (review F13/F16 — a file:// page that could not read this origin's
+ * localStorage, so the shell persisted the locale on its behalf and passed
+ * it via query). That page is gone; the shell-side handler still accepts
+ * the report and mirrors it best-effort, but nothing reads the mirror
+ * anymore. Kept (not deleted) because removing the bridge call is a wider
+ * cleanup than this PR's text-comment fix warrants.
  * In a plain browser there is no sdShell and this is a no-op.
  */
 function reportLocaleToShell(l: Language): void {

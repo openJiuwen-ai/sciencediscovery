@@ -347,6 +347,14 @@
 .wizard-page .test-result.is-fail { background: var(--wizard-err-bg); color: var(--wizard-err); }
 .wizard-page .test-result.is-fail::before { content: "✗ "; }
 .wizard-page .test-result.is-busy { background: var(--wizard-info-bg); color: var(--wizard-info); }
+/* [mac-direct] The opt-in ready banner: a warning, not a failure — the boot
+   succeeded exactly as the setting asked. Amber from the shared tokens so the
+   page never reads as all-green while running unsandboxed. */
+.wizard-page .test-result.is-warn { background: var(--warning-soft); color: var(--warning-strong); }
+.wizard-page .test-result.is-warn::before { content: "⚠ "; }
+/* [U5c] The .wizard-seatbelt-warn banner styles are retired with the banner
+   itself: sandbox health lives in 设置 › 连接 › 沙箱网络's status row (owner
+   decision 2026-11-23). */
 
 .wizard-page .form-actions {
   display: flex;

@@ -55,9 +55,10 @@ export type SeatbeltVerdict =
 
 /**
  * Pure decision over a probe outcome (and the platform, so win32/linux
- * short-circuit without ever spawning). The reason strings are the
- * user-facing copy for the B2-2 error page; diagnostics are the commands
- * the page suggests the user runs.
+ * short-circuit without ever spawning). [F25] The reason strings feed the
+ * settings status row's tooltip (设置 › 连接 › 沙箱网络) — the retired fail-closed
+ * error page was their old consumer; diagnostics are the commands the
+ * tooltip suggests the user runs.
  */
 export function interpretSeatbeltProbe(
   outcome: SeatbeltProbeOutcome,
@@ -74,7 +75,7 @@ export function interpretSeatbeltProbe(
       kind: "failed",
       platform: "darwin",
       reason:
-        "未检测到 macOS 沙箱（Seatbelt）：找不到 sandbox-exec 命令。SD 桌面版必须在沙箱内运行代码，无法继续。",
+        "未检测到 macOS 沙箱（Seatbelt）：找不到 sandbox-exec 命令。本次会话将以无沙箱模式运行本地代码。",
       diagnostics: [
         "ls -l /usr/bin/sandbox-exec   # 检查命令是否存在",
         "sudo profiles status -all     # 查看是否有 MDM 下发的受限配置（建议联系管理员）",
@@ -87,7 +88,7 @@ export function interpretSeatbeltProbe(
     return {
       kind: "failed",
       platform: "darwin",
-      reason: `沙箱探测进程被 ${outcome.signal} 信号终止，无法确认 Seatbelt 可用。SD 桌面版必须在沙箱内运行代码，无法继续。`,
+      reason: `沙箱探测进程被 ${outcome.signal} 信号终止，无法确认 Seatbelt 可用。本次会话将以无沙箱模式运行本地代码。`,
       diagnostics: [
         "ls -l /usr/bin/sandbox-exec   # 检查命令是否存在",
         "sudo profiles status -all     # 查看是否有 MDM 下发的受限配置（建议联系管理员）",
@@ -98,7 +99,7 @@ export function interpretSeatbeltProbe(
   return {
     kind: "failed",
     platform: "darwin",
-    reason: `沙箱探测失败（sandbox-exec 退出码 ${outcome.code}）。在 MDM 受控或嵌套虚拟化环境中 Seatbelt 可能被禁用。SD 桌面版必须在沙箱内运行代码，无法继续。`,
+    reason: `沙箱探测失败（sandbox-exec 退出码 ${outcome.code}）。在 MDM 受控或嵌套虚拟化环境中 Seatbelt 可能被禁用。本次会话将以无沙箱模式运行本地代码。`,
     diagnostics: [
       "sandbox-exec -p '(version 1)(allow default)' /usr/bin/true   # 手动复现探测",
       "sudo profiles status -all     # 查看是否有 MDM 下发的受限配置（建议联系管理员）",
@@ -175,50 +176,10 @@ export async function runSeatbeltProbe(
 }
 
 /**
- * The startup gate's own decision (review F1 fix): what the main process
- * does with a verdict BEFORE any UI loads. Pure — the caller (main.ts
- * startupFlow) only performs the returned instruction. "failed" means the
- * fail-closed error page REPLACES the session (the SPA is never loaded);
- * every other verdict (ok / not-applicable) lets the startup continue.
+ * [U5c, owner decision 2026-11-23] The startup gate and its error page are
+ * retired: a failed probe blocks nothing — the session records the failure,
+ * the stack spawns direct, and 设置 › 连接 › 沙箱网络's status row is where it is
+ * shown. seatbeltGateDecision / seatbeltErrorPageQuery (and the page they
+ * served, seatbelt-error.html) were removed with the gate; this module now
+ * exports only the probe itself (runSeatbeltProbe + the pure interpreter).
  */
-export type SeatbeltGateDecision =
-  | { action: "block"; page: "seatbelt-error.html"; reason: string; diagnostics: string[]; detail: SeatbeltFailureDetail }
-  | { action: "continue" };
-
-export function seatbeltGateDecision(verdict: SeatbeltVerdict): SeatbeltGateDecision {
-  if (verdict.kind === "failed") {
-    return {
-      action: "block",
-      page: "seatbelt-error.html",
-      reason: verdict.reason,
-      diagnostics: verdict.diagnostics,
-      detail: verdict.detail,
-    };
-  }
-  return { action: "continue" };
-}
-
-/**
- * The query string the fail-closed error page reads (URLSearchParams
- * round-trip; the page JSON.parses `diagnostics`). Pure so tests can pin
- * the contract without loading Electron. `failCode`/`signal`/`exitCode`
- * are the page's i18n keys (review follow-up): the page's EN dictionary is
- * keyed by `failCode` rather than translating the zh `reason` string.
- *
- * `locale` (F13): the page is a file:// origin and cannot read the SPA's
- * http://127.0.0.1 localStorage — the shell passes the SPA's persisted
- * choice explicitly. `?lang=` from a QA harness still wins on the page.
- */
-export function seatbeltErrorPageQuery(
-  decision: Extract<SeatbeltGateDecision, { action: "block" }>,
-  locale?: "zh-CN" | "en" | null,
-): string {
-  return new URLSearchParams({
-    reason: decision.reason,
-    diagnostics: JSON.stringify(decision.diagnostics),
-    failCode: decision.detail.failCode,
-    ...(decision.detail.signal !== undefined ? { signal: decision.detail.signal } : {}),
-    ...(decision.detail.exitCode !== undefined ? { exitCode: String(decision.detail.exitCode) } : {}),
-    ...(locale ? { lang: locale === "en" ? "en" : "zh" } : {}),
-  }).toString();
-}

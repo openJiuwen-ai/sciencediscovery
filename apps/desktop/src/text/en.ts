@@ -950,17 +950,17 @@ export const EN: Text = {
       timeoutSub: "The execution engine may be slow on its first preparation; wait a moment and check again.",
       fallbackError:
         "Unknown reason. Check the logs and try again; antivirus software may be blocking the preparation.",
-      seatbeltFailedTitle: "macOS sandbox (Seatbelt) not detected",
-      seatbeltRetryHint: "If an MDM restriction was just lifted or system settings changed, restart the app and check again.",
+      /* [U5c] The Seatbelt keys of this block (items.seatbelt,
+         seatbeltFailedTitle/RetryHint/NotApplicable/OptInTitle) are retired
+         with the wizard's Seatbelt row and banner: sandbox health lives in
+         设置 › 连接 › 沙箱网络's status row alone (owner decision 2026-11-23). */
       items: {
-        seatbelt: "macOS sandbox (Seatbelt)",
         api: "Local API service",
         runner: "Execution engine (Python runtime)",
         model: "Default task model (optional; can be configured later in settings)",
       },
       notChecked: "Not checked",
       runnerNeedsToken: "Not checked (token required)",
-      seatbeltNotApplicable: "Not checked (the sandbox is macOS-only)",
       retry: "Check again",
       retryBoot: "Try again",
       logs: "Open the logs folder",
@@ -1293,6 +1293,77 @@ export const EN: Text = {
         emptyDomains: "Add at least one allowed domain.",
         saveDomains: "Save",
         scope: "Applies only to run_shell and code inside the sandbox.",
+        /** [mac-direct] Installation-level opt-in. With it on, local code
+         *  execution leaves the sandbox: the full local execution stack is
+         *  affected — the Agent's own ephemeral Shell/Python and evolution
+         *  candidates run with your own file, network and environment access;
+         *  persistent shell sessions and persistent kernels are offered only
+         *  when a sandbox is available, so they are unavailable without one;
+         *  evolution runs still ask to confirm each time. macOS shell only.
+         *  Copy red line: state the full blast radius — never narrowed to
+         *  "candidates only" (review 2026-11-23).
+         *  [hint-split] Layered presentation (2026-11-24 user feedback): the
+         *  hint keeps one lead sentence and the full blast radius moves to
+         *  hintDetails; every point is preserved, the red line is unchanged —
+         *  the copy tests assert over hint + hintDetails combined.
+         *  [F29] The restart clause stays in the lead hint, not the details:
+         *  flipping the switch gives no immediate feedback (the status row
+         *  states the spawn-time mode until the next spawn), so the clause
+         *  is the only thing that explains the window right after the flip —
+         *  the one moment it matters, it must be always visible. */
+        directExecution: {
+          heading: "Sandbox",
+          field: "Run local code without a sandbox",
+          hint: "With this on, local code execution leaves the sandbox. Applies after a restart.",
+          hintDetails: [
+            "Code runs with your own file, network and environment access (including the Agent's own ephemeral Shell/Python and evolution candidates)",
+            "Persistent shell sessions and persistent kernels need a sandbox, so they are unavailable",
+            "R execution needs a sandbox and is unavailable while this is on (the direct channel supports Python only)",
+            "Evolution runs still ask to confirm each time",
+            ],
+          showDetails: "Show full impact",
+          hideDetails: "Hide",
+        },
+        /** [U5c] The sandbox status row of 设置 › 连接 › 沙箱网络 — the one place
+         *  sandbox health is surfaced (owner decision 2026-11-23: the boot
+         *  neither blocks nor mentions the sandbox; monitoring lives in
+         *  settings alone). */
+        status: {
+          field: "Sandbox status",
+          ok: "✓ macOS sandbox (Seatbelt) running — local code executes sandboxed",
+          /** [F26] The adopted-stack window: this session attached to an
+           *  already-running backend, so the mode the ok/optedOut sentences
+           *  would assert is an inference from this shell's inputs, not the
+           *  survivor's env — the row says so instead of guessing.
+           *  [F26-followup] No restart advice: quitting stops only a stack
+           *  this shell spawned, so a restart usually re-adopts the same
+           *  surviving stack. The honest way to verify is to stop that
+           *  backend and let the app spawn its own. */
+          attached: "This session attached to an already-running backend stack; its sandbox mode is not verified by this session (not knowable from outside). To have the mode confirmed, stop that backend process first — interrupt it in the terminal that started it, or quit it from Activity Monitor — then let the app spawn its own stack.",
+          /** [F16] The honest row: when the switch is ON, the session runs
+           *  direct no matter what the probe said — the row must say so. The
+           *  way back is the switch, not "restore and restart". */
+          optedOut: "Local code currently executes directly, unsandboxed (the switch below is ON). Turn it off and restart the app to return to sandboxed mode.",
+          /** [F22] The mid-session toggle-off window: the stack still runs
+           *  direct but the switch is already OFF — tell the user the restart
+           *  is what applies their change, not "turn off the switch" (which
+           *  they just did). [F24] No probe clause here: this sentence only
+           *  renders when the probe verdict is not "failed" (the failed branch
+           *  wins the row), so a probe cause can never reach it. */
+          optedOutSwitchOff: "Local code currently executes directly, unsandboxed (this session started with the switch on). Restart the app to return to sandboxed mode.",
+          /** The probe failed this session — the cause follows from the
+           *  structured detail (failCause sentence), the raw reason rides the
+           *  dot's tooltip with the diagnostics. R execution needs a sandbox
+           *  and is refused in this session too (F17). */
+          failed: "The sandbox is unavailable: this session runs local code unsandboxed; R execution and persistent shell sessions/kernels are unavailable (see the switch below for what that means); evolution runs still ask to confirm each time.",
+          /** Composed from detail.failCode — en sentences for the three
+           *  structured causes (spawn-error / signal / exit-code). */
+          failCause: {
+            "spawn-error": "Cause: the sandbox-exec command was not found.",
+            signal: "Cause: the probe process was killed by a signal before it could confirm Seatbelt.",
+            "exit-code": "Cause: Seatbelt may be disabled under MDM control or nested virtualization.",
+            },
+        },
       },
     },
     runtime: {

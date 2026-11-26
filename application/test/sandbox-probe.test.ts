@@ -195,66 +195,11 @@ test("runSeatbeltProbe (F12): timeout=0 disables the ceiling (backward compat)",
   assert.equal(verdict, "still-pending", "timeout=0 must leave the promise pending");
 });
 
-// --- startup gate (review F1): the main-process fail-closed decision ---------
-
-test("gate: a failed verdict blocks the session (error page, no SPA load)", async () => {
-  const { seatbeltGateDecision } = await import("../src/sandbox-probe.ts");
-  const verdict = interpretSeatbeltProbe({ code: 71, signal: null }, "darwin");
-  const decision = seatbeltGateDecision(verdict);
-  assert.equal(decision.action, "block");
-  if (decision.action === "block") {
-    assert.equal(decision.page, "seatbelt-error.html");
-    assert.equal(decision.reason, verdict.reason);
-    assert.deepEqual(decision.diagnostics, verdict.diagnostics);
-  }
-});
-
-test("gate: ok and not-applicable verdicts continue startup", async () => {
-  const { seatbeltGateDecision } = await import("../src/sandbox-probe.ts");
-  assert.equal(seatbeltGateDecision(interpretSeatbeltProbe({ code: 0, signal: null }, "darwin")).action, "continue");
-  assert.equal(seatbeltGateDecision(interpretSeatbeltProbe({ code: 0, signal: null }, "win32")).action, "continue");
-});
-
-test("gate: error-page query round-trips the payload the page reads", async () => {
-  const { seatbeltGateDecision, seatbeltErrorPageQuery } = await import("../src/sandbox-probe.ts");
-  const verdict = interpretSeatbeltProbe({ code: 1, signal: null }, "darwin");
-  const decision = seatbeltGateDecision(verdict);
-  assert.equal(decision.action, "block");
-  if (decision.action !== "block") return;
-  const query = new URLSearchParams(seatbeltErrorPageQuery(decision));
-  assert.equal(query.get("reason"), verdict.reason);
-  assert.deepEqual(JSON.parse(query.get("diagnostics") || "[]"), verdict.diagnostics);
-  // Review follow-up: the page's EN dictionary is keyed by failCode (+ the
-  // parameter it interpolates), never by translating the zh reason string.
-  assert.equal(query.get("failCode"), "exit-code");
-  assert.equal(query.get("exitCode"), "1");
-  assert.equal(query.get("signal"), null);
-});
-
-test("gate: query carries signal for a signal-killed probe", async () => {
-  const { seatbeltGateDecision, seatbeltErrorPageQuery } = await import("../src/sandbox-probe.ts");
-  const verdict = interpretSeatbeltProbe({ code: null, signal: "SIGKILL" }, "darwin");
-  const decision = seatbeltGateDecision(verdict);
-  if (decision.action !== "block") return assert.fail("signal kill must block");
-  const query = new URLSearchParams(seatbeltErrorPageQuery(decision));
-  assert.equal(query.get("failCode"), "signal");
-  assert.equal(query.get("signal"), "SIGKILL");
-  assert.equal(query.get("exitCode"), null);
-});
-
-test("gate: query carries the shell-persisted locale (F13: the page cannot read the SPA's storage across origins)", async () => {
-  const { seatbeltGateDecision, seatbeltErrorPageQuery } = await import("../src/sandbox-probe.ts");
-  const verdict = interpretSeatbeltProbe({ code: 1, signal: null }, "darwin");
-  const decision = seatbeltGateDecision(verdict);
-  if (decision.action !== "block") return assert.fail("exit-code failure must block");
-  // No locale known (SPA never ran): the page falls back to navigator.language.
-  const bare = new URLSearchParams(seatbeltErrorPageQuery(decision));
-  assert.equal(bare.get("lang"), null);
-  // The shell mirrors the SPA choice into userData and passes it here:
-  // "en" renders the EN page, "zh-CN" the zh one — regardless of what
-  // navigator.language would say on this Mac.
-  const en = new URLSearchParams(seatbeltErrorPageQuery(decision, "en"));
-  assert.equal(en.get("lang"), "en");
-  const zh = new URLSearchParams(seatbeltErrorPageQuery(decision, "zh-CN"));
-  assert.equal(zh.get("lang"), "zh");
-});
+// --- [U5c] The startup-gate section is retired ---------------------------------
+//
+// seatbeltGateDecision / seatbeltErrorPageQuery (and the fail-closed error
+// page they served) were removed with the gate: a failed probe blocks
+// nothing — the session records the failure, the stack spawns direct, and
+// 设置 › 连接 › 沙箱网络's status row is where it is shown (owner decision 2026-11-23).
+// The probe itself (runSeatbeltProbe + interpretSeatbeltProbe) keeps its
+// coverage above.

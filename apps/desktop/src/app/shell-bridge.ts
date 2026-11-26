@@ -53,6 +53,123 @@ interface SdShellJiuwen {
    *  and the startup flow before loading this SPA (constant true from the
    *  preload; absent in a plain browser). */
   wizardIntroDone?: boolean;
+  /** [mac-direct] The installation-level opt-in, exposed only where it
+   *  exists (a darwin shell). A plain browser has no bridge; a win32 shell
+   *  answers `available: false` because it hard-sets the env flag this
+   *  switch would imply. */
+  directExecution?: {
+    get: () => Promise<{ available: boolean; enabled: boolean }>;
+    set: (enabled: boolean) => Promise<{ available: boolean; enabled: boolean }>;
+  };
+  /** [U5c] This session's sandbox probe verdict, pulled by the settings
+   *  row's status line. `kind: "failed"` carries the failure's
+   *  reason/diagnostics plus a structured `detail` (failCode) so the row
+   *  can localize the cause; `ok` carries no detail. The bridge never
+   *  answers "not-applicable" — the main process normalizes non-darwin
+   *  verdicts to null because the row's group is darwin-only (review F14).
+   *  Absent in a plain browser and in builds whose preload predates U5c. */
+  seatbeltStatus?: () => Promise<SeatbeltStatusPayload | null>;
+}
+
+/** [U5c] The normalized verdict the settings row renders from. [F18]
+ *  `directActive` is the mode the running stack was spawned with (the
+ *  session flag the main process set inside darwinDirectEnv), so the row
+ *  describes the live stack even right after a mid-session switch toggle —
+ *  the switch shows the desired state, the row the current one. */
+export type SeatbeltStatusPayload =
+  | { kind: "ok"; platform: "darwin"; directActive: boolean; modeKnown: boolean }
+  | {
+    kind: "failed";
+    platform: "darwin";
+    reason: string;
+    diagnostics: string[];
+    detail: { failCode: "spawn-error" | "signal" | "exit-code"; signal?: string; exitCode?: number; spawnError?: string };
+    directActive: boolean;
+    modeKnown: boolean;
+  };
+
+/**
+ * [U5c] The session's sandbox verdict as told by the shell. The hook mirrors
+ * useShellDirectExecution's shape: `unknown` (never a thrown promise)
+ * whenever there is nothing to say — no shell (plain browser / SSR), a shell
+ * whose preload predates U5c, or a bridge hiccup. The settings row renders
+ * its status line from the kind; GeneralSettings decides which verdicts are
+ * worth a row (see there).
+ *
+ * Pulled once on mount, not subscribed: the verdict is decided in
+ * app.whenReady before any SPA loads and never changes while the app runs.
+ */
+export function useSeatbeltStatus(): { status: SeatbeltStatusPayload | null } {
+  const [status, setStatus] = useState<SeatbeltStatusPayload | null>(null);
+
+  // SSR/tests run this hook where `window` does not exist; a shell bridge is
+  // a browser-only concept (same guard shape as wizardIntroHandled below).
+  const shell = typeof window === "undefined"
+    ? undefined
+    : (window as typeof window & { sdShell?: SdShellJiuwen }).sdShell;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!shell?.seatbeltStatus) return;
+    void shell.seatbeltStatus().then((answer) => {
+      // A null answer (bridge hiccup / pre-U5c shell) leaves "unknown": a
+      // status row that claims a sandbox verdict the session never gave
+      // would state a fact nobody probed.
+      if (!cancelled && answer) setStatus(answer);
+    }).catch(() => { /* transport hiccup: keep "unknown" */ });
+    return () => { cancelled = true; };
+    // The preload installs window.sdShell before any app code runs, so its
+    // identity is stable for the page lifetime; "shell" is a module-level read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return { status };
+}
+
+/**
+ * The [mac-direct] opt-in as a settings-row state machine.
+ *
+ * `available` is false and stays false in a plain browser and on every shell
+ * that does not offer the switch, so the row never renders there. On a shell
+ * that does, the value comes back from the main process's re-read of its
+ * persisted file — including the bounce-back when a write failed — and a
+ * write re-renders from the reply alone (no refetch: the reply IS the
+ * post-write truth).
+ */
+export function useShellDirectExecution(): {
+  available: boolean;
+  enabled: boolean;
+  setEnabled: (next: boolean) => void;
+} {
+  const [state, setState] = useState<{ available: boolean; enabled: boolean }>({ available: false, enabled: false });
+
+  // SSR/tests run this hook where `window` does not exist; a shell bridge is a
+  // browser-only concept, so report "no switch" there (same guard shape as
+  // wizardIntroHandled below).
+  const shell = typeof window === "undefined"
+    ? undefined
+    : (window as typeof window & { sdShell?: SdShellJiuwen }).sdShell;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!shell?.directExecution) return;
+    void shell.directExecution.get().then((answer) => {
+      if (!cancelled) setState(answer);
+    }).catch(() => { /* no switch to show: keep available=false */ });
+    return () => { cancelled = true; };
+    // The preload installs window.sdShell before any app code runs, so its
+    // identity is stable for the page lifetime; "shell" is a module-level read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setEnabled = (next: boolean) => {
+    void shell?.directExecution?.set(next).then((answer) => setState(answer)).catch(() => {
+      // A failed write leaves the row where it was; the re-read on next
+      // mount still tells the truth.
+    });
+  };
+
+  return { available: state.available, enabled: state.enabled, setEnabled };
 }
 
 /**

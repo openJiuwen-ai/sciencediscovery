@@ -34,6 +34,12 @@
  * runs with the user's own file, network and environment access — so the
  * backend is handed down *only* when the deployment opted in, and pre-flight
  * still requires the user's per-run confirmation before it accepts a goal.
+ *
+ * macOS carries the same opt-in behind the same two doors (installation-level
+ * switch + per-run confirmation), so an installation that turned it on runs
+ * candidates with `direct` too — while every other macOS install keeps the
+ * unchanged contract: Seatbelt, no escape hatch, and the shell's fail-closed
+ * gate for a probe that cannot pass.
  */
 
 import { access, constants } from "node:fs/promises";
@@ -47,8 +53,8 @@ import { apiLog } from "../logging.js";
  *  `SandboxCapability`; the wire form is snake_case. */
 export interface EvolveSandboxCapability {
   /** `direct` means the candidate runs unconfined, with the user's own access.
-   *  It only ever comes from an installation that opted in on Windows, and a
-   *  run still needs the user's confirmation in its goal. */
+   *  It only ever comes from an installation that opted in (Windows or macOS),
+   *  and a run still needs the user's confirmation in its goal. */
   backend: "bwrap" | "seatbelt" | "direct" | null;
   bwrapPath: string;
   disableUserns: boolean;
@@ -60,7 +66,7 @@ export interface EvolveSandboxCapability {
 export const SANDBOX_MISSING_HINT = [
   "A candidate program is model-written, unreviewed code and will not be executed without isolation.",
   "Linux: install bubblewrap (bwrap).",
-  "macOS: sandbox-exec ships with the system; nothing to install.",
+  "macOS: sandbox-exec ships with the system; nothing to install (an installation that opted into direct execution confirms per run instead).",
   "Windows: the desktop can run candidates without isolation, but only after you confirm it in the run dialog.",
 ].join(" ");
 
@@ -72,7 +78,9 @@ const WINDOWS_NO_SANDBOX = "Windows has no bubblewrap or Seatbelt, and this inst
  *
  * Split out from the probe so the Windows decision — opt in, or refuse — can be
  * exercised on a machine that is not Windows. Linux answers `undefined` and is
- * probed for a bwrap that can actually start a namespace.
+ * probed for a bwrap that can actually start a namespace. macOS answers Seatbelt
+ * without probing; an installation that opted into direct execution answers
+ * `direct` on the same per-run-confirmation contract as Windows.
  */
 export function sandboxForPlatform(
   platformName: NodeJS.Platform,
@@ -80,6 +88,15 @@ export function sandboxForPlatform(
 ): EvolveSandboxCapability | undefined {
   const bwrapPath = options.bwrapPath ?? "bwrap";
   if (platformName === "darwin") {
+    // [mac-direct] The opt-in mirrors the Windows contract one-for-one: the
+    // desktop sets `unisolated` only after the user turned the installation-
+    // level switch on, and pre-flight still requires the per-run confirmation
+    // (`--allow-direct`) before any goal is accepted. Without the opt-in the
+    // answer is unchanged: Seatbelt, always, and a probe failure still
+    // fail-closes at the shell gate.
+    if (options.unisolated === true) {
+      return { backend: "direct", bwrapPath, disableUserns: false, procMode: "proc" };
+    }
     return { backend: "seatbelt", bwrapPath, disableUserns: false, procMode: "proc" };
   }
   if (platformName !== "win32") return undefined;
@@ -99,7 +116,9 @@ export function sandboxForPlatform(
  * Probe once and describe what the sidecar should use.
  *
  * On macOS the answer is Seatbelt without probing: `sandbox-exec` ships with
- * the system, and there is nothing container-specific to discover.
+ * the system, and there is nothing container-specific to discover — unless the
+ * installation opted into direct execution, which answers `direct` on the
+ * same contract as Windows.
  *
  * On Windows there is nothing to probe either way. `unisolated` is the
  * installation's own opt-in (the desktop sets it); without it the backend stays

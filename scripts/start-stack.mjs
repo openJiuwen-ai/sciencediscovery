@@ -218,7 +218,10 @@ else if (isWindows) {
 
 // Sandbox provider resolution: Windows runs without one — the runner probes
 // its own capability in-process and degrades gracefully (direct execution,
-// approval fallback applies), so the startup chain never exits here.
+// approval fallback applies), so the startup chain never exits here. `none` is
+// the macOS direct-execution opt-in ([mac-direct]): the shell passes it only
+// for an installation that turned the switch on, and the evolve side still
+// enforces the per-run confirmation on top.
 let sandboxProvider = process.env.SCIENCE_AGENT_SANDBOX_PROVIDER ?? "auto";
 if (sandboxProvider === "auto") {
   if (isMac) sandboxProvider = "seatbelt";
@@ -227,8 +230,8 @@ if (sandboxProvider === "auto") {
     say("[platform] Windows host: no native sandbox provider; the runner will report its capability and degrade gracefully (direct execution, approval fallback applies).");
   } else sandboxProvider = "bubblewrap";
 }
-if (!["", "bubblewrap", "seatbelt"].includes(sandboxProvider)) {
-  fail("SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, or seatbelt.");
+if (!["", "bubblewrap", "seatbelt", "none"].includes(sandboxProvider)) {
+  fail("SCIENCE_AGENT_SANDBOX_PROVIDER must be auto, bubblewrap, seatbelt, or none.");
 }
 
 // Data-directory resolution + one-time migration of a legacy data/ tree

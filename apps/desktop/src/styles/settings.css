@@ -336,6 +336,84 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
 .settings-section .settings-row.is-stack .row-title { justify-content: stretch; }
 .settings-section .settings-row.is-stack .row-control > * { width: 100%; }
 
+/* [U5c] The sandbox status dot of 设置 › 连接 › 沙箱网络 — a single glyph in the
+   control slot; the hint line carries the sentence. ok = green, failed =
+   amber (the row is a notice, not an error — the session is running fine),
+   opted-out = muted (a user choice, not a fault). [F15] The width
+   exemption beats `.is-stack .row-control > * { width: 100% }` on
+   specificity, or the dot would stretch into a full-width divider. */
+.settings-section .settings-row.is-stack .row-control > .sandbox-status-dot { width: 10px; }
+/* [dot-beside] A status row: label + hint on the left, the dot on the right,
+   vertically centred — the way every status indicator reads. The base row is
+   a single-column grid (control wraps under its label), which stranded the
+   10px dot on its own line looking like a stray mark; `is-status` switches
+   the row to two columns (1fr + auto) with `align-items: center`, and the
+   control slot keeps its `justify-content: flex-end` so the dot hugs the
+   row's right edge. The retired `.is-stack` width exemption stays: it is
+   harmless under the new layout and removing it would churn the [F15]
+   test comment history for nothing. */
+.settings-section .settings-row.is-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 0;
+}
+.sandbox-status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+  align-self: center;
+  background: var(--muted, #808080);
+  cursor: help;
+}
+.sandbox-status-dot[data-kind="ok"] { background: var(--success, #1a8a5a); }
+.sandbox-status-dot[data-kind="failed"] { background: var(--warning, #8a5a00); }
+.sandbox-status-dot[data-kind="opted-out"] { background: var(--muted, #808080); }
+/* [F26] The adopted-stack hedge: neutral blue — distinct from all three
+   asserted states; the row claims nothing about the mode. */
+.sandbox-status-dot[data-kind="attached"] { background: var(--info, #3a6ea5); }
+
+/* [hint-split] The expandable blast-radius list under the direct-execution
+   switch. It is a sibling of the Row (not inside its hint) so the Row's
+   grid is untouched; it sits inside the same settings-section card, so it
+   inherits the card's horizontal rhythm. The summary reads as a plain text
+   link, matching how the rest of settings does secondary affordances. The
+   hide label flips through the open state — no JS, no extra state. */
+.settings-section details.direct-execution-details { margin: -2px 0 14px; }
+.settings-section details.direct-execution-details > summary {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--info, #3a6ea5);
+  cursor: pointer;
+  user-select: none;
+  font-size: 12.5px;
+}
+.settings-section details.direct-execution-details > summary::marker { content: ""; }
+.settings-section details.direct-execution-details > summary::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 4px;
+  transition: transform 0.15s ease;
+}
+.settings-section details.direct-execution-details[open] > summary::before { transform: rotate(90deg); }
+.settings-section details.direct-execution-details[open] > summary:hover { text-decoration: underline; }
+/* The two labels swap purely through the open state — no JS, no React state.
+   Collapsed: "show"; open: "hide". */
+.settings-section details.direct-execution-details:not([open]) > summary .direct-execution-details-hide { display: none; }
+.settings-section details.direct-execution-details[open] > summary .direct-execution-details-show { display: none; }
+.settings-section details.direct-execution-details > ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary, #5a5a5a);
+  line-height: 1.55;
+  border-top: 0.5px solid var(--border, rgba(0, 0, 0, 0.15));
+  padding-top: 6px;
+}
+.settings-section details.direct-execution-details > ul > li { margin-top: 3px; font-size: 12.5px; }
+
 /* Inside a form the controls stack under their labels and fill the card,
    because a form row is read top to bottom rather than scanned. */
 .settings-card.is-form .settings-row .row-control { justify-content: stretch; }

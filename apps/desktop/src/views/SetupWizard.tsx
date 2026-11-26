@@ -56,12 +56,6 @@ interface SelfCheckResult {
   ok?: boolean;
   runner?: boolean;
   runnerChecked?: boolean;
-  /** B2-2: the shell's Seatbelt verdict. "failed" gates entry fail-closed;
-   *  "unknown" (no bridge / plain browser) and "not-applicable" (Windows)
-   *  never gate and show as "–". */
-  seatbelt?: "ok" | "failed" | "not-applicable" | "unknown";
-  seatbeltReason?: string;
-  seatbeltDiagnostics?: string[];
 }
 interface ShellWizardBridge {
   backendStatus?: () => Promise<BackendStatus>;
@@ -148,25 +142,17 @@ interface BootView {
   api: ItemState;
   runner: ItemState;
   model: ItemState;
-  /** Seatbelt row (B2-2): ok / pending on darwin, "skip" (–) on Windows and
-   *  bridge-less browsers. A "fail" here is terminal — fail-closed. */
-  seatbelt: ItemState;
   waited: number;
   message?: string;
   /** True only when the browser health probe saw no `runner` field (public
    *  liveness body). Other skip reasons keep the neutral "not checked" tip. */
   runnerNeedsToken?: boolean;
-  /** Terminal Seatbelt failure payload: the shell's reason + diagnostics
-   *  (rendered as the fail-closed error page instead of the generic message). */
-  seatbeltReason?: string;
-  seatbeltDiagnostics?: string[];
 }
 const INITIAL_BOOT: BootView = {
   phase: "starting",
   api: "pending",
   runner: "pending",
   model: "pending",
-  seatbelt: "pending",
   waited: 0,
 };
 /** Same budgets as the shell wizard: poll the service every 2 s while it
@@ -184,23 +170,18 @@ interface ProbeResult {
    *  a token is required rather than the neutral "not checked". */
   runnerNeedsToken?: boolean;
   model: boolean;
-  /** Seatbelt: "ok" ✓ on a capable macOS; "failed" ✗ fail-closed;
-   *  "unknown"/"not-applicable" shown as "–" and never gating. */
-  seatbelt: "ok" | "failed" | "not-applicable" | "unknown";
-  seatbeltReason?: string;
-  seatbeltDiagnostics?: string[];
   ok: boolean;
 }
-const PENDING_PROBE: ProbeResult = { api: false, runner: null, model: false, seatbelt: "unknown", ok: false };
+const PENDING_PROBE: ProbeResult = { api: false, runner: null, model: false, ok: false };
 
 /**
- * The self-check list the boot step renders, Seatbelt first (B2-2: the
- * sandbox gate precedes API/runner/model — a fail-closed item leads the
- * list it can terminate). Exported so the test pins the RENDER source,
- * not the TEXT registry's key order (review: those are different things,
- * and only the render order is user-visible).
+ * The self-check list the boot step renders (api / runner / model). [U5c] The
+ * Seatbelt row is retired with the gate: sandbox health is not the wizard's
+ * business anymore — 设置 › 连接 › 沙箱网络's status row is the one surface (owner
+ * decision 2026-11-23: 初始化不拦截不提示，沙箱监测只在设置). Exported so
+ * the test pins the RENDER source, not the TEXT registry's key order.
  */
-export const BOOT_CHECK_ITEMS = ["seatbelt", "api", "runner", "model"] as const;
+export const BOOT_CHECK_ITEMS = ["api", "runner", "model"] as const;
 
 function dotClass(state: ItemState): string {
   return state === "pending" ? "is-pending" : state === "ok" ? "is-ok" : state === "fail" ? "is-fail" : "";
@@ -217,13 +198,14 @@ function dotGlyph(state: ItemState): string {
  * explaining, and today only the Runner reaches it — the browser path reads the
  * public health body, which carries liveness but no Runner detail.
  */
-export function selfCheckTip(key: "api" | "runner" | "model" | "seatbelt", state: ItemState, runnerNeedsToken: boolean): string | undefined {
+export function selfCheckTip(key: "api" | "runner" | "model", state: ItemState, runnerNeedsToken: boolean): string | undefined {
   if (state !== "skip") return undefined;
-  // Every key has its own skip story (review: the signature promises a
-  // seatbelt tip — give it one instead of falling through silently):
-  // runner → token/neutral, seatbelt → macOS-only, api/model → neutral.
+  // A skipped row has two different stories: the component was not checked
+  // at all, or the caller is not allowed to read its detail. Only the second
+  // is worth explaining, and today only the Runner reaches it — the browser
+  // path reads the public health body, which carries liveness but no Runner
+  // detail.
   if (key === "runner") return runnerNeedsToken ? TEXT.wizard.boot.runnerNeedsToken : TEXT.wizard.boot.notChecked;
-  if (key === "seatbelt") return TEXT.wizard.boot.seatbeltNotApplicable;
   return TEXT.wizard.boot.notChecked;
 }
 
@@ -375,9 +357,6 @@ export function SetupWizard({
             api: result?.api === true,
             runner: result?.runnerChecked ? result.runner === true : null,
             model: result?.modelConfigured === true,
-            seatbelt: result?.seatbelt ?? "unknown",
-            ...(result?.seatbeltReason ? { seatbeltReason: result.seatbeltReason } : {}),
-            ...(result?.seatbeltDiagnostics?.length ? { seatbeltDiagnostics: result.seatbeltDiagnostics } : {}),
             ok: result?.ok === true,
           };
         } catch {
@@ -398,7 +377,6 @@ export function SetupWizard({
           runner: runnerMissing ? null : health.runner?.execution?.ready === true,
           runnerNeedsToken: runnerMissing,
           model: Boolean(settings?.effective?.modelId),
-          seatbelt: "unknown",
           ok: true,
         };
       } catch {
@@ -412,24 +390,10 @@ export function SetupWizard({
       const iterate = async () => {
         const result = await probe();
         if (cancelled) return;
-        // Seatbelt failure is TERMINAL (fail-closed, upstream red line): no
-        // polling budget, no retry-until-timeout — the user is not getting
-        // in until the OS itself changes. Render the error page immediately.
-        if (result.seatbelt === "failed") {
-          setBoot((previous) => ({
-            ...previous,
-            phase: "failed",
-            kind: "check",
-            api: result.api ? "ok" : "pending",
-            runner: result.runner === null ? "skip" : result.runner ? "ok" : "pending",
-            model: result.model ? "ok" : "skip",
-            seatbelt: "fail",
-            message: TEXT.wizard.boot.seatbeltFailedTitle,
-            ...(result.seatbeltReason ? { seatbeltReason: result.seatbeltReason } : {}),
-            ...(result.seatbeltDiagnostics?.length ? { seatbeltDiagnostics: result.seatbeltDiagnostics } : {}),
-          }));
-          return;
-        }
+        // [U5c] The self-check is the backend stack alone (api/runner/model):
+        // the Seatbelt row is retired — sandbox health lives in 设置 › 连接 › 沙箱网络's
+        // status row (owner decision 2026-11-23), so this list no longer
+        // renders it and no failure here can terminal the boot.
         if (result.ok) {
           setBoot((previous) => ({
             ...previous,
@@ -443,7 +407,6 @@ export function SetupWizard({
             runner: result.runner === null ? "skip" : result.runner ? "ok" : "fail",
             runnerNeedsToken: Boolean(result.runnerNeedsToken),
             model: result.model ? "ok" : "skip",
-            seatbelt: result.seatbelt === "ok" ? "ok" : "skip",
           }));
           return;
         }
@@ -457,7 +420,6 @@ export function SetupWizard({
             runner: result.runner === null ? "skip" : result.runner ? "ok" : "fail",
             runnerNeedsToken: Boolean(result.runnerNeedsToken),
             model: result.model ? "ok" : "skip",
-            seatbelt: result.seatbelt === "ok" ? "ok" : "skip",
           }));
           return;
         }
@@ -468,7 +430,6 @@ export function SetupWizard({
           runner: result.runner === null ? "skip" : result.runner ? "ok" : "pending",
           runnerNeedsToken: Boolean(result.runnerNeedsToken),
           model: result.model ? "ok" : "skip",
-          seatbelt: result.seatbelt === "ok" ? "ok" : "skip",
         });
         timer = setTimeout(() => void iterate(), SELF_CHECK_POLL_MS);
       };
@@ -674,28 +635,13 @@ export function SetupWizard({
                     </div>
                   ) : null}
 
-                  {/* Fail-closed Seatbelt page (B2-2): the verdict's reason
-                      and the diagnostic commands the shell sent along, plus
-                      a re-check for the "MDM restriction just lifted" case.
-                      The forward button is absent BY DESIGN — a failed
-                      probe never passes go (upstream red line). */}
-                  {boot.phase === "failed" && boot.seatbelt === "fail" ? (
-                    <div className="wizard-seatbelt-fail" role="alert">
-                      {boot.seatbeltReason ? (
-                        <div className="test-result is-fail">{boot.seatbeltReason}</div>
-                      ) : null}
-                      {boot.seatbeltDiagnostics?.length ? (
-                        <ul className="wizard-seatbelt-diagnostics">
-                          {boot.seatbeltDiagnostics.map((line) => (
-                            <li key={line}>
-                              <code>{line}</code>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      <p className="wizard-hint">{TEXT.wizard.boot.seatbeltRetryHint}</p>
-                    </div>
-                  ) : null}
+                  {/* [U5c] The Seatbelt fail-closed block (B2-2) and the
+                      U5 unsandboxed-boot banner are both retired: the self-
+                      check list no longer carries the sandbox at all, and
+                      设置 › 连接 › 沙箱网络's status row is the one surface for sandbox
+                      health (owner decision 2026-11-23: 初始化不拦截不提示，
+                      沙箱监测只在设置). The per-run confirmation door still
+                      guards every direct run. */}
 
                   <div className="form-actions">
                     {boot.phase === "failed" ? (

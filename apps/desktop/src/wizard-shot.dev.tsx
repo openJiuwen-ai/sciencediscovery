@@ -1,13 +1,14 @@
 // DEV-ONLY harness (never shipped: tree-shaken from production builds via the
 // `if (import.meta.env.DEV)` guard in main.tsx). Purpose: render the
-// SetupWizard boot self-check list with a faked shell bridge so the B2-2
-// Seatbelt row (ok / pending) and the fail-closed error page can be
-// captured for the upstream PR review (yuanzhou75's ask).
+// SetupWizard boot self-check list with a faked shell bridge so the
+// [U5c] post-cleanup states can be captured for the upstream PR review.
+// The Seatbelt row/banner scenarios are retired with the rows themselves
+// (owner decision 2026-11-23: 初始化不拦截不提示，沙箱监测只在设置 — the
+// wizard's list is api/runner/model alone).
 //
 // Query params:
-//   ?scenario=ok      — self-check all green (Seatbelt row shows ✓)
-//   ?scenario=pending — mid-check (Seatbelt row shows …)
-//   ?scenario=fail    — fail-closed error page (reason + diagnostics)
+//   ?scenario=ok      — self-check all green
+//   ?scenario=pending — mid-check (every row still pending)
 //   &lang=zh|en       — text locale (default zh)
 
 import { createRoot } from "react-dom/client";
@@ -18,35 +19,11 @@ const params = new URLSearchParams(window.location.search);
 const scenario = params.get("scenario") ?? "ok";
 const lang = params.get("lang") ?? "zh";
 
-const SEATBELT_REASON = {
-  zh: "macOS 沙箱（Seatbelt）自检未通过：sandbox-exec 编译配置被系统拒绝（退出码 1）。这通常来自 MDM 管控或系统安全策略限制。",
-  en: "macOS sandbox (Seatbelt) self-check failed: sandbox-exec rejected the probe profile (exit code 1). This usually comes from MDM control or a system security policy.",
-};
-const DIAGNOSTICS = [
-  "/usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true; echo $?",
-  "sudo profiles list | grep -i sandbox",
-];
-
 function fakeBridge() {
   const base = {
     getState: async () => ({ dataDir: "/Users/demo/Library/Application Support/ScienceDiscovery", defaultDataDir: "" }),
     openLogs: async () => "",
   };
-  if (scenario === "fail") {
-    return {
-      ...base,
-      selfCheck: async () => ({
-        api: true,
-        runner: true,
-        runnerChecked: true,
-        model: true,
-        seatbelt: "failed" as const,
-        seatbeltReason: SEATBELT_REASON[lang as "zh" | "en"] ?? SEATBELT_REASON.zh,
-        seatbeltDiagnostics: DIAGNOSTICS,
-        ok: false,
-      }),
-    };
-  }
   if (scenario === "pending") {
     // Resolve once with a not-ready result (so the list renders in the
     // "checking" phase with every row still pending), then never again.
@@ -61,7 +38,6 @@ function fakeBridge() {
           api: false,
           runner: null,
           model: false,
-          seatbelt: "unknown" as const,
           ok: false,
         });
       },
@@ -75,7 +51,6 @@ function fakeBridge() {
       runner: true,
       runnerChecked: true,
       model: true,
-      seatbelt: "ok" as const,
       ok: true,
     }),
   };
