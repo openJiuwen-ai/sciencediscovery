@@ -5572,6 +5572,13 @@ body.is-resizing {
 /* No horizontal margin: the row shares the left edge of 新建会话 and the Project
    rows, which keep their own padding. */
 .side-search-entry { margin: 0 0 6px; }
+/* 搜索 is the third row of that group, not a section of its own: it sits the
+   same 2px under 导入会话 that 导入会话 sits under 新建会话, instead of the
+   column's 18px rhythm. The opened field takes the same distance because it
+   replaces the row in place. Both numbers come from the rules that set them:
+   `gap: 2px` on `.side-new-split` and `gap: 18px` on `.sidebar`. */
+.sidebar > .side-new-split + .side-search-entry,
+.sidebar > .side-new-split + .side-search { margin-top: calc(2px - 18px); }
 .side-search-glyph { flex: 0 0 auto; color: var(--muted); }
 .side-search-control {
   display: inline-flex;
