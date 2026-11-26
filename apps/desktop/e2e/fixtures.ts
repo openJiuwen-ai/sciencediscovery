@@ -181,6 +181,20 @@ export interface MockOptions {
    *  the same adapter through `PUT /api/jiuwenswarm/skills-batch`, where the
    *  refusal is one `ok: false` result instead of an HTTP error. */
   skillBatchFailures?: string[];
+  /** What `POST /api/skills/import-git/inspect` answers. The Skill import
+   *  dialog only reads it, so a spec can hand it any repository shape. */
+  gitInspection?: JsonRecord;
+  /** The same, per repository URL, for a journey that inspects two
+   *  repositories. A URL with no entry falls back to `gitInspection`. */
+  gitInspections?: Record<string, JsonRecord>;
+  /** The background job `POST /api/skills/import-git/jobs` returns, and what
+   *  `GET /api/skills/import-git/jobs/:id` answers from then on. The Skill
+   *  store polls the second route; a job that ends here is what makes the
+   *  pane report the import and switch its packages on. */
+  gitImportJob?: JsonRecord;
+  /** The same, per repository URL, so a second import can create a different
+   *  set of packages. A URL with no entry falls back to `gitImportJob`. */
+  gitImportJobs?: Record<string, JsonRecord>;
   specialists?: JsonRecord[];
   /** The Reviewer Specialist. `reviews` are the saved verdicts and `tasks` the
    *  durable audit queue; the settings are the server's system-wide switch and
@@ -278,6 +292,8 @@ export interface MockState {
   sandboxNetwork: { allowedDomains: string[]; mode: string };
   sessions: SessionRecord[];
   skills: JsonRecord[];
+  /** The background Git import the Skill pane polls, once one was started. */
+  gitJob: JsonRecord | undefined;
   /** The Reviewer Specialist's mutable half: both settings layers, the saved
    *  reviews, and the audit queue a manual request appends to. */
   reviewer: {
@@ -295,6 +311,16 @@ export interface MockState {
 
 export interface Mock {
   calls: RecordedCall[];
+  /** Refuse the next matching request, leaving the ones already answered alone.
+   *  For a journey whose *second* press is the interesting one: the first
+   *  write succeeds, the retry is refused, and the recovery is what the spec
+   *  looks at. */
+  failNext: (
+    method: string,
+    path: string | RegExp,
+    status?: number,
+    message?: string,
+  ) => void;
   state: MockState;
   /** Let the route `hold` is holding answer, so the spec can finish with the
    *  page's own read-back instead of leaving a request hanging. */
@@ -407,6 +433,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     sandboxNetwork: structuredClone(options.sandboxNetwork ?? { allowedDomains: [], mode: "open" }),
     sessions: [...(options.sessions ?? [])],
     skills: [...(options.skills ?? [])],
+    gitJob: undefined as JsonRecord | undefined,
     jiuwenSwarmSkills: structuredClone(options.jiuwenSwarmSkills ?? []),
     specialists: [...(options.specialists ?? [])],
     uploadRejects: [...(options.uploadRejects ?? [])],
@@ -430,6 +457,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
   // `release`. Everything else answers immediately.
   let released = false;
   let failOnceUsed = false;
+  let failOnce = options.failOnce;
   let resolveHeld: () => void = () => {};
   const held = new Promise<void>((resolve) => {
     resolveHeld = resolve;
@@ -470,14 +498,14 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       }
 
       if (
-        options.failOnce !== undefined
+        failOnce !== undefined
         && !failOnceUsed
-        && options.failOnce.method === method
-        && (typeof options.failOnce.path === "string" ? options.failOnce.path === path : options.failOnce.path.test(path))
+        && failOnce.method === method
+        && (typeof failOnce.path === "string" ? failOnce.path === path : failOnce.path.test(path))
       ) {
         failOnceUsed = true;
-        return json(route, options.failOnce.status ?? 500, {
-          error: options.failOnce.message ?? "the server refused this request once",
+        return json(route, failOnce.status ?? 500, {
+          error: failOnce.message ?? "the server refused this request once",
         });
       }
 
@@ -647,6 +675,95 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
       if (path === "/api/skills" && method === "GET") {
         return json(route, 200, state.skills);
+      }
+
+      // One package arrives from the upload dialog. The multipart body carries
+      // the file name, and the route answers the installed package the dialog
+      // then hands to the pane.
+      if (path === "/api/skills/import" && method === "POST") {
+        const filename = /filename="([^"]+)"/u.exec(body ?? "")?.[1] ?? "SKILL.md";
+        const base = filename.replace(/\.[^.]+$/u, "").toLowerCase().replace(/[^a-z0-9-]+/gu, "-") || "skill";
+        const imported = {
+          currentRevision: 1,
+          description: `Imported from ${filename}`,
+          diagnostics: [],
+          frontmatter: {},
+          hash: `hash-${base}`,
+          id: base,
+          instructions: `# ${base}`,
+          name: base,
+          readOnly: false,
+          resourceSummary: { bytes: 0, files: 1, kinds: { asset: 0, other: 0, reference: 0, script: 0 } },
+          resources: [],
+          source: "managed",
+          version: "revision:1",
+        };
+        state.skills.push(imported);
+        return json(route, 201, imported);
+      }
+
+      if (path === "/api/skills/import-git/inspect" && method === "POST") {
+        const input = JSON.parse(body ?? "{}") as { repositoryUrl?: string };
+        const known = input.repositoryUrl === undefined ? undefined : options.gitInspections?.[input.repositoryUrl];
+        return json(route, 200, known
+          ?? options.gitInspection
+          ?? { candidates: [], commit: "0".repeat(40), repositoryUrl: "", total: 0 });
+      }
+
+      if (path === "/api/skills/import-git/jobs" && method === "POST") {
+        const request = JSON.parse(body ?? "{}") as JsonRecord;
+        const forRepository = typeof request.repositoryUrl === "string"
+          ? options.gitImportJobs?.[request.repositoryUrl]
+          : undefined;
+        const job = forRepository ?? options.gitImportJob ?? {
+          commit: request.commit,
+          done: 1,
+          failures: [],
+          id: "job-1",
+          imported: [{ created: true, id: "imported-skill" }],
+          startedAt: CREATED_AT,
+          status: "running",
+          total: 1,
+        };
+        state.gitJob = structuredClone(job);
+        // A job starts running and is read back until it ends: the pane's
+        // banner, its progress and the moment it switches the new packages on
+        // all follow from the poll, not from this answer.
+        return json(route, 202, {
+          ...state.gitJob,
+          done: 0,
+          failures: [],
+          imported: [],
+          status: "running",
+        });
+      }
+
+      const gitJob = /^\/api\/skills\/import-git\/jobs\/([^/]+)$/u.exec(path);
+      if (gitJob && method === "GET") {
+        if (state.gitJob === undefined) return json(route, 404, { error: "job not found" });
+        // The packages a finished job created are installed packages from then
+        // on: a pane that read the list after the import must not be told the
+        // repository's own packages do not exist.
+        if (state.gitJob.status !== "running" && state.gitJob.status !== "queued") {
+          const created = (state.gitJob.imported ?? []) as Array<{ created?: boolean; id?: string }>;
+          for (const entry of created) {
+            if (entry.created !== true || entry.id === undefined) continue;
+            if (state.skills.some((skill) => skill.id === entry.id)) continue;
+            state.skills.push({
+              description: `Imported from ${entry.id}`,
+              diagnostics: [],
+              frontmatter: {},
+              id: entry.id,
+              instructions: `# ${entry.id}`,
+              name: entry.id,
+              readOnly: false,
+              resources: [],
+              source: "managed",
+              version: "revision:1",
+            });
+          }
+        }
+        return json(route, 200, state.gitJob);
       }
 
       // The expanded card reads the package's own SKILL.md. The list record
@@ -1454,6 +1571,10 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
 
   return {
     calls,
+    failNext: (method, path, status = 500, message) => {
+      failOnce = { message, method, path, status };
+      failOnceUsed = false;
+    },
     release: () => {
       released = true;
       resolveHeld();

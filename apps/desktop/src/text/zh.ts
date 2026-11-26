@@ -1262,6 +1262,9 @@ export const ZH = {
         progress: (done: number, total: number) => `正在导入(${done}/${total})`,
         importing: "导入中",
         invalidUrl: "URL格式不正确，请重新输入",
+        /** The rows on screen were read from a source the fields no longer
+         *  name; importing them would install another repository. */
+        sourceChanged: "仓库地址、Ref 或子目录在检查后已改变。请重新检查后再导入。",
       },
       importBusy: "正在导入…",
       backgroundImportDone: (count: number) => `已导入 ${count} 个技能。`,
@@ -1278,6 +1281,14 @@ export const ZH = {
       toastProgress: (done: number, total: number) => `正在导入(${done}/${total})`,
       toastRetry: "点击重试",
       toastClose: "关闭提示",
+      /** A package that is installed but whose switch did not happen. The
+       *  separator is the dictionary's own: one list, one language. */
+      activationFailed: (names: readonly string[]) => `已安装，但未启用：${names.join("、")}。`,
+      /** No switch was tried because JiuwenSwarm's own skill state could not
+       *  be read; the package is installed either way. */
+      activationUnknown: "已安装，但没能读取 JiuwenSwarm 的技能状态，因此没有尝试启用。",
+      activationRetry: "启用",
+      activationRetrying: "正在启用…",
       git: {
         title: "从 GitHub 导入",
         description: "先检查仓库里有哪些技能包，再选择要导入的条目；导入会固定在你看到的那次提交上。",

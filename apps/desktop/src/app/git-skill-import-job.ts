@@ -25,13 +25,34 @@ const FINISHED_NOTICE_MS = 10_000;
 
 type Listener = (job: GitSkillImportJob | undefined) => void;
 
+/** One package whose switch the backend refused, with what it said. */
+export interface SkillActivationFailure {
+  id: string;
+  message: string;
+}
+
+/** The outcome of switching on the packages one import job created.
+ *
+ * The job's own `failures` only cover catalog installation; activation is a
+ * second store and reports here. The two failures are kept apart because they
+ * need different recoveries: a refused switch can be retried, while a state
+ * read that never answered says nothing yet about any package. */
+export interface SkillActivationReport {
+  /** One entry per package whose switch was refused. */
+  failures: SkillActivationFailure[];
+  /** Why JiuwenSwarm's own skill state could not be read; no switch was tried. */
+  stateError?: string;
+}
+
 let current: GitSkillImportJob | undefined;
 let client: ApiClient | undefined;
 let poller: ReturnType<typeof setInterval> | undefined;
 let clearTimer: ReturnType<typeof setTimeout> | undefined;
 let consecutiveFailures = 0;
-/** One enable run per job: the pane and the store may both await it. */
-const enablePromises = new Map<string, Promise<void>>();
+/** One enable run per job: the pane and the store may both await it. A run that
+ *  fixed everything is remembered, so the second caller does not repeat the
+ *  PUTs; a run that failed is forgotten, because retrying is the recovery. */
+const enablePromises = new Map<string, Promise<SkillActivationReport>>();
 const listeners = new Set<Listener>();
 
 function emit(): void {
@@ -134,30 +155,52 @@ export async function startGitSkillImportInBackground(
   return started;
 }
 
+/** What the backend said, when it said anything at all. */
+function reasonOf(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
 /** Switch on the packages this job created, when JiuwenSwarm is the agent
  *  backend. The job store owns this rather than the settings pane: the pane
- *  may be closed by the time the import finishes. */
-export function enableCreatedSkills(client: ApiClient, job: GitSkillImportJob): Promise<void> {
+ *  may be closed by the time the import finishes.
+ *
+ * Every failure is reported instead of swallowed: a package that is installed
+ * but never switched on is invisible to a session, so the caller has to be
+ * able to say so and to retry without importing anything again. */
+export function enableCreatedSkills(client: ApiClient, job: GitSkillImportJob): Promise<SkillActivationReport> {
   const existing = enablePromises.get(job.id);
   if (existing) return existing;
-  const promise = (async () => {
+  const promise = (async (): Promise<SkillActivationReport> => {
     const created = job.imported.filter((entry) => entry.created);
-    if (created.length === 0) return;
+    if (created.length === 0) return { failures: [] };
+    let backend: string | undefined;
     try {
-      const state = await getJiuwenSwarmSkills(client);
-      if (state.backend !== "jiuwenswarm") return;
-    } catch {
-      return;
+      backend = (await getJiuwenSwarmSkills(client)).backend;
+    } catch (reason) {
+      // Not the same as "this backend has no switches": the caller can retry a
+      // read that did not answer, but retrying would be pointless if we had
+      // pretended the state was native.
+      return { failures: [], stateError: reasonOf(reason) };
     }
+    if (backend !== "jiuwenswarm") return { failures: [] };
+    const failures: SkillActivationFailure[] = [];
     for (const entry of created) {
       try {
         await setJiuwenSwarmSkillEnabledById(client, entry.id, true);
-      } catch {
-        // The row's switch shows whatever the server actually stored.
+      } catch (reason) {
+        // The row's switch shows whatever the server actually stored; this run
+        // reports that it did not get on, so the pane can offer the retry.
+        failures.push({ id: entry.id, message: reasonOf(reason) });
       }
     }
+    return { failures };
   })();
   enablePromises.set(job.id, promise);
+  void promise.then((report) => {
+    if (report.failures.length > 0 || report.stateError !== undefined) {
+      if (enablePromises.get(job.id) === promise) enablePromises.delete(job.id);
+    }
+  });
   return promise;
 }
 

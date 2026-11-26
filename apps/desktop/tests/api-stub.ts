@@ -49,6 +49,24 @@ export class StubClient {
     return this;
   }
 
+  /**
+   * Queue one answer the test settles itself, in call order.
+   *
+   * A view that must be observed while a request is still in flight (a page
+   * arriving after the form changed, a catalog read the import overtakes)
+   * needs the request to stay pending until the test says otherwise.
+   */
+  defer(): { fail: (reason: unknown) => void; resolve: (value: unknown) => void } {
+    let resolve!: (value: unknown) => void;
+    let reject!: (reason: unknown) => void;
+    const answer = new Promise<unknown>((done, failed) => {
+      resolve = done;
+      reject = failed;
+    });
+    this.responses.push(answer);
+    return { fail: reject, resolve };
+  }
+
   readonly request = <T>(path: string, init: RequestInit = {}): Promise<T> => {
     this.calls.push({ init, path });
     const next = this.responses.shift();

@@ -103,12 +103,52 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [failure, setFailure] = useState<string>();
+  /** Why the rows that were on screen are gone. A neutral line rather than an
+   *  error: editing the repository is a normal thing to do, and the only thing
+   *  wrong with it is that the rows no longer describe the fields. */
+  const [note, setNote] = useState<string>();
   const inspectionRequest = useRef<AbortController | undefined>(undefined);
+  const paginationRequest = useRef<AbortController | undefined>(undefined);
+  /** Bumped by every source edit, every new inspection and a cancelled one.
+   *  A response that started under an older value belongs to results the user
+   *  has already replaced: it must neither paint, nor re-tick, nor be
+   *  imported under the repository the fields now name. */
+  const generation = useRef(0);
+  /** The source the results on screen were read from. Import may only submit
+   *  what the user is looking at. */
+  const inspectionSource = useRef<{ ref: string; subdirectory: string; url: string } | undefined>(undefined);
+  // The source the fields hold right now, read by the import guard below.
+  const source = { ref: ref.trim(), subdirectory: subdirectory.trim(), url: url.trim() };
 
-  const reset = () => {
+  /** Take ownership of the results away from anything still in flight. */
+  const invalidate = () => {
+    generation.current += 1;
+    paginationRequest.current?.abort();
+    paginationRequest.current = undefined;
+  };
+
+  /** Drop the rows and everything that belonged to them. `explain` is what the
+   *  reader is told about the rows that just disappeared. */
+  const reset = (explain?: string) => {
+    invalidate();
     setInspection(undefined);
     setSelected(new Set());
     setFailure(undefined);
+    setNote(explain);
+  };
+
+  /** A field edit is a new source. The rows read from the old one cannot
+   *  survive it, and saying why is the difference between a result the reader
+   *  moved on from and one that vanished.
+   *
+   *  The decision reads the note as well as the rows: the first keystroke has
+   *  already dropped the inspection by the time this runs, so keying off the
+   *  rows alone would explain the loss once and then go quiet while the reader
+   *  is still typing the new address. */
+  const editSource = (apply: () => void) => {
+    const hadRows = inspection !== undefined || note !== undefined;
+    apply();
+    reset(hadRows ? TEXT.settings.skills.gitDialog.sourceChanged : undefined);
   };
 
   const inspect = async () => {
@@ -117,18 +157,26 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
       setFailure(TEXT.settings.skills.gitDialog.invalidUrl);
       return;
     }
+    const requested = { ...source };
+    invalidate();
+    const token = generation.current;
     const controller = new AbortController();
     inspectionRequest.current = controller;
     setInspecting(true);
     setInspection(undefined);
     setSelected(new Set());
     setFailure(undefined);
+    setNote(undefined);
     try {
       const found = await inspectGitSkillRepository(client, {
-        repositoryUrl: url.trim(),
-        ...(ref.trim() ? { ref: ref.trim() } : {}),
-        ...(subdirectory.trim() ? { subdirectory: subdirectory.trim() } : {}),
+        repositoryUrl: requested.url,
+        ...(requested.ref ? { ref: requested.ref } : {}),
+        ...(requested.subdirectory ? { subdirectory: requested.subdirectory } : {}),
       }, controller.signal);
+      // A source edit or a cancel while the clone ran owns the dialog now; this
+      // answer is about a repository the fields no longer name.
+      if (generation.current !== token) return;
+      inspectionSource.current = requested;
       setInspection(found);
       // Everything that can be written is ticked: the usual import is "all of
       // it", and the user unticks rather than ticks.
@@ -136,17 +184,21 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
         .filter((candidate) => candidate.status === "new" || candidate.status === "update")
         .map((candidate) => candidate.subdirectory)));
     } catch (reason) {
+      if (generation.current !== token) return;
       // A cancelled inspection is not a failure: the user said stop.
       if (!isAbortError(reason)) setFailure(messageOf(reason));
     } finally {
-      if (inspectionRequest.current === controller) inspectionRequest.current = undefined;
-      setInspecting(false);
+      if (inspectionRequest.current === controller) {
+        inspectionRequest.current = undefined;
+        setInspecting(false);
+      }
     }
   };
 
   /** Stop waiting for the clone. The server finishes its own work; what this
    *  ends is the dialog being unusable while it does. */
   const cancelInspect = () => {
+    invalidate();
     inspectionRequest.current?.abort();
   };
 
@@ -175,23 +227,34 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
    *  and new importable rows join the selection only when the user had kept
    *  everything selected: loading more must not re-tick what they unticked. */
   const loadMore = async () => {
-    if (!inspection?.nextCursor || loadingMore) return;
+    const reading = inspection;
+    if (!reading?.nextCursor || loadingMore) return;
+    const token = generation.current;
     const keepSelecting = selectable.length > 0 && selected.size === selectable.length;
+    const controller = new AbortController();
+    paginationRequest.current = controller;
     setLoadingMore(true);
     setFailure(undefined);
     try {
       const more = await inspectGitSkillRepository(client, {
-        commit: inspection.commit,
-        cursor: inspection.nextCursor,
-        ...(inspection.ref ? { ref: inspection.ref } : {}),
+        commit: reading.commit,
+        cursor: reading.nextCursor,
+        ...(reading.ref ? { ref: reading.ref } : {}),
         // Re-send what the user typed: a /tree/<ref>/<subdir> URL carries a
         // derived subdirectory that the inspection response does not echo.
-        repositoryUrl: url.trim(),
-        ...(subdirectory.trim() ? { subdirectory: subdirectory.trim() } : {}),
-      });
-      setInspection((current) => current
+        repositoryUrl: source.url,
+        ...(source.subdirectory ? { subdirectory: source.subdirectory } : {}),
+      }, controller.signal);
+      // The fields or the inspection moved on while this page was on the way.
+      // Its rows belong to a repository or commit the dialog no longer shows, so
+      // they must not come back as selectable rows under the new source.
+      if (generation.current !== token) return;
+      if (more.repositoryUrl !== reading.repositoryUrl || more.commit !== reading.commit) return;
+      setInspection((current) => current !== undefined
+        && current.commit === more.commit
+        && current.repositoryUrl === more.repositoryUrl
         ? { ...more, candidates: [...current.candidates, ...more.candidates] }
-        : more);
+        : current);
       if (keepSelecting) {
         setSelected((current) => {
           const grown = new Set(current);
@@ -204,14 +267,26 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
         });
       }
     } catch (reason) {
-      setFailure(messageOf(reason));
+      if (generation.current === token && !isAbortError(reason)) setFailure(messageOf(reason));
     } finally {
+      if (paginationRequest.current === controller) paginationRequest.current = undefined;
       setLoadingMore(false);
     }
   };
 
   const importFromGit = async () => {
     if (!inspection || chosen.length === 0) return;
+    const inspected = inspectionSource.current;
+    if (inspected === undefined
+      || inspected.url !== source.url
+      || inspected.ref !== source.ref
+      || inspected.subdirectory !== source.subdirectory) {
+      // The rows on screen were read from a source the fields no longer name;
+      // importing them would install another repository than the one shown.
+      reset();
+      setFailure(TEXT.settings.skills.gitDialog.sourceChanged);
+      return;
+    }
     setBusy(true);
     setFailure(undefined);
     try {
@@ -277,8 +352,7 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
                   className={`field-input${failure ? " is-error" : ""}`}
                   disabled={inspecting || busy}
                   onChange={(event) => {
-                    setUrl(event.target.value);
-                    reset();
+                    editSource(() => setUrl(event.target.value));
                   }}
                   placeholder={TEXT.settings.skills.git.urlPlaceholder}
                   spellCheck={false}
@@ -297,6 +371,7 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
           </div>
 
           {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
+          {note ? <small className="row-note skill-git-note" role="status">{note}</small> : null}
 
           <details className="skill-git-advanced">
             <summary>{TEXT.settings.skills.gitDialog.advanced}</summary>
@@ -308,8 +383,7 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
                   className="field-input"
                   disabled={inspecting || busy}
                   onChange={(event) => {
-                    setRef(event.target.value);
-                    reset();
+                    editSource(() => setRef(event.target.value));
                   }}
                   placeholder={TEXT.settings.skills.git.refPlaceholder}
                   spellCheck={false}
@@ -323,8 +397,7 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
                   className="field-input"
                   disabled={inspecting || busy}
                   onChange={(event) => {
-                    setSubdirectory(event.target.value);
-                    reset();
+                    editSource(() => setSubdirectory(event.target.value));
                   }}
                   placeholder={TEXT.settings.skills.git.subdirectoryPlaceholder}
                   spellCheck={false}

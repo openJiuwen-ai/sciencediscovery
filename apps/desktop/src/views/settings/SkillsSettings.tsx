@@ -40,7 +40,9 @@ import {
   enableCreatedSkills,
   startGitSkillImportInBackground,
   subscribeGitSkillImportJob,
+  type SkillActivationReport,
 } from "../../app/git-skill-import-job.js";
+import type { SkillActivationOutcome } from "../../app/skill-activation.js";
 import { saveSkillPackage } from "../../app/skill-export.js";
 import { skillMark } from "../../app/slash.js";
 import { useLoaded } from "../../app/use-loaded.js";
@@ -101,6 +103,58 @@ interface SkillRow {
   name: string;
   skillId?: string;
   target: JiuwenSwarmSkillSwitchTarget;
+}
+
+/** A finished import whose switches did not all get on, with whatever the
+ *  backend said.
+ *
+ * The job travels with the problem: a package that stayed off is a fact about
+ * what that import installed, so a later import that switches its own packages
+ * on cleanly says nothing about it — and must not be able to erase it.
+ */
+interface ActivationProblem {
+  job: GitSkillImportJob;
+  /** The packages whose switch was refused; empty when the state read itself
+   *  failed and no switch was tried. */
+  names: string[];
+  /** Set when JiuwenSwarm's skill state could not be read at all. */
+  stateUnknown?: boolean;
+  reason?: string;
+  /** Repeats only the switching of this job. It must not import anything again. */
+  retry: () => Promise<void>;
+}
+
+/** What a finished enable run leaves for the reader, or nothing when every
+ *  created package is on. */
+function activationProblemOf(
+  job: GitSkillImportJob,
+  report: SkillActivationReport,
+  retry: () => Promise<void>,
+): ActivationProblem | undefined {
+  if (report.stateError !== undefined) {
+    return { job, names: [], reason: report.stateError, retry, stateUnknown: true };
+  }
+  if (report.failures.length === 0) return undefined;
+  return {
+    job,
+    names: report.failures.map((failure) => failure.id),
+    // One line, and one copy per distinct reason: two packages refused by the
+    // same answer are one fact about the backend, and repeating it only makes
+    // the line longer. A newline would glue several refusals into a run-on
+    // sentence, because the notice renders the detail in a single element.
+    reason: [...new Set(report.failures.map((failure) => failure.message))].join("; "),
+    retry,
+  };
+}
+
+/** The line an activation outcome adds to a page that must report it. */
+function activationMessage(outcome: SkillActivationOutcome): string {
+  if (outcome.stateUnknown) {
+    return outcome.error === undefined
+      ? TEXT.settings.skills.activationUnknown
+      : `${TEXT.settings.skills.activationUnknown} ${outcome.error}`;
+  }
+  return outcome.error ?? TEXT.settings.skills.activationUnknown;
 }
 
 /** The key a row's optimistic intent is kept under. Ids and JiuwenSwarm names
@@ -254,6 +308,13 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   const [dismissedProgress, setDismissedProgress] = useState<string>();
   /** The last Git import request, so a failed result can be retried in place. */
   const [lastGitRequest, setLastGitRequest] = useState<StartGitSkillImportJobRequest>();
+  /** A switch that did not happen after its package was installed. It is news
+   *  about the installed packages, not about the import notice: dismissing the
+   *  job's toast must not take the failure and its recovery with it. */
+  const [activationProblem, setActivationProblem] = useState<ActivationProblem>();
+  /** The notice's own retry, in flight: the button says so and cannot be
+   *  pressed a second time, exactly as the upload dialog's does. */
+  const [activationRetrying, setActivationRetrying] = useState(false);
   const handledImportJob = useRef<string | undefined>(undefined);
 
   // An export's outcome is a passing confirmation, not a property of the row:
@@ -322,11 +383,26 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     // be closed when the import ends. When the pane is open, wait for that
     // same run before re-reading the switch list; otherwise the reload can
     // paint the new rows as off while the PUTs are still in flight.
-    void (async () => {
-      await enableCreatedSkills(client, backgroundImport);
-      loaded.reload();
-    })();
+    void enableJobActivation(backgroundImport);
   }, [backgroundImport, client, loaded]);
+
+  /**
+   * Switch on a finished job's new packages and report what did not get on.
+   *
+   * Pressing the notice's retry runs this again for the same job: a failed run
+   * is not cached by the store, so it really issues the state read and the
+   * switches a second time, and imports nothing.
+   */
+  const enableJobActivation = async (job: GitSkillImportJob): Promise<void> => {
+    const report = await enableCreatedSkills(client, job);
+    const problem = activationProblemOf(job, report, () => enableJobActivation(job));
+    // A run that fixed everything clears the problem it was about, and only
+    // that one: another job's packages are still off until their own retry or
+    // an explicit dismissal says so.
+    setActivationProblem((current) => problem
+      ?? (current?.job.id === job.id ? undefined : current));
+    loaded.reload();
+  };
 
   // A fresh server answer is the truth: an intent it already agrees with is
   // spent, and one it still disagrees with belongs to a write in flight (or to
@@ -494,19 +570,98 @@ export function SkillsSettings({ client, onConfirm }: Props) {
    * may have switched it off on purpose, and re-enabling it would undo that
    * while replacing its files, which is not what they asked for.
    */
-  const afterInstall = async (skill: SkillDetail) => {
+  const afterInstall = async (skill: SkillDetail): Promise<SkillActivationOutcome> => {
     setBusy(true);
     setFailure(undefined);
     try {
-      const page = loaded.value;
-      const wasInstalled = page?.skills.some((entry) => entry.id === skill.id) ?? false;
-      if (page?.switchesAvailable) {
-        if (!wasInstalled) await setJiuwenSwarmSkillEnabledById(client, skill.id, true);
-      } else if (!page?.native && !wasInstalled) {
-        setFailure(page?.switchError ?? TEXT.settings.saveFailed);
+      // The outcome is returned, never also written to the pane's own error
+      // line: the upload dialog shows the same sentence, and printing it in
+      // both places made a reader see one failure twice. Callers that have no
+      // dialog to show it (afterCreate) put it on the list themselves.
+      return await activateInstalledSkill(skill);
+    } finally {
+      setBusy(false);
+      loaded.reload();
+    }
+  };
+
+  /**
+   * Switch a just-installed package on, deciding only from what is known.
+   *
+   * The catalog page normally answers both questions that matter: does this
+   * backend have switches, and was the package already installed (in which case
+   * it is an update and its switch is the user's). When the page has not
+   * answered yet — a slow first read, or one that failed and was not retried —
+   * there is nothing to decide from, and guessing both skipped the switch and
+   * reported a failed save for a write that never happened. Ask JiuwenSwarm
+   * directly instead, and never invent a save failure.
+   */
+  const activateInstalledSkill = async (skill: SkillDetail): Promise<SkillActivationOutcome> => {
+    const page = loaded.value;
+    if (page === undefined) {
+      let state: Awaited<ReturnType<typeof getJiuwenSwarmSkills>>;
+      try {
+        state = await getJiuwenSwarmSkills(client);
+      } catch (reason) {
+        return {
+          state: "failed",
+          stateUnknown: true,
+          error: reason instanceof Error ? reason.message : TEXT.settings.skills.activationUnknown,
+        };
       }
+      if (state.backend !== "jiuwenswarm") return { state: "skipped" };
+      if (state.skills.some((entry) => entry.skillId === skill.id)) return { state: "skipped" };
+      return await enableInstalledSkill(skill);
+    }
+    if (page.native) return { state: "skipped" };
+    if (!page.switchesAvailable) {
+      return {
+        state: "failed",
+        stateUnknown: true,
+        error: page.switchError ?? TEXT.settings.skills.activationUnknown,
+      };
+    }
+    if (page.skills.some((entry) => entry.id === skill.id)) return { state: "skipped" };
+    return await enableInstalledSkill(skill);
+  };
+
+  /** The switch itself, with its own answer. `skills-by-id` also imports the
+   *  package into JiuwenSwarm when it is not there yet, so this is the whole
+   *  recovery a refused switch needs — no second upload. */
+  const enableInstalledSkill = async (skill: SkillDetail): Promise<SkillActivationOutcome> => {
+    try {
+      await setJiuwenSwarmSkillEnabledById(client, skill.id, true);
+      return { state: "on" };
     } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
+      // 409: JiuwenSwarm is not the agent backend, so there is no switch to
+      // throw. That is not a failure of this package.
+      if (reason instanceof ApiRequestError && reason.status === 409) return { state: "skipped" };
+      return {
+        state: "failed",
+        error: reason instanceof Error ? reason.message : TEXT.settings.skills.activationUnknown,
+      };
+    }
+  };
+
+  /** Try the switch again for the package the upload dialog is showing. */
+  const retryInstallActivation = async (skill: SkillDetail): Promise<SkillActivationOutcome> => {
+    setBusy(true);
+    // The list behind the dialog may still carry a failure from another page.
+    // This attempt replaces it, whatever it answers.
+    setFailure(undefined);
+    try {
+      const outcome = await enableInstalledSkill(skill);
+      if (outcome.state === "failed") {
+        // The dialog shows the new refusal in its own notice; leaving a copy on
+        // the list would resurrect the sentence after the dialog closes.
+        return outcome;
+      }
+      // The package is installed and now switched on: the dialog has nothing
+      // left to ask for, so it closes on the same success notice a first
+      // attempt would have shown.
+      setDialog(undefined);
+      setUploadToast({ id: Date.now(), message: TEXT.settings.skills.toastUploadDone(skill.name) });
+      return outcome;
     } finally {
       setBusy(false);
       loaded.reload();
@@ -518,7 +673,10 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     // A created package is a list item from now on, and the list is where the
     // user would go to look at it, so the form does not linger.
     goTo({ kind: "list" });
-    await afterInstall(skill);
+    const outcome = await afterInstall(skill);
+    // No dialog is open after 从零开始写, so the list is the only place that can
+    // say the switch did not happen.
+    if (outcome.state === "failed") setFailure(activationMessage(outcome));
   };
 
   // A passing upload is news about a dialog that just closed, so it leaves by
@@ -530,6 +688,31 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   }, [uploadToast]);
 
   const toasts: SkillToastItem[] = [];
+  // A package that is installed but not switched on is a state of the list, not
+  // an event of the import: its notice has its own id and its own close, so the
+  // job's progress/result toast can be dismissed without losing it.
+  if (activationProblem) {
+    const problem = activationProblem;
+    toasts.push({
+      id: "skill-activation",
+      kind: "error",
+      message: problem.stateUnknown
+        ? TEXT.settings.skills.activationUnknown
+        : TEXT.settings.skills.activationFailed(problem.names),
+      ...(problem.reason ? { detail: problem.reason } : {}),
+      onClose: () => setActivationProblem(undefined),
+      onRetry: () => {
+        setActivationRetrying(true);
+        void problem.retry()
+          .catch((reason: unknown) => {
+            setFailure(reason instanceof Error ? reason.message : TEXT.settings.skills.activationUnknown);
+          })
+          .finally(() => setActivationRetrying(false));
+      },
+      retryBusy: activationRetrying,
+      retryBusyLabel: TEXT.settings.skills.activationRetrying,
+    });
+  }
   if (uploadToast) {
     toasts.push({
       id: `upload-${uploadToast.id}`,
@@ -895,13 +1078,19 @@ export function SkillsSettings({ client, onConfirm }: Props) {
             client={client}
             onCancel={() => setDialog(undefined)}
             onImported={async (skill) => {
+              // The dialog stays open on a refused switch, and answers with
+              // the outcome so it can say so where the user is looking. Only a
+              // package that is usable closes the dialog on a success notice.
+              const outcome = await afterInstall(skill);
+              if (outcome.state === "failed") return outcome;
               setDialog(undefined);
               setUploadToast({
                 id: Date.now(),
                 message: TEXT.settings.skills.toastUploadDone(skill.name),
               });
-              await afterInstall(skill);
+              return outcome;
             }}
+            onRetryActivation={retryInstallActivation}
           />
         </SkillDialog>
       ) : null}

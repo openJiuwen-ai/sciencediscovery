@@ -1217,6 +1217,9 @@ a.secondary-button {
    rather than leaving one button reading 正在检查… with no other way out. */
 .skill-git-progress { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .skill-git-progress .row-note { color: var(--text-secondary); margin: 0; }
+/* Why the rows that were on screen are gone. The shared note colour is the
+ * success one, which would read as progress; this is neutral information. */
+.skill-git-note { color: var(--text-secondary); }
 .skill-git-url { display: flex; align-items: flex-end; gap: 8px; }
 .skill-git-url .settings-field { flex: 1; min-width: 0; }
 .skill-git-results {
@@ -1738,6 +1741,51 @@ a.secondary-button {
   font-size: 12px;
 }
 
+/* A package that arrived but whose switch did not happen. The import's own
+   notice is a passing success; this one stays until the switch is retried, and
+   its retry must not send the package up again. */
+/* The sentence and its reason own the full width; the recovery and the
+ * dismissal sit on a row of their own below them, so a long backend message
+ * cannot squeeze 启用 into a sliver beside it. */
+.skill-activation-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--danger-border);
+  border-radius: 8px;
+  background: var(--danger-soft);
+}
+.skill-activation-notice small { min-width: 0; margin: 0; line-height: 1.5; }
+.skill-activation-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.skill-activation-actions button { flex: 0 0 auto; }
+.skill-activation-dismiss {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: currentColor;
+  cursor: pointer;
+  opacity: 0.65;
+}
+.skill-activation-dismiss:hover { opacity: 1; }
+.skill-activation-dismiss:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+/* A picker that is only waiting for the notice to be answered says so. */
+.skill-drop.is-sealed {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 /* 上传技能: a notice, the drop target, one file row, and the two exits. */
 .skill-upload-hint {
   display: flex;
@@ -1901,6 +1949,10 @@ a.secondary-button {
 .skill-toast-copy small { overflow: hidden; color: #808080; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .skill-toast-retry { flex: 0 0 auto; color: #1476ff; font-size: 12px; white-space: nowrap; }
 .skill-toast-retry:hover { text-decoration: underline; }
+/* A retry that is running says so and cannot be pressed again. The colour is
+ * inherited rather than the accent, so the state reads as unavailable instead
+ * of as another call to action. */
+.skill-toast-retry:disabled { color: inherit; cursor: progress; opacity: 0.7; text-decoration: none; }
 .skill-toast-close {
   display: grid;
   flex: 0 0 auto;

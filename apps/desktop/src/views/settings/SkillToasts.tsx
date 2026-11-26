@@ -23,6 +23,11 @@ export interface SkillToastItem {
   onClose: () => void;
   /** Offered only where repeating the operation is meaningful. */
   onRetry?: () => void;
+  /** The retry is running: the control is disabled and says what it is doing,
+   *  so a second press cannot start a second attempt. */
+  retryBusy?: boolean;
+  /** What the control reads while `retryBusy`. */
+  retryBusyLabel?: string;
 }
 
 const ICON_PROPS = {
@@ -88,8 +93,16 @@ export function SkillToasts({ items }: { items: readonly SkillToastItem[] }) {
             {item.detail ? <small>{item.detail}</small> : null}
           </span>
           {item.onRetry ? (
-            <button className="skill-toast-retry" onClick={item.onRetry} type="button">
-              {TEXT.settings.skills.toastRetry}
+            <button
+              aria-disabled={item.retryBusy === true ? true : undefined}
+              className="skill-toast-retry"
+              disabled={item.retryBusy === true}
+              onClick={item.onRetry}
+              type="button"
+            >
+              {item.retryBusy === true
+                ? item.retryBusyLabel ?? TEXT.settings.skills.activationRetrying
+                : TEXT.settings.skills.toastRetry}
             </button>
           ) : null}
           <button

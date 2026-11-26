@@ -1237,6 +1237,9 @@ export const EN: Text = {
         progress: (done: number, total: number) => `Importing (${done}/${total})`,
         importing: "Importing",
         invalidUrl: "That is not a valid URL. Enter it again.",
+        /** The rows on screen were read from a source the fields no longer
+         *  name; importing them would install another repository. */
+        sourceChanged: "The repository, ref or subdirectory changed after this inspection. Inspect again before importing.",
       },
       importBusy: "Importing…",
       backgroundImportDone: (count: number) => `Imported ${count} skills.`,
@@ -1253,6 +1256,14 @@ export const EN: Text = {
       toastProgress: (done: number, total: number) => `Importing (${done}/${total})`,
       toastRetry: "Retry",
       toastClose: "Dismiss notice",
+      /** A package that is installed but whose switch did not happen. The
+       *  separator is the dictionary's own: one list, one language. */
+      activationFailed: (names: readonly string[]) => `Installed, but not switched on: ${names.join(", ")}.`,
+      /** No switch was tried because JiuwenSwarm's own skill state could not
+       *  be read; the package is installed either way. */
+      activationUnknown: "Installed, but JiuwenSwarm's skill state could not be read, so its switch was not tried.",
+      activationRetry: "Switch on",
+      activationRetrying: "Switching on…",
       git: {
         title: "Import from GitHub",
         description:

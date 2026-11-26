@@ -22,6 +22,7 @@ import type {
   SkillDescriptor,
   SkillDetail,
 } from "../src/api/types.js";
+import { dismissGitSkillImportJob, startGitSkillImportInBackground } from "../src/app/git-skill-import-job.js";
 import { SkillDetailView } from "../src/views/settings/SkillDetailView.js";
 import { SkillGitImportView } from "../src/views/settings/SkillGitImportView.js";
 import { fileTree } from "../src/views/settings/skill-files.js";
@@ -29,6 +30,7 @@ import { SkillToasts } from "../src/views/settings/SkillToasts.js";
 import { SkillUploadView } from "../src/views/settings/SkillUploadView.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { TEXT } from "../src/text.js";
+import { EN } from "../src/text/en.js";
 import { json, type RecordedCall, StubClient } from "./api-stub.js";
 import { act, create, type ReactTestRenderer } from "./support/dom-renderer.js";
 
@@ -61,6 +63,11 @@ Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: tr
 /** Resolve the promises an effect started and re-render what they set. */
 async function settle(): Promise<void> {
   await act(async () => { await Promise.resolve(); });
+}
+
+/** Let every promise an interaction chained resolve, and re-render what they set. */
+async function flush(times = 12): Promise<void> {
+  for (let tick = 0; tick < times; tick += 1) await settle();
 }
 
 async function mount(node: React.ReactElement): Promise<ReactTestRenderer> {
@@ -434,6 +441,638 @@ test("an upload that lands leaves a success notice over the list", async () => {
     assert.ok(markup.includes(TEXT.settings.skills.toastUploadDone(skill.name)), "no success notice");
     assert.ok(view.root.findAllByProps({ className: "skill-toasts" }).length === 1);
   } finally { await act(async () => { view.unmount(); }); }
+});
+
+/** A client whose answers the test settles itself, in call order, so a page can
+ *  be held in flight while the dialog's fields change under it. */
+function pausedClient(): {
+  client: ApiClient;
+  requests: Array<{ path: string; resolve: (value: unknown) => void }>;
+} {
+  const requests: Array<{ path: string; resolve: (value: unknown) => void }> = [];
+  const client = {
+    request: <T,>(path: string): Promise<T> => new Promise<T>((resolve) => {
+      requests.push({ path, resolve: resolve as (value: unknown) => void });
+    }),
+  } as unknown as ApiClient;
+  return { client, requests };
+}
+
+const gitCheckboxes = (view: ReactTestRenderer) =>
+  view.root.findAllByType("input").filter((node) => node.props.type === "checkbox");
+
+const gitUrlField = (view: ReactTestRenderer) => {
+  const found = view.root.findAllByType("input")
+    .find((node) => node.props["aria-label"] === TEXT.settings.skills.git.url);
+  assert.ok(found, "the dialog has no repository URL field");
+  return found;
+};
+
+/** The dialog's own primary action: 导入 with the current selection. */
+const dialogImport = (view: ReactTestRenderer) => {
+  const found = view.root.findAllByType("button").find((node) => (
+    node.props.className === "primary-button"
+      && String(node.props.children).startsWith(TEXT.settings.skills.importAction.split(" ")[0])
+  ));
+  assert.ok(found, "the dialog has no import action");
+  return found;
+};
+
+test("a page that arrives after the repository changed restores nothing and offers no import", async () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  const repoA = "https://example.invalid/org/repo-a.git";
+  const repoB = "https://example.invalid/org/repo-b.git";
+  const paused = pausedClient();
+  const started: unknown[] = [];
+  const view = await mount(
+    <SkillGitImportView client={paused.client} onCancel={() => {}} onStart={async (request) => { started.push(request); }} />,
+  );
+  try {
+    await act(async () => { gitUrlField(view).props.onChange({ target: { value: repoA } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
+    assert.equal(paused.requests[0]?.path, "/api/skills/import-git/inspect");
+    await act(async () => {
+      paused.requests[0]!.resolve({
+        candidates: gitRows(0, 2), commit, nextCursor: "skills/skill-1", repositoryUrl: repoA, total: 4,
+      });
+    });
+    assert.equal(gitCheckboxes(view).length, 3);
+
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.loadMore).props.onClick(); });
+    assert.equal(paused.requests.length, 2, "the next page was not requested");
+
+    // The source field stays editable while a page is on the way; changing it
+    // clears the results, and the old page must not put them back.
+    await act(async () => { gitUrlField(view).props.onChange({ target: { value: repoB } }); });
+    await act(async () => {
+      paused.requests[1]!.resolve({
+        candidates: gitRows(2, 4), commit, repositoryUrl: repoA, total: 4,
+      });
+    });
+    await flush();
+
+    const rendered = JSON.stringify(view.toJSON());
+    assert.equal(gitUrlField(view).props.value, repoB);
+    assert.ok(!rendered.includes("Skill 2"), "a page from the replaced repository came back");
+    assert.ok(!rendered.includes(TEXT.settings.skills.git.found(4)));
+    assert.equal(gitCheckboxes(view).length, 0, "rows from the replaced repository were re-ticked");
+    assert.equal(dialogImport(view).props.disabled, true, "an import from the replaced repository is still offered");
+    assert.deepEqual(started, []);
+    // The rows are gone, and the dialog says why: a reader who typed while the
+    // second page was on its way would otherwise watch the result disappear.
+    assert.ok(rendered.includes(TEXT.settings.skills.gitDialog.sourceChanged),
+      "the dropped inspection is not explained");
+    const note = view.root.findAll((node) => (
+      Array.isArray(node.props.className) ? false : String(node.props.className ?? "").split(" ").includes("row-note")
+    )).filter((node) => textUnder(node.children ?? []).includes(TEXT.settings.skills.gitDialog.sourceChanged));
+    // A neutral line, not the red one: the source edit is normal, only its
+    // consequence is worth saying.
+    assert.ok(note.some((node) => !String(node.props.className).includes("is-error")),
+      "the explanation is painted as an error");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("the explanation survives every keystroke of a new address, not only the first", async () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  const repoA = "https://example.invalid/org/repo-a.git";
+  const paused = pausedClient();
+  const view = await mount(
+    <SkillGitImportView client={paused.client} onCancel={() => {}} onStart={async () => {}} />,
+  );
+  const noteText = () => view.root.findAllByType("small")
+    .map((node) => textUnder(node.children))
+    .filter((line) => line.includes(TEXT.settings.skills.gitDialog.sourceChanged))
+    .join("");
+  try {
+    await act(async () => { gitUrlField(view).props.onChange({ target: { value: repoA } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
+    await act(async () => {
+      paused.requests[0]!.resolve({ candidates: gitRows(0, 2), commit, repositoryUrl: repoA, total: 2 });
+    });
+    assert.equal(noteText(), "", "an inspection that is on screen needs no explanation");
+
+    // Typing drops the rows on the first character. The explanation has to stay
+    // for the rest of the address: the reader is still telling the dialog where
+    // to look, and a note that disappeared mid-word would read as a glitch.
+    for (const value of ["h", "ht", "htt", "https://example.invalid/org/repo-b.git"]) {
+      await act(async () => { gitUrlField(view).props.onChange({ target: { value } }); });
+      assert.equal(gitCheckboxes(view).length, 0, `rows survived the address ${value}`);
+      assert.ok(noteText().includes(TEXT.settings.skills.gitDialog.sourceChanged),
+        `the explanation vanished while typing ${value}`);
+    }
+
+    // A new inspection owns the dialog again, and the note about the old rows
+    // goes with them.
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
+    await act(async () => {
+      paused.requests[1]!.resolve({
+        candidates: gitRows(0, 2),
+        commit,
+        repositoryUrl: "https://example.invalid/org/repo-b.git",
+        total: 2,
+      });
+    });
+    assert.equal(noteText(), "", "a fresh inspection still explains rows it replaced");
+    assert.equal(gitCheckboxes(view).length, 3);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a page whose repository or commit no longer matches is not appended", async () => {
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  const repoA = "https://example.invalid/org/repo-a.git";
+  const paused = pausedClient();
+  const view = await mount(<SkillGitImportView client={paused.client} onCancel={() => {}} onStart={async () => {}} />);
+  try {
+    await act(async () => { gitUrlField(view).props.onChange({ target: { value: repoA } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.inspect).props.onClick(); });
+    await act(async () => {
+      paused.requests[0]!.resolve({
+        candidates: gitRows(0, 2), commit, nextCursor: "skills/skill-1", repositoryUrl: repoA, total: 4,
+      });
+    });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.git.loadMore).props.onClick(); });
+    // The cursor belonged to another commit: its rows are not this page's.
+    await act(async () => {
+      paused.requests[1]!.resolve({
+        candidates: gitRows(2, 4), commit: "fedcba9876543210fedcba9876543210fedcba98", repositoryUrl: repoA, total: 4,
+      });
+    });
+    await flush();
+
+    const rendered = JSON.stringify(view.toJSON());
+    assert.equal(gitCheckboxes(view).length, 3, "rows from another commit were appended");
+    assert.ok(!rendered.includes("Skill 2"));
+    assert.ok(buttonWithText(view, TEXT.settings.skills.git.importSelected(2)));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("an upload whose switch is refused says so in the dialog and can retry without reimporting", async () => {
+  // An empty catalog: 评审 is new here, so its switch is the import's business.
+  const stub = new StubClient()
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .fail(new Error("activation refused by probe"))
+    .reply([detail])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openAddView(view, TEXT.settings.skills.addMenu.upload);
+    const file = new File(["# review"], "SKILL.md", { type: "text/markdown" });
+    const input = view.root.findAllByType("input").find((node) => node.props.type === "file");
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { files: [file] } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.onClick(); });
+    await flush();
+
+    // The package arrived, the switch did not: the dialog stays where the user
+    // is looking and says which of the two writes failed.
+    assert.equal(view.root.findAllByProps({ role: "dialog" }).length, 1, "the dialog closed on a failed switch");
+    const rendered = JSON.stringify(view.toJSON());
+    assert.ok(rendered.includes("activation refused by probe"), "the switch error is not visible");
+    assert.ok(rendered.includes(TEXT.settings.skills.activationFailed(["review"])));
+    // Once. The dialog notice carries the sentence; the pane's own error line
+    // is behind it and holds a second copy if both are written.
+    assert.equal(rendered.split("activation refused by probe").length - 1, 1,
+      "the same refusal is printed twice in one dialog");
+    assert.equal(stub.calls.filter((call) => call.path.startsWith("/api/skills/import")).length, 1);
+
+    // The recovery repeats the switch only: the package is sent up once.
+    stub.reply({})
+      .reply([detail])
+      .reply({ backend: "jiuwenswarm", skills: [] });
+    await act(async () => {
+      buttonWithText(view, TEXT.settings.skills.activationRetry).props.onClick();
+    });
+    await flush();
+
+    assert.equal(stub.calls.filter((call) => call.path.startsWith("/api/skills/import")).length, 1,
+      "the activation retry uploaded the package again");
+    assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills-by-id/review").length, 2);
+    assert.equal(view.root.findAllByProps({ role: "dialog" }).length, 0, "the dialog stayed open after the switch landed");
+    assert.ok(JSON.stringify(view.toJSON()).includes(TEXT.settings.skills.toastUploadDone("review")));
+    // The list behind the dialog must not keep the refusal the retry fixed.
+    assert.ok(!JSON.stringify(view.toJSON()).includes("activation refused by probe"),
+      "the list still shows the activation error the retry fixed");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a refused switch seals the picker until the notice is dismissed", async () => {
+  // Choosing another file while the notice is up is the one press that can lose
+  // the reason the installed package is off: it clears the notice, and the
+  // upload route renames a taken name, so the same bytes sent again would arrive
+  // as a second package instead of the switch the first one is missing. The lock
+  // keeps the recovery — the switch, or dismissing the notice — the only way
+  // forward.
+  const stub = new StubClient()
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .fail(new Error("activation refused by probe"));
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  const fileInput = () => view.root.findAllByType("input").find((node) => node.props.type === "file");
+  try {
+    await openAddView(view, TEXT.settings.skills.addMenu.upload);
+    const first = new File(["# review"], "SKILL.md", { type: "text/markdown" });
+    await act(async () => { fileInput()!.props.onChange({ target: { files: [first], value: "" } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.onClick(); });
+    await flush();
+
+    assert.ok(view.root.findAllByProps({ className: "skill-activation-notice" }).length > 0,
+      "the refused switch is not on screen");
+
+    // The picker, the drop target and 确定 are inert: the dialog is waiting for
+    // an answer to the notice, not for another package.
+    assert.equal(fileInput()!.props.disabled, true, "the picker still takes a file");
+    const drop = view.root.findAll((node) => (
+      String(node.props.className ?? "").split(" ").includes("skill-drop")
+    ));
+    assert.ok(drop.some((node) => node.props["aria-disabled"] === true), "the drop target still takes a file");
+    assert.equal(buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.disabled, true);
+
+    // Nor can a change event that arrives anyway take the notice away.
+    const second = new File(["# review"], "SKILL.md", { type: "text/markdown" });
+    await act(async () => { fileInput()!.props.onChange({ target: { files: [second], value: "" } }); });
+    await flush();
+    assert.ok(view.root.findAllByProps({ className: "skill-activation-notice" }).length > 0,
+      "choosing a file cleared the refused switch");
+    assert.equal(stub.calls.filter((call) => call.path.startsWith("/api/skills/import")).length, 1,
+      "a second upload started while the switch was unresolved");
+    assert.equal(buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.disabled, true,
+      "a second import is offered");
+
+    // The notice's own dismissal is the way out, and it hands the picker back.
+    const dismiss = view.root.findAll((node) => (
+      String(node.props.className ?? "").split(" ").includes("skill-activation-dismiss")
+    ));
+    assert.equal(dismiss.length, 1, "the notice cannot be dismissed");
+    await act(async () => { dismiss[0]!.props.onClick(); });
+    await flush();
+    assert.equal(view.root.findAllByProps({ className: "skill-activation-notice" }).length, 0);
+    assert.equal(fileInput()!.props.disabled, false, "the picker stayed inert after the dismissal");
+    await act(async () => {
+      const third = new File(["# review"], "SKILL.md", { type: "text/markdown" });
+      fileInput()!.props.onChange({ target: { files: [third], value: "" } });
+    });
+    assert.equal(buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.disabled, false,
+      "a fresh file cannot be sent after the notice was dismissed");
+    assert.equal(stub.calls.filter((call) => call.path.startsWith("/api/skills/import")).length, 1);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a switch retried and refused again leaves its sentence in the dialog only", async () => {
+  // The retry is a second chance, not a guarantee: when it is refused too, the
+  // dialog keeps the new sentence and the list behind it must not gain a copy
+  // that would read as a failure of the visit after the dialog closes.
+  const stub = new StubClient()
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(detail)
+    .fail(new Error("activation refused by probe"))
+    .reply([detail])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .fail(new Error("activation refused again"))
+    .reply([detail])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openAddView(view, TEXT.settings.skills.addMenu.upload);
+    const file = new File(["# review"], "SKILL.md", { type: "text/markdown" });
+    const input = view.root.findAllByType("input").find((node) => node.props.type === "file");
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { files: [file] } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.onClick(); });
+    await flush();
+
+    await act(async () => {
+      buttonWithText(view, TEXT.settings.skills.activationRetry).props.onClick();
+    });
+    await flush();
+
+    const rendered = JSON.stringify(view.toJSON());
+    assert.equal(view.root.findAllByProps({ role: "dialog" }).length, 1, "the dialog closed on a refused retry");
+    assert.equal(rendered.split("activation refused again").length - 1, 1,
+      "the refused retry is printed more than once");
+    assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills-by-id/review").length, 2,
+      "the retry did not repeat the switch");
+
+    // Closing the dialog leaves no sentence behind: the list never had one.
+    await act(async () => {
+      buttonWithText(view, TEXT.settings.skills.uploadDialog.cancel).props.onClick();
+    });
+    await flush();
+    const afterClose = JSON.stringify(view.toJSON());
+    assert.ok(!afterClose.includes("activation refused again"),
+      "the list kept the sentence of a retry the dialog reported");
+    assert.ok(!afterClose.includes(TEXT.settings.skills.activationFailed(["review"])),
+      "the list kept the sentence of a retry the dialog reported");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("an upload that finishes before the catalog page loads is still switched on, without a failed save", async () => {
+  const stub = new StubClient();
+  const catalog = stub.defer();
+  stub.reply({ backend: "jiuwenswarm", skills: [] })
+    // The upload overtakes the first catalog read.
+    .reply(detail)
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply({})
+    .reply([detail])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await openAddView(view, TEXT.settings.skills.addMenu.upload);
+    const file = new File(["# review"], "SKILL.md", { type: "text/markdown" });
+    const input = view.root.findAllByType("input").find((node) => node.props.type === "file");
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { files: [file] } }); });
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.uploadDialog.confirm).props.onClick(); });
+    await flush();
+
+    // No page to decide from: the switch state is read directly, so the package
+    // is switched on and no write is invented as a failed save.
+    assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills-by-id/review").length, 1);
+    assert.equal(view.root.findAllByProps({ role: "dialog" }).length, 0);
+    assert.ok(!JSON.stringify(view.toJSON()).includes(TEXT.settings.saveFailed));
+    assert.equal(view.root.findAllByProps({ role: "alert" }).length, 0);
+
+    await act(async () => { catalog.resolve([]); });
+    await flush();
+    assert.ok(!JSON.stringify(view.toJSON()).includes(TEXT.settings.saveFailed),
+      "the list was handed a failed save for a write that never happened");
+  } finally {
+    await act(async () => { catalog.resolve([]); });
+    await act(async () => { view.unmount(); });
+  }
+});
+
+test("a failed git activation is reported over the list and retried without a second import", async () => {
+  const finished = {
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    done: 1,
+    failures: [],
+    id: "job-pane-activation",
+    imported: [{ created: true, id: "fresh" }],
+    startedAt: "2026-11-20T00:00:00.000Z",
+    status: "done" as const,
+    total: 1,
+  };
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(finished)
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .fail(new Error("activation refused by probe"))
+    .reply([{ ...skill, id: "fresh", name: "fresh" }])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    stub.reply({ backend: "jiuwenswarm", skills: [] })
+      .reply({})
+      .reply([{ ...skill, id: "fresh", name: "fresh" }])
+      .reply({ backend: "jiuwenswarm", skills: [] });
+    await act(async () => {
+      await startGitSkillImportInBackground(stub.asClient(), {
+        items: [{ subdirectory: "skills/fresh" }],
+        repositoryUrl: "https://example.invalid/org/skills.git",
+      });
+    });
+    await flush();
+
+    assert.ok(JSON.stringify(view.toJSON()).includes("activation refused by probe"),
+      "the list hides the failed switch");
+
+    // The import notice is a passing event; the package that stayed off is not.
+    // Dismissing the import notice must not take the failure and its retry away.
+    await act(async () => {
+      const closes = view.root.findAllByType("button")
+        .filter((node) => node.props["aria-label"] === TEXT.settings.skills.toastClose);
+      assert.ok(closes.length >= 2, "the activation notice is not a notice of its own");
+      closes.at(-1)!.props.onClick();
+    });
+    await flush();
+    const afterDismiss = JSON.stringify(view.toJSON());
+    assert.ok(!afterDismiss.includes(TEXT.settings.skills.toastGitDone), "the import notice was not dismissed");
+    assert.ok(afterDismiss.includes("activation refused by probe"),
+      "dismissing the import notice hid a package that is still switched off");
+    buttonWithText(view, TEXT.settings.skills.toastRetry);
+
+    await act(async () => {
+      buttonWithText(view, TEXT.settings.skills.toastRetry).props.onClick();
+    });
+    await flush();
+
+    assert.equal(stub.calls.filter((call) => call.path === "/api/skills/import-git/jobs").length, 1,
+      "the activation retry imported again");
+    assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills-by-id/fresh").length, 2);
+    assert.ok(!JSON.stringify(view.toJSON()).includes("activation refused by probe"));
+  } finally {
+    await act(async () => {
+      dismissGitSkillImportJob();
+      view.unmount();
+    });
+  }
+});
+
+test("several refused switches are reported on one line instead of running together", async () => {
+  const twoRefused = {
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    done: 2,
+    failures: [],
+    id: "job-two-refused",
+    imported: [{ created: true, id: "alpha" }, { created: true, id: "beta" }],
+    startedAt: "2026-11-20T00:00:00.000Z",
+    status: "done" as const,
+    total: 2,
+  };
+  const stub = new StubClient()
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(twoRefused)
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .fail(new Error("alpha refused"))
+    .fail(new Error("beta refused"))
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await act(async () => {
+      await startGitSkillImportInBackground(stub.asClient(), {
+        items: [{ subdirectory: "skills/alpha" }, { subdirectory: "skills/beta" }],
+        repositoryUrl: "https://example.invalid/org/skills.git",
+      });
+    });
+    await flush();
+
+    const details = view.root.findAllByType("small")
+      .map((node) => textUnder(node.children))
+      .filter((line) => line.includes("refused"));
+    assert.ok(details.length > 0, "the refused switches are not reported");
+    const joined = details.join("");
+    assert.ok(joined.includes("alpha refused; beta refused"),
+      `the refusals ran together: ${JSON.stringify(details)}`);
+    assert.ok(!joined.includes("alpha refused\nbeta refused"), "the refusals are still on separate lines");
+
+    // The package list is the dictionary's own, so the sentence stays in one
+    // language: a Chinese frame must not read `alpha, beta` and an English one
+    // must not read `alpha、beta`.
+    const notice = JSON.stringify(view.toJSON());
+    assert.ok(notice.includes(TEXT.settings.skills.activationFailed(["alpha", "beta"])));
+    assert.ok(notice.includes("alpha、beta"), "the Chinese notice does not join names with 、");
+    assert.ok(EN.settings.skills.activationFailed(["alpha", "beta"]).includes("alpha, beta"),
+      "the English notice does not join names with a comma");
+    assert.ok(!EN.settings.skills.activationFailed(["alpha", "beta"]).includes("、"),
+      "the English notice joins names with the Chinese separator");
+  } finally {
+    await act(async () => {
+      dismissGitSkillImportJob();
+      view.unmount();
+    });
+  }
+});
+
+test("one refusal answer is printed once, and its retry says it is running", async () => {
+  // The backend answered both switches with the same sentence. Two packages
+  // were refused, but there is one thing to say about why, and repeating it
+  // makes the line longer without telling the reader anything.
+  const sameAnswer = {
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    done: 2,
+    failures: [],
+    id: "job-same-answer",
+    imported: [{ created: true, id: "alpha" }, { created: true, id: "beta" }],
+    startedAt: "2026-11-20T00:00:00.000Z",
+    status: "done" as const,
+    total: 2,
+  };
+  const stub = new StubClient()
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .reply(sameAnswer)
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .fail(new Error("Skill switch failed"))
+    .fail(new Error("Skill switch failed"))
+    .reply([])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await act(async () => {
+      await startGitSkillImportInBackground(stub.asClient(), {
+        items: [{ subdirectory: "skills/alpha" }, { subdirectory: "skills/beta" }],
+        repositoryUrl: "https://example.invalid/org/skills.git",
+      });
+    });
+    await flush();
+
+    const detail = () => view.root.findAllByType("small")
+      .map((node) => textUnder(node.children))
+      .filter((line) => line.includes("Skill switch failed"))
+      .join("");
+    assert.equal(detail().split("Skill switch failed").length - 1, 1,
+      `the same refusal answer is printed twice: ${JSON.stringify(detail())}`);
+
+    // Retrying is a request, not an instant: the control is disabled and says
+    // what it is doing until the answer arrives.
+    const stateRead = stub.defer();
+    const switchAgain = stub.defer();
+    await act(async () => { buttonWithText(view, TEXT.settings.skills.toastRetry).props.onClick(); });
+    const busy = buttonWithText(view, TEXT.settings.skills.activationRetrying);
+    assert.equal(busy.props.disabled, true, "the retry can be pressed twice while it runs");
+    assert.equal(view.root.findAll((node) => (
+      textUnder(node.children ?? []) === TEXT.settings.skills.toastRetry
+    )).length, 0, "the idle label is still on screen while the retry runs");
+
+    // The answer lands: the two attempts are the whole retry, nothing more.
+    await act(async () => {
+      stateRead.resolve({ backend: "jiuwenswarm", skills: [] });
+    });
+    await flush();
+    await act(async () => { switchAgain.fail(new Error("Skill switch failed")); });
+    await flush();
+    assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills-by-id/alpha").length, 2,
+      "the retry did not repeat the switch");
+  } finally {
+    await act(async () => {
+      dismissGitSkillImportJob();
+      view.unmount();
+    });
+  }
+});
+
+test("a later import that switches on cleanly leaves an earlier job's refused switch reported", async () => {
+  const finished = (id: string, skillId: string) => ({
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    done: 1,
+    failures: [],
+    id,
+    imported: [{ created: true, id: skillId }],
+    startedAt: "2026-11-20T00:00:00.000Z",
+    status: "done" as const,
+    total: 1,
+  });
+  const jobA = finished("job-a", "alpha");
+  const jobB = finished("job-b", "beta");
+  const stub = new StubClient()
+    .reply([skill])
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    // Job A: the state read answers, its switch is refused.
+    .reply(jobA)
+    .reply({ backend: "jiuwenswarm", skills: [] })
+    .fail(new Error("alpha refused"))
+    .reply([{ ...skill, id: "alpha", name: "alpha" }])
+    .reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(<SkillsSettings client={stub.asClient()} />);
+  try {
+    await act(async () => {
+      await startGitSkillImportInBackground(stub.asClient(), {
+        items: [{ subdirectory: "skills/alpha" }],
+        repositoryUrl: "https://example.invalid/org/alpha.git",
+      });
+    });
+    await flush();
+    assert.ok(JSON.stringify(view.toJSON()).includes("alpha refused"), "the refused switch is not reported");
+
+    // Job B: its own package switches on cleanly. That says nothing about A's.
+    stub.reply(jobB)
+      .reply({ backend: "jiuwenswarm", skills: [] })
+      .reply({})
+      .reply([{ ...skill, id: "alpha", name: "alpha" }, { ...skill, id: "beta", name: "beta" }])
+      .reply({ backend: "jiuwenswarm", skills: [] });
+    await act(async () => {
+      dismissGitSkillImportJob();
+      await startGitSkillImportInBackground(stub.asClient(), {
+        items: [{ subdirectory: "skills/beta" }],
+        repositoryUrl: "https://example.invalid/org/beta.git",
+      });
+    });
+    await flush();
+
+    const afterB = JSON.stringify(view.toJSON());
+    assert.ok(afterB.includes(TEXT.settings.skills.activationFailed(["alpha"])),
+      "a clean later import erased an earlier job's refused switch");
+    assert.ok(afterB.includes("alpha refused"));
+
+    // The retry still belongs to A, and still only switches.
+    stub.reply({ backend: "jiuwenswarm", skills: [] })
+      .reply({})
+      .reply([{ ...skill, id: "alpha", name: "alpha" }, { ...skill, id: "beta", name: "beta" }])
+      .reply({ backend: "jiuwenswarm", skills: [] });
+    await act(async () => {
+      buttonWithText(view, TEXT.settings.skills.toastRetry).props.onClick();
+    });
+    await flush();
+
+    assert.equal(stub.calls.filter((call) => call.path === "/api/skills/import-git/jobs").length, 2,
+      "the activation retry imported again");
+    assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills-by-id/alpha").length, 2);
+    assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills-by-id/beta").length, 1);
+    assert.ok(!JSON.stringify(view.toJSON()).includes("alpha refused"), "the fixed switch stayed reported");
+  } finally {
+    await act(async () => {
+      dismissGitSkillImportJob();
+      view.unmount();
+    });
+  }
 });
 
 test("notices draw all three kinds, close, and retry where offered", async () => {
