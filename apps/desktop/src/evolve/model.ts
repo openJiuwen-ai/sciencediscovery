@@ -305,15 +305,19 @@ export function headlineScore(view: EvolveRunView): number | null {
     ?? view.baselineScore;
 }
 
-export type Verdict = "accepted" | "failed" | "rejected" | "violated";
+export type Verdict = "accepted" | "cancelled" | "failed" | "rejected" | "violated";
 
-/** Which of the four outcomes a candidate row is showing.
+/** Which of the five outcomes a candidate row is showing.
  *
- *  Four, not two, because they send the reader somewhere different: accepted
+ *  Five, not two, because they send the reader somewhere different: accepted
  *  means it is now the best; a failed candidate never ran; a constraint
- *  violation is illegal rather than worse; and "rejected" simply lost. */
+ *  violation is illegal rather than worse; "rejected" simply lost; and a
+ *  cancelled candidate was never measured at all — which is not the same claim
+ *  as a program that would not run, and is fixed by more budget rather than by
+ *  a different program. */
 export function verdictOf(candidate: EvolveCandidateView): Verdict {
   if (candidate.accepted) return "accepted";
+  if (candidate.category === "cancelled") return "cancelled";
   if (!candidate.valid) return candidate.category === "constraint-violated" ? "violated" : "failed";
   return candidate.category === "constraint-violated" ? "violated" : "rejected";
 }

@@ -69,8 +69,14 @@ unset, the process treats itself as local development and loopback binding is th
 GET  /health                 → {engine, running, sandbox_local, status}
 POST /probe                  → discriminative probe: {baseline, worsened, flat, label}
 POST /runs                   → long-lived NDJSON event stream
-POST /runs/{search_id}/stop  → stop a run
+POST /runs/{search_id}/stop  → stop a run, optionally with {cause, reason}
 ```
+
+`POST /runs/{search_id}/stop` accepts an optional body, `{cause, reason}`. The cause is what
+lets the sidecar tell a budget that ran out from a person pressing stop: a token/cost budget may
+still run one bounded held-out evaluation of the best candidate, a user stop or wall-clock limit
+may not. A body-less POST is a user stop, and the cause also becomes the terminal event's
+`stopReason` instead of the framework's own `max_iters`.
 
 `POST /runs` (`RunRequest`) has four kinds of data:
 

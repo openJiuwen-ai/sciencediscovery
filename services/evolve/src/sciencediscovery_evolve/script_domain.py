@@ -65,6 +65,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
+from .cancellation import CAUSE_TEXT, mark_cancelled, stop_reason_of
 from .logging_config import get_logger
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
@@ -143,10 +144,14 @@ def script_domain(
                 capability=capability, timeout=candidate_timeout, should_stop=should_stop,
             )
         except RunStopped:
-            # Not a broken evaluator and not a bad candidate: the user pressed
-            # stop. An invalid result lets the search wind down and say
-            # "stopped", where raising would report a fault that is not there.
-            return False, {SCORE_KEY: float("-inf")}, "the search was stopped"
+            # Not a broken evaluator and not a bad candidate: the run was
+            # stopped while this candidate was being measured. An invalid result
+            # lets the search wind down and say "stopped", where raising would
+            # report a fault that is not there — and the marker is what keeps
+            # the node out of `candidate-failed`, because a program that was
+            # never measured has not failed anything.
+            reason = stop_reason_of(should_stop) or CAUSE_TEXT[""]
+            return (False, mark_cancelled({SCORE_KEY: float("-inf")}, reason), reason)
         except ScriptError:
             # A broken evaluator is not a bad candidate. Raised so the run
             # stops and says which of the two is wrong, rather than reporting

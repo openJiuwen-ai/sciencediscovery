@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .cancellation import CANCELLED, CANCEL_REASON
 from .candidates import run_candidate
 from .logging_config import get_logger
 from .vendor.puct.sandbox import SandboxCapability
@@ -251,12 +252,19 @@ class Measurement:
     ``ok`` false means the candidate never produced a usable number — it failed
     the gate, crashed, timed out or returned the wrong shape. That is a
     different fact from "it scored badly", and the two must not arrive as one.
+
+    ``cancelled`` is a third: the run was stopped while this measurement was in
+    flight. Nothing about the candidate was established, so downstream it must
+    not read as a failure — and the reason has to survive, because a budget that
+    ran out and a person pressing stop need different answers afterwards.
     """
 
     ok: bool
     values: Dict[str, float] = field(default_factory=dict)
     seconds: float = 0.0
     error: str = ""
+    cancelled: bool = False
+    cancel_reason: str = ""
 
 
 def measure(
@@ -324,6 +332,8 @@ def measure_shards(
                 ok=False,
                 seconds=float(payload.get("seconds") or 0.0),
                 error=str(payload.get("error") or "the candidate failed to run"),
+                cancelled=bool(payload.get(CANCELLED)),
+                cancel_reason=str(payload.get(CANCEL_REASON) or ""),
             )
         predictions = payload.get("predictions") or []
         if any(not math.isfinite(value) for value in predictions):

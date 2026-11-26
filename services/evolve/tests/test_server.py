@@ -328,3 +328,113 @@ def test_a_quiet_stream_is_kept_alive_rather_than_left_to_time_out() -> None:
 
     # The encoder is what lets raw bytes through untouched.
     assert list(encode_ndjson(iter([HEARTBEAT]))) == [b"\n"]
+
+
+# --- Why the stop happened ----------------------------------------------------
+
+
+def test_a_stop_request_carries_its_cause_into_the_engine(client: TestClient) -> None:
+    """The sidecar gets a stop flag and no budget, so a token gate and a person
+    pressing stop arrive as the same request unless the caller says which it is.
+
+    That distinction is what `finish()` branches on: a budget stop may still run
+    one bounded held-out evaluation, a user stop may not. Recorded before the
+    flag is set, so the engine never sees the flag without the reason.
+    """
+    import threading
+
+    module = importlib.import_module("sciencediscovery_evolve.server")
+    seen: dict = {}
+    ready = threading.Event()
+
+    class _Waiting:
+        name = "waiting"
+        requires_sandbox = False
+
+        def run(self, spec, emit, should_stop) -> None:
+            ready.set()
+            while not should_stop():
+                time.sleep(0.01)
+            seen["cause"] = getattr(should_stop, "cause", None)
+            seen["reason"] = getattr(should_stop, "reason", None)
+            emit({"bestNodeIndex": None, "candidates": 0, "status": "stopped",
+                  "type": "search_finished", "stopReason": seen["reason"]})
+
+    module.ENGINES["waiting"] = _Waiting()
+    try:
+        driver = threading.Thread(target=lambda: client.post("/runs", json={
+            "search_id": "run-cause", "scorecard_hash": "sha256:card",
+            "engine": "waiting", "expansions": 1,
+        }), daemon=True)
+        driver.start()
+        assert ready.wait(5), "the engine started"
+        response = client.post("/runs/run-cause/stop", json={
+            "cause": "budget", "reason": "token budget reached (600000)",
+        })
+        assert response.json() == {"stopped": True}
+        driver.join(5)
+    finally:
+        module.ENGINES.pop("waiting", None)
+
+    assert seen["cause"] == "budget"
+    assert seen["reason"] == "token budget reached (600000)"
+
+
+def test_a_bare_stop_request_is_a_user_stop(client: TestClient) -> None:
+    """The old body-less call every existing caller makes stays a user stop —
+    the safe default, because it does not authorize any further spending."""
+    import threading
+
+    module = importlib.import_module("sciencediscovery_evolve.server")
+    seen: dict = {}
+    ready = threading.Event()
+
+    class _Waiting:
+        name = "waiting"
+        requires_sandbox = False
+
+        def run(self, spec, emit, should_stop) -> None:
+            ready.set()
+            while not should_stop():
+                time.sleep(0.01)
+            seen["cause"] = getattr(should_stop, "cause", None)
+            seen["reason"] = getattr(should_stop, "reason", None)
+            emit({"bestNodeIndex": None, "candidates": 0, "status": "stopped",
+                  "type": "search_finished"})
+
+    module.ENGINES["waiting"] = _Waiting()
+    try:
+        driver = threading.Thread(target=lambda: client.post("/runs", json={
+            "search_id": "run-bare-stop", "scorecard_hash": "sha256:card",
+            "engine": "waiting", "expansions": 1,
+        }), daemon=True)
+        driver.start()
+        assert ready.wait(5)
+        assert client.post("/runs/run-bare-stop/stop").json() == {"stopped": True}
+        driver.join(5)
+    finally:
+        module.ENGINES.pop("waiting", None)
+
+    assert seen["cause"] == "user"
+    assert seen["reason"] == "a user stop"
+
+
+def test_an_unrecognised_stop_cause_still_stops_and_is_a_user_stop():
+    """The documented safe default, and the reason the endpoint cannot answer 422.
+
+    A control plane from another version may send a cause this side has not
+    heard of; rejecting the body would leave the run spending while the caller
+    believed it had asked for a stop. `wall_clock` in particular exists so a
+    hard limit on wall time does not become a `budget` stop that authorizes one
+    more evaluation.
+    """
+    from sciencediscovery_evolve.cancellation import (
+        BUDGET, FINISHED, USER, WALL_CLOCK, normalize_cause,
+    )
+    from sciencediscovery_evolve.server import StopRequest
+
+    assert StopRequest(cause="wall_clock", reason="a sentence").cause == "wall_clock"
+    for cause in (WALL_CLOCK, BUDGET, USER, FINISHED):
+        assert normalize_cause(cause) == cause
+    for unknown in ("", "   ", "budget_exhausted", "nonsense"):
+        assert normalize_cause(unknown) == USER

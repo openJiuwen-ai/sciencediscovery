@@ -242,7 +242,8 @@ class GateHarness:
         self.events: List[Dict[str, Any]] = []
 
     def completion_factory(self, _spec: RunSpec, _usage: Any, _stop: Any):
-        def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
+        def complete(prompt: str, sink: Any = None, on_failure: Any = None,
+                     on_cancelled: Any = None) -> str:
             if sink is not None:
                 sink(CompletionUsage(total=100, completion=20, capped=False))
             return CANDIDATE

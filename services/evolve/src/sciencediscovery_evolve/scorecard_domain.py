@@ -44,6 +44,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
+from .cancellation import mark_cancelled, stop_reason_of
 from .logging_config import get_logger
 from .measurement import Dataset, Measurement, measure_shards, shard_indices, TEST
 from .prompt import mutation_prompt
@@ -88,7 +89,13 @@ def scorecard_domain(
             should_stop=should_stop,
         )
         if not result.ok:
-            return False, {SCORE_KEY: float("-inf")}, result.error
+            metrics: Dict[str, Any] = {SCORE_KEY: float("-inf")}
+            if result.cancelled:
+                # The run was stopped while this candidate was being measured.
+                # Marked so the reporter files it as unevaluated: a program that
+                # was never measured has not failed anything.
+                mark_cancelled(metrics, result.cancel_reason or stop_reason_of(should_stop))
+            return False, metrics, result.error
 
         raw = dict(result.values)
         scored = score_candidate(scorecard, raw, reference or raw)

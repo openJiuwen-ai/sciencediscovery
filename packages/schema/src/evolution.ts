@@ -655,6 +655,12 @@ export type EvolveRejectionCategory =
    *  because the two need opposite fixes — one is a prompt or an environment
    *  problem, the other is a search that is not finding improvements. */
   | "candidate-failed"
+  /** The search stopped before this candidate was measured: the last model
+   *  call was abandoned, or its evaluation was cut short when the run ended.
+   *  Distinct from `candidate-failed` because nothing about the program was
+   *  tested — it is a candidate nobody measured, and the fix is to give the run
+   *  more budget rather than to read the candidate's code. */
+  | "cancelled"
   | "below-threshold"
   | "constraint-violated"
   | "stale"

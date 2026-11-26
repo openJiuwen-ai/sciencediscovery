@@ -108,6 +108,9 @@ interface FakeSidecar {
   disconnected: () => boolean;
   /** Run requests as they arrived, so a test can assert what was sent. */
   requests: () => Array<Record<string, unknown>>;
+  /** Stop requests as they arrived, including the cause that tells the sidecar
+   *  whether a budget stop may still finalize. */
+  stops: () => Array<Record<string, unknown>>;
   stopped: () => boolean;
   url: string;
 }
@@ -123,6 +126,7 @@ async function startFakeSidecar(options: {
   let stopped = false;
   let dropped = false;
   const requests: Array<Record<string, unknown>> = [];
+  const stops: Array<Record<string, unknown>> = [];
   const server: Server = createServer(async (request, response) => {
     if (request.method === "POST" && request.url === "/runs") {
       const chunks: Buffer[] = [];
@@ -132,6 +136,16 @@ async function startFakeSidecar(options: {
       } catch { /* the malformed-body tests do not send one */ }
     }
     if (request.url?.endsWith("/stop")) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(chunk as Buffer);
+      const body = Buffer.concat(chunks).toString("utf-8");
+      if (body) {
+        try {
+          stops.push(JSON.parse(body) as Record<string, unknown>);
+        } catch { /* a body-less POST is a user stop */ }
+      } else {
+        stops.push({});
+      }
       stopped = true;
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ stopped: true }));
@@ -187,6 +201,7 @@ async function startFakeSidecar(options: {
     }),
     disconnected: () => dropped,
     requests: () => requests,
+    stops: () => stops,
     stopped: () => stopped,
     url: `http://127.0.0.1:${port}`,
   };
@@ -508,6 +523,26 @@ test("a cost gate trips the run", async () => {
   const run = await orchestrator.start({ goal: goal(6, { maxCostCents: 500 }), sessionId: "s1" });
   await waitFor(async () => (await store.readRun(run.id))?.status === "budget_exhausted", "the cost gate");
   assert.match((await store.readRun(run.id))?.error ?? "", /cost budget reached/);
+  assert.deepEqual(sidecar.stops(), [{ cause: "budget", reason: "cost budget reached (500 cents)" }]);
+});
+
+test("the stop request tells the sidecar why, so a budget stop can finalize", async () => {
+  // The sidecar is handed a stop flag and no budget, so a token gate and a
+  // person pressing stop are the same POST unless the cause travels with it.
+  // Only `budget` may still run the one bounded held-out evaluation.
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
+      { cents: 1, tokens: 5_000, type: "cost" },
+    ],
+    holdUntilStop: true,
+  });
+  cleanup(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "evolve-stop-cause");
+
+  const run = await orchestrator.start({ goal: goal(6, { maxTokens: 4_000 }), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "budget_exhausted", "the token gate");
+  assert.deepEqual(sidecar.stops(), [{ cause: "budget", reason: "token budget reached (4000)" }]);
 });
 
 test("a wall-clock gate trips a search that has gone quiet", async () => {
@@ -523,6 +558,11 @@ test("a wall-clock gate trips a search that has gone quiet", async () => {
   const run = await orchestrator.start({ goal: goal(6, { maxSeconds: 0.15 }), sessionId: "s1" });
   await waitFor(async () => (await store.readRun(run.id))?.status === "budget_exhausted", "the wall-clock gate");
   assert.match((await store.readRun(run.id))?.error ?? "", /wall-clock budget reached/);
+  // `wall_clock`, not `budget`: a hard limit on wall time must not authorize one
+  // more bounded held-out evaluation, which is the opposite of stopping promptly.
+  assert.deepEqual(sidecar.stops(), [{
+    cause: "wall_clock", reason: "wall-clock budget reached (0.15s)",
+  }]);
 });
 
 test("a run inside its budget is untouched", async () => {
@@ -554,6 +594,9 @@ test("a user stop is still reported as a stop, not as a budget", async () => {
   await orchestrator.stop(run.id);
   await waitFor(async () => (await store.readRun(run.id))?.status === "stopped", "the stopped status");
   assert.equal((await store.readRun(run.id))?.error, undefined);
+  // No cause beyond "user": a person asked for the spending to stop, so the
+  // sidecar must not extend the run for a final held-out evaluation.
+  assert.deepEqual(sidecar.stops(), [{ cause: "user" }]);
 });
 
 

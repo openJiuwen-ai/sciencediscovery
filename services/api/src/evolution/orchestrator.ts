@@ -55,7 +55,7 @@ import { DatasetStagingError, casHash, needsData, stageDataset, type DatasetSour
 import type { RunTokenRegistry } from "./llm-proxy.js";
 import { isolationIssues } from "./preflight.js";
 import { probeEvolveSandbox, toSidecarCapability, type EvolveSandboxCapability } from "./sandbox.js";
-import { EvolveSidecarError, type EvolveSidecarClient } from "./sidecar.js";
+import { EvolveSidecarError, type EvolveSidecarClient, type EvolveStopReason } from "./sidecar.js";
 import type { EvolutionStore } from "./store.js";
 
 export type EvolveRunSubscriber = (record: EvolveEventRecord) => void;
@@ -617,15 +617,21 @@ export class EvolveOrchestrator {
     }
   }
 
-  /** Ask the sidecar to stop; the terminal event still comes over the stream. */
-  async stop(runId: string): Promise<boolean> {
+  /** Ask the sidecar to stop; the terminal event still comes over the stream.
+   *
+   *  `why` defaults to a user stop, which is what every caller that is a person
+   *  (or the agent acting for one) means. The budget gates pass their own cause
+   *  and the sentence they already record: the sidecar needs both, because a
+   *  token budget that ran out is allowed one bounded held-out evaluation of the
+   *  candidate it already paid for, and a user stop is not. */
+  async stop(runId: string, why: EvolveStopReason = { cause: "user" }): Promise<boolean> {
     const entry = this.inFlight.get(runId);
     if (!entry) return false;
     if (entry.stopping) return true;
     entry.stopping = true;
     // Stop paid model work immediately, including calls waiting for headers.
     this.runTokens?.revoke(runId);
-    const stopped = await this.sidecar.stop(runId);
+    const stopped = await this.sidecar.stop(runId, why);
     if (!stopped) {
       // The sidecar does not know this search (it may have just finished, or
       // the process restarted). Abort the stream so the run cannot hang.
@@ -789,18 +795,28 @@ export class EvolveOrchestrator {
     const seconds = run.goal.budget.maxSeconds;
     if (!Number.isFinite(seconds) || seconds <= 0) return;
     entry.wallClockTimer = setTimeout(() => {
-      void this.tripBudget(run.id, `wall-clock budget reached (${seconds}s)`);
+      // `wall_clock`, not `budget`: a hard wall-clock ceiling exists to bound wall
+      // time, so the sidecar must abort promptly instead of spending more of it on
+      // a held-out finalization. Only a token/cost budget that ran out may
+      // finalize; conflating the two is what the cause channel is for.
+      void this.tripBudget(run.id, `wall-clock budget reached (${seconds}s)`, "wall_clock");
     }, seconds * 1000);
   }
 
   /** Ask the search to wind down and remember why, so the terminal status can
-   *  say "budget" rather than "stopped". */
-  private async tripBudget(runId: string, gate: string): Promise<void> {
+   *  say "budget" rather than "stopped".
+   *
+   *  `cause` is sent with the stop request because the sidecar branches on it: a
+   *  token or cost budget that ran out may still run one bounded held-out
+   *  evaluation, a wall-clock limit may not. */
+  private async tripBudget(
+    runId: string, gate: string, cause: EvolveStopReason["cause"] = "budget",
+  ): Promise<void> {
     const entry = this.inFlight.get(runId);
     if (!entry || entry.budgetGate) return;
     entry.budgetGate = gate;
-    apiLog.info("evolve_budget_exhausted", { gate, runId });
-    await this.stop(runId);
+    apiLog.info("evolve_budget_exhausted", { cause, gate, runId });
+    await this.stop(runId, { cause, reason: gate });
   }
 
   /** Check the spend gates after a cost event. */

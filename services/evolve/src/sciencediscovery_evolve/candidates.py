@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence
 
+from .cancellation import CANCELLED, CANCEL_REASON, stop_reason_of
 from .logging_config import get_logger
 from .vendor.puct.program import validate_source
 from .sandbox_run import RunStopped, run_killable
@@ -101,8 +102,11 @@ def run_candidate(
     decides *how* it is confined.
     """
     if should_stop is not None and should_stop():
-        # Before the scratch directory and the sandbox are even prepared.
-        return {"ok": False, "error": "the search was stopped", "seconds": 0.0}
+        # Before the scratch directory and the sandbox are even prepared. Marked
+        # so the reporter files a stopped candidate as unevaluated rather than
+        # as a program that would not run.
+        return {"ok": False, "error": "the search was stopped", "seconds": 0.0,
+                CANCELLED: True, CANCEL_REASON: stop_reason_of(should_stop)}
     valid, reason = validate_source(code, max_length=max_length)
     if not valid:
         # The gate is not the boundary (the sandbox is), but it turns the
@@ -129,7 +133,9 @@ def run_candidate(
                 timeout=timeout + _GRACE_SECONDS, should_stop=should_stop,
             )
         except RunStopped:
-            return {"ok": False, "error": "the search was stopped", "seconds": time.monotonic() - started}
+            return {"ok": False, "error": "the search was stopped",
+                    "seconds": time.monotonic() - started,
+                    CANCELLED: True, CANCEL_REASON: stop_reason_of(should_stop)}
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": f"timeout after {timeout + _GRACE_SECONDS:.0f}s",
                     "seconds": time.monotonic() - started}

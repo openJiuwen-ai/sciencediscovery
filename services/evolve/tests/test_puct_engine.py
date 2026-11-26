@@ -32,6 +32,7 @@ import pytest
 
 pytestmark = pytest.mark.science_tags(category='ut', os='linux', arch=('amd64', 'arm64'))
 
+from sciencediscovery_evolve.cancellation import StopGate
 from sciencediscovery_evolve.completion import CompletionUsage
 from sciencediscovery_evolve.engine import RunSpec
 from sciencediscovery_evolve import puct_engine
@@ -112,6 +113,14 @@ class Harness:
         completion_tokens: int = 300,
         violate_from: Optional[int] = None,
         test_shards: Tuple[int, ...] = (8, 9),
+        cancel_at: Optional[int] = None,
+        cancel_cause: str = "budget",
+        cancel_reason: str = "token budget reached (600000)",
+        cancel_during_evaluation: bool = False,
+        cancel_on_test_shards: bool = False,
+        fail_then_stop_at: Optional[int] = None,
+        test_shard_failure: str = "",
+        raise_on_test_shards_at: Optional[int] = None,
     ) -> None:
         self.replies = replies if replies is not None else [CANDIDATE] * 12
         self.scores = scores or [0.4, 0.6, 0.7, 0.8, 0.9]
@@ -119,11 +128,38 @@ class Harness:
         self.completion_tokens = completion_tokens
         self.violate_from = violate_from
         self.test_shards = test_shards
+        #: Which completion call (0-based) is abandoned by a stop, and what
+        #: stopped it. The fake reports it through `on_cancelled`, exactly as
+        #: the real client does, so the classification below the engine is the
+        #: shipping one rather than a re-implementation.
+        self.cancel_at = cancel_at
+        self.cancel_cause = cancel_cause
+        self.cancel_reason = cancel_reason
+        #: Trip the gate from inside a candidate evaluation instead of a model
+        #: call — the other place a stop cuts work short.
+        self.cancel_during_evaluation = cancel_during_evaluation
+        #: Trip the gate from inside the *held-out* evaluation — the window
+        #: between `finish()`'s own stop check and the final measurement.
+        self.cancel_on_test_shards = cancel_on_test_shards
+        #: Which call reports a genuine provider failure first and only then
+        #: sees the run stopped: the two must not be confused.
+        self.fail_then_stop_at = fail_then_stop_at
+        #: A genuine held-out failure: trips the gate and then reports an
+        #: ordinary invalid result *with no cancellation marker*, which is what
+        #: a real domain does for a broken candidate.
+        self.test_shard_failure = test_shard_failure
+        #: Raise from the n-th held-out evaluation (1-based) instead of scoring,
+        #: for the run-fault and "retry blew up" paths.
+        self.raise_on_test_shards_at = raise_on_test_shards_at
+        self._test_calls = 0
+        self.gate: Optional[StopGate] = None
         self.prompts: List[str] = []
         self.events: List[Dict[str, Any]] = []
         self.evaluated: List[Tuple[str, Tuple[int, ...]]] = []
         self._reply = 0
         self._score = 0
+        self._evaluation_cancelled = False
+        self._test_cancel = False
         #: Set to make the injected model report that the call never returned,
         #: as opposed to returning an empty string.
         self.call_failure = ""
@@ -131,14 +167,40 @@ class Harness:
         #: the way three of the four real ones do.
         self.scores_empty_as_zero = False
 
+    def stop(self, reason: str = "", cause: str = "") -> None:
+        """Trip this run's gate, as the control plane's stop request does."""
+        assert self.gate is not None, "the harness is built in run()"
+        self.gate.stop(reason=reason or self.cancel_reason, cause=cause or self.cancel_cause)
+
     # -- injected model --------------------------------------------------------
     def completion_factory(self, run_spec: RunSpec, on_usage: Any, should_stop: Any):
         def complete(
             prompt: str,
             sink: Optional[Callable[[CompletionUsage], None]] = None,
             on_failure: Any = None,
+            on_cancelled: Any = None,
         ) -> str:
             self.prompts.append(prompt)
+            if self.cancel_at is not None and self._reply == self.cancel_at:
+                self._reply += 1
+                self.stop()
+                if on_cancelled is not None:
+                    on_cancelled(self.gate.reason)
+                return ""
+            if self.fail_then_stop_at is not None and self._reply == self.fail_then_stop_at:
+                self._reply += 1
+                if on_failure is not None:
+                    on_failure("HTTP 500: upstream refused")
+                self.stop()
+                return ""
+            if self.gate is not None and self.gate():
+                # What the shipping client does when the run is already stopping:
+                # no request is paid for, and the abandonment is reported through
+                # its own sink instead of looking like an empty reply.
+                self._reply += 1
+                if on_cancelled is not None:
+                    on_cancelled(self.gate.reason)
+                return ""
             reply = self.replies[min(self._reply, len(self.replies) - 1)]
             self._reply += 1
             if sink is not None:
@@ -153,6 +215,36 @@ class Harness:
     def domain_factory(self, **_kwargs: Any) -> Domain:
         def evaluate(code: str, shards: Sequence[int]) -> Tuple[bool, Dict[str, Any], str]:
             self.evaluated.append((code, tuple(shards)))
+            gate = self.gate
+            on_test_shards = tuple(shards) == tuple(self.test_shards) and bool(code.strip())
+            if on_test_shards:
+                self._test_calls += 1
+            if (self.raise_on_test_shards_at is not None
+                    and self._test_calls == self.raise_on_test_shards_at):
+                raise RuntimeError("the evaluator could not report a result")
+            if (self.cancel_on_test_shards and not self._test_cancel and on_test_shards):
+                self._test_cancel = True
+                self.stop()
+                gate = self.gate
+            if (self.test_shard_failure and not self._test_cancel and on_test_shards):
+                self._test_cancel = True
+                self.stop()
+                # A real measurement that came back invalid, with nothing to
+                # suggest it was a stop: no `cancelled` key, non-empty error.
+                return False, {"score": float("-inf")}, self.test_shard_failure
+            if gate is not None and gate.is_set() and gate():
+                # What `run_killable` gives every real domain: a stopped
+                # evaluation is cancelled, unless the reporter lifted the stop
+                # for the one bounded finalization a budget stop allows.
+                return False, {"score": float("-inf"), "cancelled": True,
+                               "cancelReason": gate.reason}, gate.reason
+            if (self.cancel_during_evaluation and not self._evaluation_cancelled
+                    and code.strip() and not ("0.0" in code and "1.0" not in code)):
+                self._evaluation_cancelled = True
+                self.stop()
+                reason = gate.reason if gate is not None else "a stop request"
+                return False, {"score": float("-inf"), "cancelled": True,
+                               "cancelReason": reason}, reason
             if not code.strip():
                 if self.scores_empty_as_zero:
                     # What the judged, gated and scripted domains all do: an
@@ -186,13 +278,15 @@ class Harness:
         )
 
     def run(self, run_spec: Optional[RunSpec] = None,
-            stop: Callable[[], bool] = lambda: False) -> List[Dict[str, Any]]:
+            stop: Optional[StopGate] = None) -> List[Dict[str, Any]]:
+        gate = stop if stop is not None else StopGate()
+        self.gate = gate
         engine = PuctEngine(
             completion_factory=self.completion_factory,
             domain_factory=self.domain_factory,
             store_root=Path(self._store),
         )
-        engine.run(run_spec or spec(), self.events.append, stop)
+        engine.run(run_spec or spec(), self.events.append, gate)
         return self.events
 
     _store = "/tmp"
@@ -398,6 +492,235 @@ def test_a_search_in_which_nothing_ran_is_a_failure_not_a_success() -> None:
     assert "produced a candidate that ran" in message
 
 
+# --- Cancellation ---------------------------------------------------------------
+
+
+def _logs(harness: Harness) -> str:
+    return " ".join(event.get("message", "") for event in harness.of("log"))
+
+
+def test_a_cancelled_completion_is_neither_an_empty_reply_nor_a_failed_candidate() -> None:
+    """The reported run: at shutdown three nodes read "the model returned an
+    empty reply" and were filed as `candidate-failed`.
+
+    The calls were abandoned because the token budget ran out. Nothing about the
+    model or the candidates was measured, and the record has to say which one it
+    was — an empty reply sends the reader to the prompt or the token ceiling, a
+    cancellation sends them to the budget.
+    """
+    harness = Harness(scores=[0.4, 0.6], cancel_at=1)
+    harness.run(spec(expansions=2))
+
+    abandoned = [event for event in harness.of("expanded") if not event["valid"]]
+    assert abandoned, "the abandoned call still becomes a node, as upstream appends it"
+    assert "not evaluated: cancelled by token budget reached (600000)" in abandoned[0]["error"]
+    assert "empty reply" not in abandoned[0]["error"]
+
+    merged = harness.of("merged")
+    cancelled = [event for event in merged if event.get("category") == "cancelled"]
+    assert cancelled, f"the abandoned node is filed as unevaluated, not failed: {merged}"
+    assert all(event.get("category") != "candidate-failed" for event in merged)
+    assert "not evaluated: cancelled by token budget reached (600000)" in cancelled[0]["reason"]
+
+
+def test_a_candidate_cancelled_while_being_evaluated_is_unevaluated_not_failed() -> None:
+    """Node 18 in the report: it generated code, its evaluation was cut short by
+    the stop, and it was classified as `candidate-failed`.
+
+    A program nobody measured has not failed anything, and the two categories
+    are what the web and desktop verdicts read.
+    """
+    harness = Harness(cancel_during_evaluation=True)
+    harness.run(spec(expansions=1, options={"mode": "serial"}))
+
+    expanded = harness.of("expanded")
+    assert expanded and expanded[0]["valid"] is False
+    assert "not evaluated: cancelled by token budget reached (600000)" in expanded[0]["error"]
+    merged = harness.of("merged")
+    assert merged[0]["category"] == "cancelled"
+    assert all(event["category"] != "candidate-failed" for event in merged)
+
+
+def test_a_token_budget_stop_still_scores_the_winner_on_the_held_out_shards() -> None:
+    """The measured half of the report: the run ended with `bestTestScore: null`
+    and "the best candidate failed on the test shards: the search was stopped".
+
+    The candidate was already generated and paid for, and the held-out score is
+    the only number the search never optimised against. A budget stop allows one
+    bounded evaluation of it — with the stop lifted for that thread only, which
+    is why the fake domain refuses to evaluate while the gate is armed.
+    """
+    harness = Harness(scores=[0.4, 0.6], cancel_at=1)
+    harness.run(spec(expansions=2))
+
+    finished = harness.of("search_finished")[0]
+    assert finished["status"] == "stopped"
+    assert finished["bestTestScore"] is not None, "the held-out score is not lost to the stop"
+    assert harness.evaluated[-1][1] == (8, 9), "and it is the held-out shards that were scored"
+    log = _logs(harness)
+    assert "best candidate failed" not in log
+    assert "not evaluated" not in log
+
+
+def test_a_token_budget_stop_preserves_the_true_cause_instead_of_max_iters() -> None:
+    """The terminal sidecar event said `stopReason: max_iters` while the control
+    plane correctly recorded token exhaustion.
+
+    The framework counts rollouts and has no way to know a budget gate ended the
+    run; the stop request does, so that is what the record carries.
+    """
+    harness = Harness(scores=[0.4, 0.6], cancel_at=1)
+    harness.run(spec(expansions=2))
+
+    assert harness.of("search_finished")[0]["stopReason"] == "token budget reached (600000)"
+
+
+def test_a_user_stop_is_obeyed_without_a_final_evaluation() -> None:
+    """The opposite case: a person asked for the spending to stop, so no
+    held-out evaluation is run — and the record still says plainly that the best
+    candidate was never evaluated rather than that it failed."""
+    harness = Harness(scores=[0.4], cancel_at=0, cancel_cause="user", cancel_reason="")
+    harness.run(spec(expansions=1))
+
+    finished = harness.of("search_finished")[0]
+    assert finished["status"] == "stopped"
+    assert "bestTestScore" not in finished
+    assert (8, 9) not in [shards for _, shards in harness.evaluated], "a user stop is obeyed"
+    assert finished["stopReason"] == "a user stop"
+    log = _logs(harness)
+    assert "not evaluated: cancelled by a user stop" in log
+    assert "best candidate failed" not in log
+
+
+def test_a_wall_clock_stop_is_obeyed_without_a_final_evaluation() -> None:
+    harness = Harness(scores=[0.4], cancel_at=0,
+                      cancel_cause="wall_clock", cancel_reason="")
+    harness.run(spec(expansions=1))
+
+    assert "bestTestScore" not in harness.of("search_finished")[0]
+    assert (8, 9) not in [shards for _, shards in harness.evaluated]
+    assert "not evaluated: cancelled by the wall-clock limit" in _logs(harness)
+
+
+def test_a_budget_stop_during_the_held_out_evaluation_retries_once_and_keeps_the_score() -> None:
+    """The window the first fix missed: the stop lands *inside* the final
+    evaluation, after `finish()` had already decided the run was not stopped.
+
+    The evaluation comes back cancelled. Reporting that as "the best candidate
+    failed on the test shards" is a false claim about the candidate and it loses
+    the only number the run never optimised against. A budget stop may spend one
+    more bounded evaluation, so the retry scores it — and the record still says
+    `stopped`, not `succeeded` with the framework's `rounds`.
+    """
+    harness = Harness(scores=[0.4, 0.6], cancel_on_test_shards=True)
+    harness.run(spec(expansions=1))
+
+    finished = harness.of("search_finished")[0]
+    assert finished["status"] == "stopped"
+    assert finished["stopReason"] == "token budget reached (600000)"
+    assert finished["bestTestScore"] is not None, "the retry's score is kept"
+    assert [shards for _, shards in harness.evaluated].count((8, 9)) == 2, \
+        "one cancelled attempt and exactly one bounded retry"
+    log = _logs(harness)
+    assert "best candidate failed" not in log
+    assert "not evaluated" not in log
+
+
+def test_a_user_stop_during_the_held_out_evaluation_reports_unevaluated() -> None:
+    """The same window, for a stop nobody asked to be extended: no retry, no
+    score, and an explicit "not evaluated" instead of a candidate failure."""
+    harness = Harness(scores=[0.4], cancel_on_test_shards=True,
+                      cancel_cause="user", cancel_reason="")
+    harness.run(spec(expansions=1))
+
+    finished = harness.of("search_finished")[0]
+    assert finished["status"] == "stopped"
+    assert finished["stopReason"] == "a user stop"
+    assert "bestTestScore" not in finished
+    assert [shards for _, shards in harness.evaluated].count((8, 9)) == 1, \
+        "a user stop is obeyed without another evaluation"
+    log = _logs(harness)
+    assert "best candidate failed" not in log
+    assert "not evaluated: cancelled by a user stop" in log
+
+
+def test_a_budget_stop_whose_held_out_retry_blows_up_still_reports_the_stop() -> None:
+    """The stop is recorded and then the retry raises.
+
+    Settling "succeeded" with the framework's own `rounds`, no score and no
+    sentence about the stop is the exact shape of the lost evidence this issue is
+    about — and an exception is not a reason to forget why the run ended.
+    """
+    harness = Harness(scores=[0.4], cancel_on_test_shards=True,
+                      raise_on_test_shards_at=2)
+    harness.run(spec(expansions=1))
+
+    finished = harness.of("search_finished")[0]
+    assert finished["status"] == "stopped"
+    assert finished["stopReason"] == "token budget reached (600000)"
+    assert "bestTestScore" not in finished
+    log = _logs(harness)
+    assert "not evaluated: cancelled by token budget reached (600000)" in log
+    assert "best candidate failed" not in log
+
+
+def test_a_held_out_evaluation_that_cannot_run_is_a_run_fault_not_a_success() -> None:
+    """Nobody stopped this run, so a held-out evaluation that raises is a fault.
+
+    It used to propagate and fail the run. Swallowing it settles the search as
+    "succeeded" with no held-out score, which claims a completed evaluation that
+    never happened.
+    """
+    harness = Harness(scores=[0.4], raise_on_test_shards_at=1)
+    with pytest.raises(RuntimeError, match="could not report a result"):
+        harness.run(spec(expansions=1))
+
+    assert harness.of("search_finished") == [], \
+        "a crashed run must not claim to have finished successfully"
+
+
+def test_a_genuine_held_out_failure_after_a_stop_is_still_a_candidate_failure() -> None:
+    """The opposite mistake in the same window: the domain reported a real
+    invalid result, with no cancellation marker, so the winner genuinely failed
+    its tests. It keeps that sentence and is not retried."""
+    harness = Harness(scores=[0.4],
+                      test_shard_failure="the candidate failed to run: ZeroDivisionError")
+    harness.run(spec(expansions=1))
+
+    log = _logs(harness)
+    assert "best candidate failed on the test shards" in log
+    assert "ZeroDivisionError" in log
+    assert "not evaluated" not in log
+    assert [shards for _, shards in harness.evaluated].count((8, 9)) == 1, \
+        "a measured failure is not retried into an 'unevaluated' answer"
+
+
+def test_a_genuine_call_failure_is_not_relabelled_when_the_run_stops_right_after() -> None:
+    """The opposite mistake, and the reason the reporter does not guess.
+
+    A provider failure recorded for a call stays a provider failure even if the
+    run is stopped a moment later. Relabelling it "cancelled" would bury the
+    HTTP error that actually explains the missing candidate.
+    """
+    harness = Harness(replies=[""], fail_then_stop_at=0)
+    harness.run(spec(expansions=1))
+
+    error = harness.of("expanded")[0]["error"]
+    assert "HTTP 500" in error and "returned nothing" in error
+    assert "not evaluated" not in error
+    assert harness.of("merged")[0]["category"] == "candidate-failed"
+
+
+def test_a_genuine_empty_reply_is_still_reported_as_one() -> None:
+    """The behaviour that must not change: a model that answered with nothing is
+    an empty reply and a `candidate-failed` node, not a cancellation."""
+    harness = Harness(replies=[""])
+    harness.run(spec(expansions=1))
+
+    assert harness.of("expanded")[0]["error"] == "the model returned an empty reply"
+    assert harness.of("merged")[0]["category"] == "candidate-failed"
+
+
 # --- Refusals -----------------------------------------------------------------
 
 
@@ -467,7 +790,8 @@ class _PromiseHarness(Harness):
     def completion_factory(self, run_spec: RunSpec, on_usage: Any, should_stop: Any):
         inner = super().completion_factory(run_spec, on_usage, should_stop)
 
-        def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
+        def complete(prompt: str, sink: Any = None, on_failure: Any = None,
+                     on_cancelled: Any = None) -> str:
             reply = inner(prompt, sink, on_failure)
             rating = self.ratings[min(self._rating, len(self.ratings) - 1)]
             self._rating += 1
@@ -679,7 +1003,8 @@ class JudgeHarness(Harness):
         self.judge_prompts: List[str] = []
 
     def completion_factory(self, run_spec: RunSpec, on_usage: Any, should_stop: Any):
-        def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
+        def complete(prompt: str, sink: Any = None, on_failure: Any = None,
+                     on_cancelled: Any = None) -> str:
             # Both prompts carry the rubric — the mutator should know what it
             # is aiming at — so the grader is told apart by its own opening.
             if prompt.startswith("Grade the piece of writing below against the rubric"):
