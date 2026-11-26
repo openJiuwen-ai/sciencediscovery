@@ -11,9 +11,7 @@ import { cleanupJourney, createProjectAndSession, scriptedModel, type JourneyFix
 async function actionAppearance(button: Locator) {
   return button.evaluate(element => {
     const style = getComputedStyle(element);
-    const box = element.getBoundingClientRect();
-    return { background: style.backgroundColor, color: style.color, radius: style.borderRadius,
-      height: box.height, right: box.right, top: box.top };
+    return { background: style.backgroundColor, color: style.color, radius: style.borderRadius, height: style.height };
   });
 }
 
@@ -27,7 +25,7 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
      * E2E-META
      * Purpose: Specialist controls preserve enablement, report disabled bindings truthfully, and repair removed skills.
      * Steps:
-     *   1. Open Desktop Skills and Specialists and compare the header actions.
+     *   1. Open Desktop Skills and Specialists and compare the add actions, with Skills keeping its action on the toolbar line.
      *   2. Create and bind a custom Specialist, disable it, verify its visible disabled binding, unbind and edit it.
      *   3. Verify a failed toggle stays disabled, then retry successfully.
      *   4. Bulk disable and enable custom and built-in roles; the fixed reviewer remains unchanged.
@@ -69,7 +67,7 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
       };
       const readCreated = async () => (await api<Specialist[]>(page, "/api/specialists")).find(s => s.id === created?.id);
       try {
-        await journey.step("1. Compare header actions", "Specialists uses the Skills button's position, height, colours and pill radius.", async () => {
+        await journey.step("1. Compare the add actions", "Specialists and the rebuilt Skills page draw the same action; Skills keeps it on the toolbar line.", async () => {
           baseline = await api<Specialist[]>(page, "/api/specialists");
           fixture = await createProjectAndSession(page, { projectName: name, sessionTitle: name,
             model: { apiToken: model.apiToken, baseUrl: model.baseUrl, model: model.model, name } });
@@ -80,8 +78,15 @@ test.describe("Desktop Specialist enablement", { tag: ["@isolation:global", "@fi
           await openSettings();
           const specialistAction = await actionAppearance(settings.getByRole("button", { name: words.add, exact: true }));
           await settings.getByRole("button", { name: words.skills, exact: true }).click();
-          const skillAction = await actionAppearance(settings.getByRole("button", { name: words.addSkill, exact: true }));
-          expect(specialistAction).toEqual(skillAction);
+          const skillAdd = settings.getByRole("button", { name: words.addSkill, exact: true });
+          const skillAction = await actionAppearance(skillAdd);
+          expect(skillAction).toEqual(specialistAction);
+          // The 2.5 handoff draws 添加技能 on the toolbar line with the tabs, the bulk
+          // pair and the search, so the two pages no longer share a position; the
+          // shared row is the rule now, and #1445 brings Specialists onto it too.
+          const [tabsBox, addBox] = await Promise.all([settings.getByRole("tablist").boundingBox(), skillAdd.boundingBox()]);
+          if (!tabsBox || !addBox) throw new Error("The Skills toolbar and its add action must both be laid out.");
+          expect(Math.abs(addBox.y + addBox.height / 2 - (tabsBox.y + tabsBox.height / 2))).toBeLessThanOrEqual(2);
           await settings.getByRole("button", { name: words.specialists, exact: true }).click();
         });
         await journey.step("2. Create, bind and disable a custom role", "The real API preserves the binding; Desktop names it as disabled until the user explicitly unbinds it.", async () => {
