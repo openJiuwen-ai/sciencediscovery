@@ -77,6 +77,27 @@
   outline: 2px solid var(--primary-border-soft);
   outline-offset: 1px;
 }
+/* 技能 draws the same pair inside its own toolbar (handoff 239-134205): a bare
+   label with its glyph, at the size of the tabs it stands beside. The other
+   lists keep the boxed pair — there the buttons are alone on their line, and
+   the border is what makes them read as one control. */
+.settings-bulk.is-toolbar { gap: 20px; margin: 0; }
+.settings-bulk.is-toolbar .bulk-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: #191919;
+  font-size: 14px;
+}
+.settings-bulk.is-toolbar .bulk-button:hover:not(:disabled) { background: none; color: #000; }
+.settings-bulk.is-toolbar .bulk-button:active:not(:disabled) { background: none; }
+.settings-bulk.is-toolbar .bulk-button:disabled { color: #a3a3a3; }
+.settings-bulk.is-toolbar .bulk-button svg { flex: none; }
 .settings-card {
   display: flex;
   align-items: center;

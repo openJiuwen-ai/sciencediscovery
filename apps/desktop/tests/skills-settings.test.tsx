@@ -347,6 +347,30 @@ test("Disable all is one write for the whole page and every switch moves on the 
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("the bulk pair sits on the tab row, each label behind its own glyph", async () => {
+  const alpha = { ...skill, id: "alpha", name: "alpha" };
+  const page = { backend: "jiuwenswarm", skills: [installedSkill("alpha")] };
+  const stub = new StubClient().reply([alpha]).reply(page);
+  const view = await mount(stub.asClient());
+  try {
+    // The handoff draws the pair in the toolbar beside the filters, not on a
+    // line over the list: 技能's two writes are looked for there now.
+    const toolbarEnd = view.root.findAllByProps({ className: "skill-toolbar-end" });
+    assert.equal(toolbarEnd.length, 1, "the list has no toolbar end");
+    const bulk = toolbarEnd[0]!.findAllByProps({ className: "settings-bulk is-toolbar" });
+    assert.equal(bulk.length, 1, "the bulk pair is not in the toolbar");
+    const labels = bulk[0]!.findAllByType("button").map((button) => button.children.at(-1));
+    assert.deepEqual(labels, [TEXT.settings.enableAll, TEXT.settings.disableAll]);
+    for (const button of bulk[0]!.findAllByType("button")) {
+      assert.equal(button.findAllByType("svg").length, 1, "a bulk label lost its glyph");
+      assert.equal(button.props["aria-label"], undefined, "the glyph must not rename the button");
+    }
+    const panel = view.root.findAllByProps({ id: "skill-list-panel" });
+    assert.equal(panel.length, 1);
+    assert.equal(panel[0]!.findAllByProps({ className: "settings-bulk" }).length, 0, "the pair is still over the list");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
 test("row switches wait for the bulk write instead of racing it", async () => {
   const alpha = { ...skill, id: "alpha", name: "alpha" };
   const page = { backend: "jiuwenswarm", skills: [installedSkill("alpha")] };

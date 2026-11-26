@@ -96,6 +96,34 @@ export function Switch({
   );
 }
 
+const BULK_GLYPH = {
+  "aria-hidden": true as const,
+  fill: "none",
+  height: 14,
+  stroke: "currentColor",
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  strokeWidth: 2.4,
+  viewBox: "0 0 24 24",
+  width: 14,
+};
+
+/** A play mark inside a ring: the rows go on. */
+const PlayGlyph = () => (
+  <svg {...BULK_GLYPH}>
+    <circle cx="12" cy="12" r="9.2" />
+    <path d="M9 8 15.9 12 9 16Z" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+/** The power mark: the rows go off. */
+const PowerGlyph = () => (
+  <svg {...BULK_GLYPH}>
+    <path d="M6.5 4.6a9.2 9.2 0 1 0 11 0" />
+    <path d="M12 4v6.8" />
+  </svg>
+);
+
 /**
  * The two writes that act on a whole list: every row on, every row off.
  *
@@ -106,21 +134,28 @@ export function Switch({
  *
  * They are drawn as one segmented control rather than two loose links: the
  * pair is a single choice about the list below — on or off — and a border
- * around them says so before either is read.
+ * around them says so before either is read. `toolbar` is the handoff's other
+ * drawing of the same pair: bare labels with a leading glyph, sized to stand
+ * in a page's toolbar beside its filters instead of on a line of their own.
  */
 export function BulkToggles({
   busy,
   onAll,
+  variant = "segmented",
 }: {
   busy?: boolean;
   onAll: (enabled: boolean) => void;
+  variant?: "segmented" | "toolbar";
 }) {
+  const inline = variant === "toolbar";
   return (
-    <div className="settings-bulk">
+    <div className={`settings-bulk${inline ? " is-toolbar" : ""}`}>
       <button className="bulk-button" disabled={busy} onClick={() => onAll(true)} type="button">
+        {inline ? <PlayGlyph /> : null}
         {TEXT.settings.enableAll}
       </button>
       <button className="bulk-button" disabled={busy} onClick={() => onAll(false)} type="button">
+        {inline ? <PowerGlyph /> : null}
         {TEXT.settings.disableAll}
       </button>
     </div>
