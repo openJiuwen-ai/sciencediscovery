@@ -234,4 +234,42 @@ contextBridge.exposeInMainWorld("sdShell", {
   exportFile,
   /** Finished exports, kept across restarts (#1154). */
   exportHistory,
+  /** [mac-direct] 设置 › 连接 › 沙箱网络 reads/writes the installation-level opt-in for
+   *  direct candidate execution. Only a darwin shell answers `available: true`
+   * (Windows hard-sets the env flag it implies, a plain browser has no shell),
+   * so the settings row renders only where the answer says it exists. The
+   * write replies with the re-read persisted value — a failed write shows up
+   * as the toggle bouncing back rather than a stale switch. */
+  directExecution: {
+    get: (): Promise<{ available: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke("sd-shell:direct-execution-get"),
+    set: (enabled: boolean): Promise<{ available: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke("sd-shell:direct-execution-set", enabled),
+  },
+  /** [U5c] This session's sandbox probe verdict, read by the settings row's
+   *  status line — the one place sandbox health is surfaced (owner decision
+   *  2026-11-23: the boot neither blocks nor mentions the sandbox). Replies
+   *  `{ kind: "failed", reason, diagnostics }` when the probe failed (the
+   *  session then runs unsandboxed, and the per-run confirmation stays armed
+   *  for evolution candidates), or `{ kind: "ok" | "not-applicable" }`.
+   *  A plain browser has no bridge at all. Pull on demand: the verdict is
+   *  decided once in whenReady and never changes while the app runs. */
+  seatbeltStatus: (): Promise<
+    | { kind: "ok"; platform: "darwin"; directActive: boolean; modeKnown: boolean }
+    | {
+      kind: "failed";
+      platform: "darwin";
+      reason: string;
+      diagnostics: string[];
+      detail: { failCode: "spawn-error" | "signal" | "exit-code"; signal?: string; exitCode?: number; spawnError?: string };
+      directActive: boolean;
+      modeKnown: boolean;
+    }
+    | null
+  > => ipcRenderer.invoke("sd-shell:seatbelt-status-get"),
+  // [U5c] The U4 seatbeltOptIn bridge (error-page authorize-and-relaunch)
+  // is retired with the Seatbelt gate itself, and the U5 ready-page banner
+  // is retired with the wizard's seatbelt fields: sandbox health shows in
+  // 设置 › 连接 › 沙箱网络's status row alone. The settings switch above remains the
+  // one installation-level entrance.
 });

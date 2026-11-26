@@ -30,6 +30,10 @@ import { Group, Row } from "./rows.js";
  * the setting that decides what every other label on the page says, and an
  * OS-drawn popup in the system's own type and colours reads as a piece of the
  * operating system that wandered in.
+ *
+ * [mac-direct] The installation-level sandbox opt-in used to live here; it
+ * moved to the 沙箱网络 group (设置 › 连接) in the same PR — see
+ * SandboxDirectSettings. 通用 keeps only the browser-level preferences.
  */
 export function GeneralSettings({ onShowGuide }: { onShowGuide: () => void }) {
   const language = useLanguage();

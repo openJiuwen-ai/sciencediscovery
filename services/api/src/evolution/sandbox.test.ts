@@ -90,3 +90,21 @@ test("macOS is answered without probing, and Linux is left to the probe", () => 
   // so this helper must not answer for it.
   assert.equal(sandboxForPlatform("linux"), undefined);
 });
+
+test("macOS without the opt-in keeps the Seatbelt contract untouched", () => {
+  // [mac-direct] The opt-in is never implied: a missing flag and an explicit
+  // `false` both answer Seatbelt, exactly as before the branch learned to
+  // read the flag — the default user's fail-closed path must not move.
+  assert.equal(sandboxForPlatform("darwin")?.backend, "seatbelt");
+  assert.equal(sandboxForPlatform("darwin", { unisolated: false })?.backend, "seatbelt");
+});
+
+test("macOS with the opt-in answers direct on the Windows contract", () => {
+  // The installation-level switch alone is not enough to run anything: the
+  // value only opens the door pre-flight's per-run confirmation
+  // (`unisolated_run_unconfirmed`) guards. Here we pin the hand-down shape.
+  const optedIn = sandboxForPlatform("darwin", { unisolated: true });
+  assert.ok(optedIn);
+  assert.equal(optedIn.backend, "direct");
+  assert.equal(toSidecarCapability(optedIn).backend, "direct");
+});

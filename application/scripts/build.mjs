@@ -42,7 +42,7 @@ if (watch) {
       process.exit(1);
     }
   }
-  for (const page of ["fallback.html", "wizard.html", "loading.html", "seatbelt-error.html"]) {
+  for (const page of ["fallback.html", "wizard.html", "loading.html"]) {
     cpSync(join(root, "src", page), join(root, "dist", page));
   }
   // The redesigned wizard/loading pages share the SPA wizard's art

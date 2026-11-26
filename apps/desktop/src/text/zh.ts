@@ -974,17 +974,17 @@ export const ZH = {
       timeoutTitle: "部分组件未就绪",
       timeoutSub: "执行引擎首次准备可能较慢；可等待后重新检查。",
       fallbackError: "未知原因。可查看日志后重试；杀毒软件可能拦截了环境准备。",
-      seatbeltFailedTitle: "未检测到 macOS 沙箱（Seatbelt）",
-      seatbeltRetryHint: "若刚解除 MDM 限制或修改了系统配置，请重启应用后重新检测。",
+      /* [U5c] The Seatbelt keys of this block (items.seatbelt,
+         seatbeltFailedTitle/RetryHint/NotApplicable/OptInTitle) are retired
+         with the wizard's Seatbelt row and banner: sandbox health lives in
+         设置 › 连接 › 沙箱网络's status row alone (owner decision 2026-11-23). */
       items: {
-        seatbelt: "macOS 沙箱（Seatbelt）",
         api: "本地 API 服务",
         runner: "执行引擎（Python 运行环境）",
         model: "默认任务模型（可选，可稍后在设置中配置）",
       },
       notChecked: "未检查",
       runnerNeedsToken: "未检查（需要令牌）",
-      seatbeltNotApplicable: "未检查（仅 macOS 提供沙箱）",
       retry: "重新检查",
       retryBoot: "重试",
       logs: "打开日志文件夹",
@@ -1315,6 +1315,76 @@ export const ZH = {
         emptyDomains: "至少填写一个允许的域名。",
         saveDomains: "保存",
         scope: "只作用于 run_shell 与沙箱内的代码。",
+        /** [mac-direct] 安装级 opt-in。开启后本地代码执行不再经过沙箱：
+         *  影响范围是整个本地执行栈——Agent 的临时 Shell/Python 与程序
+         *  演进的候选程序都以你本人的文件、网络与环境权限运行；持久
+         *  Shell 会话与持久内核仅在沙箱可用时提供，无沙箱时不可用；
+         *  程序演进每次运行前仍会单独确认。仅 macOS 壳层显示。
+         *  文案红线：如实描述完整影响范围，不得缩窄为「仅候选程序」
+         *  （评审 2026-11-23 要求）。
+         *  [hint-split] 呈现分层（2026-11-24 用户实测反馈）：hint 只留
+         *  一句主旨，完整影响范围移入 hintDetails；内容逐条保留，红线
+         *  不变——测试断言改为 hint + hintDetails 合并文本。
+         *  [F29] 重启条款留在主旨 hint，不进 details：拨动开关没有即时
+         *  反馈（状态行在下次 spawn 前一直报 spawn 时的模式），条款是
+         *  唯一能解释拨动后窗口期的文字——在唯一要紧的时刻必须常显。 */
+        directExecution: {
+          heading: "沙箱",
+          field: "无沙箱运行本地代码",
+          hint: "开启后，本地代码执行不经过沙箱。重启应用后生效。",
+          hintDetails: [
+            "代码以你本人的文件、网络与环境权限运行（含 Agent 的临时 Shell/Python 与程序演进的候选程序）",
+            "持久 Shell 会话与持久内核需要沙箱，届时不可用",
+            "R 语言执行需要沙箱，开启后不可用（直跑通道仅支持 Python）",
+            "程序演进每次运行前仍会单独确认",
+            ],
+          showDetails: "了解完整影响",
+          hideDetails: "收起",
+        },
+        /** [U5c] 设置 › 连接 › 沙箱网络 的沙箱状态行——沙箱健康信息的唯一展示处
+         *  （owner 2026-11-23：初始化不拦截不提示，沙箱监测只在设置）。
+         *  [F16] 行的状态由开关与探测共同推导：开关 OFF 时 ok/failed 如实
+         *  描述探测与会话模式；开关 ON 时一律 optedOut——会话实际是无沙箱
+         *  直跑，行必须如实说，回退方式是关闭开关重启（不是"恢复沙箱后
+         *  重启"）。[F14] not-applicable/unknown 两态已删：IPC 层把非
+         *  darwin 探测结果归一为 null，行不渲染。failCause 按 detail.
+         *  failCode 本地化成因。 */
+        status: {
+          field: "沙箱状态",
+          ok: "✓ macOS 沙箱（Seatbelt）运行中，本地代码执行经过沙箱",
+          /** [F26] The adopted-stack window: this session attached to an
+           *  already-running backend, so the mode the ok/optedOut sentences
+           *  would assert is an inference from this shell's inputs, not the
+           *  survivor's env — the row says so instead of guessing.
+           *  [F26-followup] No restart advice: quitting stops only a stack
+           *  this shell spawned, so a restart usually re-adopts the same
+           *  surviving stack. The honest way to verify is to stop that
+           *  backend and let the app spawn its own. */
+          attached: "本次会话连接了一个已在运行的后端栈，其沙箱模式未经本会话验证（无法从外部确认）。如需确认运行模式，请先停止该后端进程（在启动它的终端中中断，或在“活动监视器”中结束），再由应用自行启动栈。",
+          /** [F16] The honest row: when the switch is ON, the session runs
+           *  direct no matter what the probe said — the row must say so. The
+           *  way back is the switch, not "restore and restart". */
+          optedOut: "本地代码当前不经沙箱直接运行（你已开启下方开关）。关闭开关并重启应用，即可回到沙箱模式。",
+          /** [F22] The mid-session toggle-off window: the stack still runs
+           *  direct but the switch is already OFF — tell the user the restart
+           *  is what applies their change, not "turn off the switch" (which
+           *  they just did). [F24] No probe clause here: this sentence only
+           *  renders when the probe verdict is not "failed" (the failed
+           *  branch wins the row), so a probe cause can never reach it. */
+          optedOutSwitchOff: "本地代码当前不经沙箱直接运行（本次会话启动时无沙箱开关为开启状态）。重启应用后，即可回到沙箱模式。",
+          /** The probe failed this session — the cause follows from the
+           *  structured detail (failCause sentence), the raw reason rides the
+           *  dot's tooltip with the diagnostics. R execution needs a sandbox
+           *  and is refused in this session too (F17). */
+          failed: "沙箱不可用：本次会话以无沙箱模式运行本地代码，R 语言执行与持久 Shell 会话/持久内核不可用（详见下方开关说明）；程序演进每次运行前仍会单独确认。",
+          /** Composed from detail.failCode — zh sentences for the three
+           *  structured causes (spawn-error / signal / exit-code). */
+          failCause: {
+            "spawn-error": "原因：找不到 sandbox-exec 命令。",
+            signal: "原因：探测进程被信号终止，无法确认 Seatbelt 可用。",
+            "exit-code": "原因：在 MDM 受控或嵌套虚拟化环境中 Seatbelt 可能被禁用。",
+            },
+        },
       },
     },
     runtime: {

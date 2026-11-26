@@ -30,15 +30,6 @@ export interface SelfCheckResult {
   runnerChecked: boolean;
   /** Informational only — never gates entry (just-in-time config). */
   modelConfigured: boolean;
-  /** Seatbelt probe (B2-2): "ok" on a capable macOS, "failed" gates entry
-   *  FAIL-CLOSED (upstream red line: a failed probe must not pass go), and
-   *  "not-applicable"/"unknown" never gate (Windows runs unsandboxed by
-   *  design; a plain browser has no bridge to ask the shell). */
-  seatbelt: "ok" | "failed" | "not-applicable" | "unknown";
-  /** reason + diagnostics from the Seatbelt verdict, surfaced on the error
-   *  page (empty unless seatbelt === "failed"). */
-  seatbeltReason?: string;
-  seatbeltDiagnostics?: string[];
   ok: boolean;
 }
 
@@ -58,37 +49,13 @@ async function fetchSettings(
 // --- self-check (no model hard gate) -------------------------------------------
 
 /** Run once; the wizard page polls until green or gives up (env provisioning).
- * `seatbeltProbe` (optional, B2-2) is a pre-computed verdict from
- * sandbox-probe.ts's runSeatbeltProbe; omitting it (a plain browser path with
- * no shell bridge) reports "unknown", which never gates. */
+ * [U5c] The Seatbelt fields and the probe/opt-in parameters are retired: the
+ * self-check's one job is the backend stack (api/runner/model), and sandbox
+ * health is surfaced by 设置 › 连接 › 沙箱网络's status row alone (owner decision
+ * 2026-11-23 — the boot neither blocks nor mentions the sandbox). */
 export async function runSelfCheck(
   apiBase: string, token: string, runnerBase: string | null, fetchImpl: WizardFetch,
-  seatbeltProbe?: { kind: "ok" | "failed" | "not-applicable" } & Partial<{
-    reason: string; diagnostics: string[];
-  }>,
 ): Promise<SelfCheckResult> {
-  const seatbelt = seatbeltProbe?.kind === "ok" || seatbeltProbe?.kind === "failed"
-    ? seatbeltProbe.kind
-    : seatbeltProbe?.kind === "not-applicable"
-      ? "not-applicable"
-      : "unknown";
-  // reason/diagnostics are failure-page payload: only a "failed" verdict
-  // carries them (ok/not-applicable verdicts have nothing to explain).
-  const seatbeltDetail = seatbelt === "failed" ? {
-    ...(seatbeltProbe?.reason ? { seatbeltReason: seatbeltProbe.reason } : {}),
-    ...(seatbeltProbe?.diagnostics?.length ? { seatbeltDiagnostics: seatbeltProbe.diagnostics } : {}),
-  } : {};
-  // Fail-closed (B2-2): a failed Seatbelt verdict gates entry regardless of
-  // the other components — skip the backend round-trips, the user is not
-  // getting in. (Upstream red line: the probe failure never passes go.)
-  if (seatbelt === "failed") {
-    return {
-      api: false, runner: false, runnerChecked: false, modelConfigured: false,
-      seatbelt,
-      ...seatbeltDetail,
-      ok: false,
-    };
-  }
   let api = false;
   let health: HealthDetailResponse | null = null;
   try {
@@ -114,12 +81,8 @@ export async function runSelfCheck(
     // itself is part of the API's authenticated answer.
     runnerChecked: runnerBase !== null,
     modelConfigured,
-    seatbelt,
-    ...seatbeltDetail,
     // No model gate — the user may enter unconfigured and set up
     // models from the main UI (the backend's 409 guidance covers first use).
-    // Seatbelt "ok"/"not-applicable"/"unknown" never gates here: the probe
-    // already ran (main.ts) before the stack was ever spawned.
     ok: api && (!runnerBase || runner),
   };
 }

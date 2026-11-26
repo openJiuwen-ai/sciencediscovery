@@ -30,6 +30,7 @@ import type { EvolveGoal, ModelProfile, ScorecardCriterion } from "@sciencedisco
 import { describeEvolveBudget, perCallCeiling } from "./call-budget.js";
 import { endpointCanDisableThinking } from "./model-thinking.js";
 import { preflight } from "./preflight.js";
+import { sandboxForPlatform } from "./sandbox.js";
 import type { EvolveSandboxCapability } from "./sandbox.js";
 
 const SANDBOX: EvolveSandboxCapability = {
@@ -249,6 +250,33 @@ test("a judged run needs no confirmation for direct execution", async () => {
     (await codes(judged(), { sandbox: direct })).includes("unisolated_run_unconfirmed"),
     false,
   );
+});
+
+test("[mac-direct] a darwin install's decision wires straight into the confirmation chain", async () => {
+  // U1's L3 answers and U3's chain consumes: without the installation-level
+  // opt-in the answer is Seatbelt and the confirmation chain must stay
+  // dormant (nothing to confirm on an isolated run); with the opt-in the
+  // answer is direct and the chain engages exactly as it does on Windows —
+  // the user confirms per run or the run is refused. This is the
+  // integration pin between the two halves.
+  for (const [optIn, expectedBackend] of [
+    [false, "seatbelt"], [true, "direct"],
+  ] as const) {
+    const decided = sandboxForPlatform("darwin", { unisolated: optIn });
+    assert.ok(decided, "L3 always answers for darwin");
+    assert.equal(decided.backend, expectedBackend);
+    const capability = decided;
+    const chain = await codes({ allowUnisolated: false }, { sandbox: capability });
+    if (optIn) {
+      assert.deepEqual(chain, ["unisolated_run_unconfirmed"],
+        "opt-in: an unconfirmed direct run is refused, exactly the Windows contract");
+      assert.deepEqual(await codes({ allowUnisolated: true }, { sandbox: capability }), [],
+        "opt-in: the per-run confirmation clears the refusal");
+    } else {
+      assert.equal(chain.includes("unisolated_run_unconfirmed"), false,
+        "default: the chain stays dormant, nothing to confirm on Seatbelt");
+    }
+  }
 });
 
 test("a model that cannot be called is caught before the run exists", async () => {

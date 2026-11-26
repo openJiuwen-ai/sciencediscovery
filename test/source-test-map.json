@@ -3629,6 +3629,18 @@
           "complexity": "C1"
         }
       ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SandboxDirectSettings.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
     }
   ]
 }

@@ -49,11 +49,14 @@ export function Row({
   children: ReactNode;
   hint?: string;
   title: string;
-  /** `stack` puts the control on its own line, for inputs too wide to sit beside their label. */
-  tone?: "stack";
+  /** `stack` puts the control on its own line, for inputs too wide to sit beside their label.
+   *  `status` lays the row out as label-left + indicator-right, vertically
+   *  centred — for a status dot that belongs beside its text, never under it
+   *  (a 10px dot on a full-width control line reads as a stray mark). */
+  tone?: "stack" | "status";
 }) {
   return (
-    <div className={`settings-row${tone === "stack" ? " is-stack" : ""}`}>
+    <div className={`settings-row${tone === "stack" ? " is-stack" : tone === "status" ? " is-status" : ""}`}>
       <div className="row-title">
         <div>
           <strong>{title}</strong>

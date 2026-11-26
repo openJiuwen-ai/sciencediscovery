@@ -39,7 +39,8 @@ import { defaultDataDir, probeDataDir } from "./wizard-data-dir.ts";
 import {
   runSelfCheck,
 } from "./wizard-api.ts";
-import { runSeatbeltProbe, seatbeltGateDecision, seatbeltErrorPageQuery, type SeatbeltVerdict } from "./sandbox-probe.ts";
+import { runSeatbeltProbe, type SeatbeltVerdict } from "./sandbox-probe.ts";
+import { readDirectExecution, writeDirectExecution } from "./direct-execution.ts";
 import { setupAutoUpdate, updateEnabled } from "./updater.ts";
 import { type AgentInfo } from "./agent-ready.ts";
 // electron-updater exports a PLATFORM SINGLETON (NsisUpdater on win /
@@ -188,6 +189,13 @@ let stackStopInFlight = false;
  *  running; stopping it goes through the stack's own stop path, not a
  *  handle we hold. Cleared when the reuse probe stops finding it. */
 let externalStackAlive = false;
+// [F26] True when this session ADOPTED an already-running backend instead of
+// spawning one (ensureBackend's health-probe hit). The settings row renders
+// sandbox mode from this shell's own inputs; for an adopted stack those
+// inputs are an inference, not the surviving process's actual env — the
+// payload then carries modeKnown:false so the row can hedge instead of
+// asserting (review round 14).
+let stackAdoptedThisSession = false;
 /** F8: the updater's drain-retry hook (re-enter stopStack → visible
  *  install for a gate-blocked update), captured so the drain-blocked
  *  dialog's "stop and install" button can call it. */
@@ -257,33 +265,77 @@ function persistToken(token: string, dataDir?: string | null): boolean {
   }
 }
 
-/** The SPA's locale choice, mirrored into the shell's world so the
- *  fail-closed page can follow it (review F13: that page is a file://
- *  origin while the SPA is http://127.0.0.1 — localStorage does NOT
- *  cross that boundary, so the page cannot read the SPA's own stored
- *  choice; the shell persists it here and passes it via the page query).
- *  Kept in userData (a shell-owned location), written best-effort. */
-let shellLocale: "zh-CN" | "en" | null = null;
-
-function readShellLocale(): "zh-CN" | "en" | null {
-  if (shellLocale) return shellLocale;
-  try {
-    const raw = readFileSync(join(app.getPath("userData"), "locale"), "utf8").trim();
-    shellLocale = raw === "en" ? "en" : raw === "zh-CN" ? "zh-CN" : null;
-  } catch {
-    shellLocale = null;
-  }
-  return shellLocale;
-}
-
+/** [F25-followup] History: this mirror was built for the retired fail-closed
+ *  error page (review F13 — a file:// page that could not read the SPA's
+ *  http origin localStorage, so the shell persisted the locale and passed
+ *  it via query). That page is gone; nothing in this process reads the
+ *  mirror back any more. The IPC handler (sd-shell:report-locale) still
+ *  accepts the renderer's report and writes it here best-effort, kept so
+ *  the bridge contract stays stable for any shell-owned surface that
+ *  wants the stored choice later. [Round-14 cleanup] The write-only module
+ *  variable went with its reader — this is now a pure best-effort write. */
 function writeShellLocale(locale: "zh-CN" | "en"): void {
-  shellLocale = locale;
   try {
     writeFileSync(join(app.getPath("userData"), "locale"), locale, "utf8");
   } catch {
-    // Best-effort mirror: the fail-closed page falls back to
-    // navigator.language when this is missing.
+    // Best-effort mirror: nothing reads it today; a miss is harmless.
   }
+}
+
+// --- [mac-direct] installation-level opt-in -----------------------------------
+//
+// The env pair every stack spawn carries when the darwin installation opted
+// into direct candidate execution. SCIENCE_AGENT_SANDBOX_PROVIDER=none puts
+// the runner itself in direct mode (start-stack whitelists "none" and the
+// runner's own provider whitelist accepts it), and SCIENCE_AGENT_EVOLVE_
+// UNISOLATED=1 answers the evolve API's opt-in question the same way the
+// Windows shell always does. The pair injects in two darwin cases: the
+// installation-level opt-in, AND a session whose Seatbelt probe FAILED —
+// [U5c, owner decision 2026-11-23] a probe failure must not keep the user
+// out and must not surface anywhere in the boot flow; the stack runs direct
+// and 设置 › 连接 › 沙箱网络's sandbox status row is the one place that says so. Both
+// stay absent on an install whose probe passed — Seatbelt answers there,
+// untouched. Read per spawn (not cached): the settings row can flip while a
+// stack is running, and the next spawn — not this one — is what the row's
+// "applies on restart" copy promises.
+let seatbeltProbeFailedThisSession = false;
+// [U5c] The full verdict of this session's one probe (null before it ran),
+// kept for the settings row's status IPC. Not the gate it once was — the
+// failure detail is display payload only.
+let seatbeltVerdictThisSession: SeatbeltVerdict | null = null;
+async function probeSeatbeltOnce(): Promise<void> {
+  seatbeltVerdictThisSession = await runSeatbeltProbe(process.platform, (cmd, args) => spawn(cmd, args));
+  seatbeltProbeFailedThisSession = seatbeltVerdictThisSession.kind === "failed";
+  if (seatbeltVerdictThisSession.kind === "failed") {
+    log(`[U5c] Seatbelt probe FAILED: ${seatbeltVerdictThisSession.reason} — continuing unsandboxed (status row in 设置 › 连接 › 沙箱网络); per-run confirmation stays armed.`);
+  }
+}
+// [F18] The mode the running stack was actually spawned with — set at the
+// spawn env construction, before any SPA loads. The settings status row
+// renders THIS (not the persisted switch) so a mid-session toggle cannot
+// make the row claim a mode the live stack has not entered: the switch
+// shows the desired state and its hint says a restart applies it; the row
+// states what is running now.
+let directActiveThisSession = false;
+/** [F20/F21] The session's direct-mode truth, from the two inputs the
+ *  spawn env pair itself uses: the shared opt-in file + this session's
+ *  probe verdict. Called at every darwin spawn AND at the attach-to-
+ *  external-stack path (ensureBackend's early return), so the flag
+ *  always reflects the newest known mode — a later sandboxed spawn
+ *  clears it instead of leaving a stale "direct" claim on the row. */
+function sessionRunsDirect(): boolean {
+  return IS_DARWIN && (readDirectExecution(app.getPath("userData")) || seatbeltProbeFailedThisSession);
+}
+function darwinDirectEnv(): NodeJS.ProcessEnv {
+  if (!IS_DARWIN) return {};
+  // [F20] Assign on EVERY call — this is the mode THIS spawn enters, not a
+  // one-way latch (a retry/restart that runs sandboxed must clear it).
+  directActiveThisSession = sessionRunsDirect();
+  if (!directActiveThisSession) return {};
+  return {
+    SCIENCE_AGENT_SANDBOX_PROVIDER: "none",
+    SCIENCE_AGENT_EVOLVE_UNISOLATED: "1",
+  };
 }
 
 async function loadUi(endpoints: Endpoints, token: string | null): Promise<void> {
@@ -711,7 +763,17 @@ async function ensureBackend(
     // over a healthy python tree is the corruption case. Record it so
     // stackFacts reports running (the gate blocks) and stopStack can ask
     // the shared stack to stop by pid instead of "no handle → gate open".
+    // [F21] darwinDirectEnv never runs on the attach path, so the row's
+    // spawn-time flag would stay false while the session it presents may
+    // be direct (probe failed / opt-in on). Derive it from the same inputs
+    // the env pair itself uses — the shared opt-in file + this session's
+    // probe verdict. [F26] An adopted stack's ACTUAL mode is not knowable
+    // from this shell — the payload marks modeKnown:false so the row says
+    // "attached, mode not verified" instead of asserting (review round 14);
+    // the inference still rides along for diagnostics.
     externalStackAlive = true;
+    stackAdoptedThisSession = true;
+    if (IS_DARWIN) directActiveThisSession = sessionRunsDirect();
     return true;
   }
   const repoRoot = resolveRepoRoot(process.env, shellDir, packagedRoot);
@@ -759,6 +821,12 @@ async function ensureBackend(
       ...(proxyEnv ?? {}),
       ...inplaceEnv,
       ...accountsEnv(),
+      // [mac-direct] A darwin installation that opted in runs candidates with
+      // direct execution: the runner provider goes "none" and the evolve API
+      // reads the same opt-in through its own env flag. Every run still needs
+      // the per-run confirmation (pre-flight), so this env pair only ever
+      // opens the door the user must still knock on per run.
+      ...darwinDirectEnv(),
     };
     if (packaged && dataDir) {
       provisioningThisRun = needsUnpack(dataDir, packaged.resourcesPath);
@@ -775,6 +843,10 @@ async function ensureBackend(
     stackOwnedByShell = true;
     stackDir = dataDir;
     handle = stack;
+    // [F26-followup] This spawn makes the stack's mode KNOWN again (this
+    // shell chose its env pair) — clear the adopted latch, or a session
+    // that adopted, lost the backend and respawned would hedge forever.
+    stackAdoptedThisSession = false;
   } else {
     log("previous stack spawn is still running; waiting on it again");
     handle = prior;
@@ -935,27 +1007,13 @@ async function startupFlow(proxyEnv: NodeJS.ProcessEnv | null): Promise<void> {
   // The window shows the local loading page while we probe and (if needed)
   // cold-start the stack; loadUi replaces it once healthy.
   void showLoading();
-  // B2-2 / review F1: the fail-closed Seatbelt gate runs in the MAIN
-  // process before anything else. The SPA's wizard boot step never runs in
-  // the packaged flow (preload marks the shell wizard done, so the SPA
-  // opens at model config), so the SPA-side check alone could never stop a
-  // failed verdict from reaching the main UI. Here the verdict is
-  // load-bearing: "failed" replaces the whole session with the error page
-  // and never loads the SPA (upstream red line). Non-darwin hosts
-  // short-circuit to not-applicable inside the probe without spawning.
-  const gate = seatbeltGateDecision(
-    await runSeatbeltProbe(process.platform, (cmd, args) => spawn(cmd, args)),
-  );
-  if (gate.action === "block") {
-    log(`seatbelt gate FAILED: ${gate.reason}`);
-    // F13: the page is a file:// origin — it cannot read the SPA's
-    // localStorage (http://127.0.0.1), so the shell hands the persisted
-    // locale through the query; the page still falls back to
-    // navigator.language when we never got one.
-    await mainWindow?.loadFile(join(distDir, gate.page), { search: seatbeltErrorPageQuery(gate, readShellLocale()) });
-    return;
-  }
-  SD_PERF("seatbelt-gate-passed");
+  // [U5c] The Seatbelt probe no longer runs here — it moved to app.whenReady
+  // (probeSeatbeltOnce, before the wizard/startup fork) so the first-run
+  // wizard path probes too. A failure blocks nothing in either flow: the
+  // session flag above already carries it into darwinDirectEnv, and the
+  // settings row is where the user reads it. The per-run confirmation door
+  // stays armed regardless.
+  SD_PERF("seatbelt-probe-prewired");
   // Resolve the data dir first so the "connect" stage already reports the
   // correct step total (first run = 10 steps, daily = 8).
   const dataDir = effectiveDataDir(process.env, persistedWizard);
@@ -1104,6 +1162,8 @@ async function startWizardBackend(dataDir: string, proxyEnv: NodeJS.ProcessEnv |
       ...(proxyEnv ?? {}),
       ...inplaceEnv,
       ...accountsEnv(),
+      // [mac-direct] same pair as the daily-start spawn site above.
+      ...darwinDirectEnv(),
     };
     if (packaged) {
       provisioningThisRun = needsUnpack(dataDir, packaged.resourcesPath);
@@ -1263,19 +1323,16 @@ function registerWizardIpc(proxyEnv: NodeJS.ProcessEnv | null): void {
     return { ok: true };
   });
 
-  // B2-2: the Seatbelt verdict is computed once per session and cached —
-  // retrying the self-check does not change whether the OS can compile a
-  // sandbox profile, and re-probing would only re-run a deterministic spawn.
-  // Windows short-circuits inside runSeatbeltProbe (not-applicable) without
-  // spawning anything.
-  let seatbeltVerdict: SeatbeltVerdict | null = null;
+  // [U5c] The wizard's self-check no longer carries the Seatbelt verdict:
+  // the check's one job now is the backend stack (api/runner/model), and
+  // sandbox health lives in 设置 › 连接 › 沙箱网络's status row alone (owner decision
+  // 2026-11-23: 初始化不拦截不提示，沙箱监测只在设置). The probe itself moved
+  // to app.whenReady (probeSeatbeltOnce), so both the wizard flow and the
+  // daily flow share the session's single answer.
   ipcMain.handle("sd-shell:wizard-self-check", async () => {
     const base = wizardApiBase();
     if (!base) throw new Error("后端尚未就绪，请稍候重试。");
-    if (seatbeltVerdict === null) {
-      seatbeltVerdict = await runSeatbeltProbe(process.platform, (cmd, args) => spawn(cmd, args));
-    }
-    return runSelfCheck(base, wizardToken(), wizardRunnerBase(), fetch, seatbeltVerdict);
+    return runSelfCheck(base, wizardToken(), wizardRunnerBase(), fetch);
   });
 
   // Optional model configuration after backend self-check passes.
@@ -1587,9 +1644,9 @@ ipcMain.handle("sd-shell:save-token", async (_event, token: string) => {
   return true;
 });
 
-// F13: the SPA reports its locale choice so the fail-closed page (a
-// different origin) can follow it. The shell mirrors it into userData —
-// the page itself can never read the SPA's localStorage across origins.
+// F13: the SPA reports its locale choice so shell-owned surfaces could
+// follow it (the original consumer — the fail-closed page — is retired;
+// the handler keeps the bridge contract stable and mirrors best-effort).
 ipcMain.handle("sd-shell:report-locale", (_event, locale: unknown) => {
   if (locale === "zh-CN" || locale === "en") writeShellLocale(locale);
   return true;
@@ -1681,6 +1738,75 @@ ipcMain.on("sd-shell:account-session-remove", (event, key: unknown) => {
   } catch {
     event.returnValue = false;
   }
+});
+
+// --- [mac-direct] installation-level opt-in for direct execution ---------------
+// The 设置 › 连接 › 沙箱网络 switch on darwin. Windows never reads or writes it (its
+// shell always sets the env flag — see packagedEnv), so the IPC pair stays
+// darwin-gated: a plain-browser SPA has no bridge anyway, and a win32 shell
+// answering "false" for a flag it hard-sets would only confuse the row out
+// of existence. The reply is the RE-READ persisted value, so a failed write
+// surfaces as "the toggle bounced back" instead of a silent stale switch.
+ipcMain.handle("sd-shell:direct-execution-get", () => ({
+  available: IS_DARWIN,
+  enabled: IS_DARWIN ? readDirectExecution(app.getPath("userData")) : false,
+}));
+ipcMain.handle("sd-shell:direct-execution-set", (_event, on: unknown) => {
+  if (!IS_DARWIN) return { available: false, enabled: false };
+  const enabled = writeDirectExecution(app.getPath("userData"), on === true);
+  log(`[mac-direct] opt-in ${enabled ? "enabled" : "disabled"} (applies on the next stack start)`);
+  return { available: true, enabled };
+});
+
+// [U5] The U4 error-page opt-in handler (sd-shell:seatbelt-opt-in-continue)
+// is retired with the gate: a failed probe no longer loads the error page
+// (the boot continues unsandboxed, owner decision 2026-11-23), so the page's
+// authorization action has no caller. The settings switch remains the one
+// installation-level entrance, and the per-run confirmation stays armed.
+
+// [U5c] The session's sandbox verdict for the settings row's status line —
+// the ONE surface where sandbox health is shown (owner decision 2026-11-23:
+// 初始化不拦截不提示，沙箱监测只在设置). Answers a normalized shape the
+// renderer can pin: { kind: "ok" | "failed", platform, detail } — "failed"
+// also carries reason/diagnostics. Non-darwin verdicts are normalized to
+// null (the row is darwin-only; review F14). Registered at top level: the
+// SPA reads it whenever 设置 opens, long after whenReady's single probe.
+ipcMain.handle("sd-shell:seatbelt-status-get", () => {
+  // [U5c] The settings row is the status IPC's only consumer, and the row's
+  // group only renders behind direct.available — a darwin-only answer. A
+  // non-darwin verdict can therefore never be displayed; answering it
+  // anyway would ship a payload state no UI can reach. Normalized here so
+  // the bridge type stays two-state (ok | failed) and the desktop copy
+  // carries no dead branch (review F14). [F18] directActive is the mode
+  // the running stack was spawned with (set inside darwinDirectEnv), so
+  // the row describes the live stack, not a mid-session switch toggle.
+  if (seatbeltVerdictThisSession?.kind === "failed") {
+    return {
+      kind: "failed" as const,
+      platform: seatbeltVerdictThisSession.platform,
+      reason: seatbeltVerdictThisSession.reason,
+      diagnostics: seatbeltVerdictThisSession.diagnostics,
+      detail: seatbeltVerdictThisSession.detail,
+      directActive: directActiveThisSession,
+      // [F26] A failed verdict is this session's OWN probe — the fact the
+      // row exists to show — so the amber state asserts as before even on
+      // an adopted stack (the probe's failure is true regardless of whose
+      // process runs).
+      modeKnown: true,
+    };
+  }
+  return seatbeltVerdictThisSession?.kind === "ok"
+    ? {
+        ...seatbeltVerdictThisSession,
+        directActive: directActiveThisSession,
+        // [F26] The ok/optedOut sentences assert the stack's mode; on an
+        // adopted stack that mode is an inference from this shell's inputs,
+        // not the survivor's actual env — the row hedges (renders the
+        // attached/unverified state) instead of asserting. A stack this
+        // shell spawned knows its own env, so modeKnown stays true there.
+        modeKnown: !stackAdoptedThisSession,
+      }
+    : null;
 });
 
 // --- study-package export: native save dialog + destination-bound save --------
@@ -2206,6 +2332,15 @@ void app.whenReady().then(async () => {
       registerDrainDismiss: (dismiss) => { drainDropPending = dismiss; },
     });
   }
+
+  // [U5c] Probe Seatbelt ONCE per session, before the wizard/startup fork —
+  // both flows consume the result through darwinDirectEnv (the spawn env
+  // pair) and the settings row (the IPC pull below). The first-run wizard
+  // path previously never probed, so a broken-sandbox machine would spawn a
+  // Seatbelt stack and die mid-boot instead of running direct from the
+  // first spawn. A failure blocks nothing and surfaces nowhere in the boot:
+  // 设置 › 连接 › 沙箱网络 is the one place that shows it.
+  await probeSeatbeltOnce();
 
   if (wizardMode) {
     wizardData = wizardState ?? { step: "data-dir" };

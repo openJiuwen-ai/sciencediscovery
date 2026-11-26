@@ -21,6 +21,7 @@ import { domainEntries } from "../../app/settings-format.js";
 import type { ConfirmRequest, Toast } from "../../app/use-workspace.js";
 import { useLoaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
+import { SandboxDirectSettings } from "./SandboxDirectSettings.js";
 import { Group, LoadGate, Pills, Row } from "./rows.js";
 
 interface Props {
@@ -53,6 +54,15 @@ function modeLabel(mode: SandboxNetworkMode): string {
  * the allowlist mode — which domains it may reach. The private-address switch
  * and the egress route are still absent; the allowlist is the part of the
  * policy this page offers.
+ *
+ * [mac-direct] The page opens with SandboxDirectSettings — the
+ * installation-level switch that decides whether the sandbox runs at all
+ * (user call 2026-11-25: everything that governs the sandbox belongs behind
+ * one 「沙箱」 entrance). It renders before the network rows: 「是否启用
+ * 沙箱」 precedes 「沙箱里的网络规则」, and its own Group heading is the
+ * same 沙箱网络 so the two blocks read as one section. It mounts outside
+ * the LoadGate: it reads the shell bridge, not the service, so it needs no
+ * server round-trip to say its first word.
  *
  * 无网络 and 开放网络 are written on the press that picks them: there is
  * nothing to stage, so a save button would only be a step between the choice
@@ -181,12 +191,17 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
   };
 
   return (
-    <LoadGate loaded={loaded}>
-      {() => (
-        <>
-          {current ? (
-            <Group heading={TEXT.settings.network.sandbox.heading}>
-              <Row hint={TEXT.settings.network.sandbox.scope} title={TEXT.settings.network.sandbox.mode}>
+    <>
+      {/* [mac-direct] The opt-in block above the network rows — see the
+          component's own notes for the ordering rationale. Outside the
+          LoadGate: it polls the shell bridge, not the service. */}
+      <SandboxDirectSettings />
+      <LoadGate loaded={loaded}>
+        {() => (
+          <>
+            {current ? (
+              <Group heading={TEXT.settings.network.sandbox.heading}>
+                <Row hint={TEXT.settings.network.sandbox.scope} title={TEXT.settings.network.sandbox.mode}>
                 <Pills
                   label={TEXT.settings.network.sandbox.mode}
                   onChange={(value) => {
@@ -239,8 +254,9 @@ export function NetworkSettings({ client, onConfirm, toast }: Props) {
           ) : null}
 
           {failure ? <small className="row-note is-error">{failure}</small> : null}
-        </>
-      )}
-    </LoadGate>
+          </>
+        )}
+      </LoadGate>
+    </>
   );
 }

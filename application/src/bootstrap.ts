@@ -131,10 +131,12 @@ export function packagedEnv(paths: PackagedPaths, dataDir: string, platform: She
   // whose goal does not carry the user's confirmation, collected by the
   // create dialog's warning switch. Set here and nowhere else, so a server
   // deployment cannot pick it up by accident.
-  // darwin NEVER sets it: Seatbelt answers there without any opt-in
-  // (services/api sandboxForPlatform returns "seatbelt" before reading
-  // this flag), and defense in depth keeps the unisolated escape hatch a
-  // Windows-only contract even if that branch ever changes.
+  // [F25] darwin no longer "NEVER" sets this pair: since U5c (owner
+  // decision 2026-11-23) the shell injects it per-spawn for a darwin
+  // installation too (see main.ts darwinDirectEnv) — when the opt-in file
+  // says so, or the session's Seatbelt probe failed. This win32 branch
+  // remains the unconditional hard-set for the platform that has no
+  // sandbox story at all; darwin's is conditional and spawn-scoped.
   if (platform === "win32") env.SCIENCE_AGENT_EVOLVE_UNISOLATED = "1";
   // [mac-desktop] W22: the jw venv runs straight out of the sealed .app
   // bundle. Python writes __pycache__/.pyc next to imported sources on
