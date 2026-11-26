@@ -389,7 +389,17 @@ export const ZH = {
     permissionAskDesc: "编辑外部文件和使用互联网时始终询问",
     permissionFull: "完全访问",
     permissionFullDesc: "可不受限制地访问互联网和您电脑上的任何文件",
-    permissionLocked: "这一轮跑完才能切换权限",
+    /** The pill stays usable during a run (#1330): the switch applies to the
+     *  tool calls that have not run yet. It settles a waiting approval only
+     *  when the new policy covers it: `direct_code` keeps asking, even under
+     *  完全访问. */
+    permissionModeRunning: "权限模式（本轮进行中，更改会影响后续工具调用）",
+    /** Says what the server actually does: the switch waits for an executing
+     *  tool to finish, then stops the session's kernels and shell sessions and
+     *  loses their in-memory state; it settles a waiting approval only when the
+     *  new policy covers it. 仅允许一次 is the safe path for a run that only
+     *  needs the current request released. */
+    permissionRunningHint: "本轮仍在运行：切换影响后续工具调用，并会停掉本会话的科研内核与 Shell 会话（其中的内存状态会丢失；正在执行的工具会先跑完，切换随后生效）；仅结算新策略覆盖的批准，本机直接执行仍需单独确认；只放行当前请求请用「仅允许一次」。",
     attachHint: (limit?: string) => limit === undefined
       ? "放进本次会话的工作区，智能体就能读到。也可以直接把文件拖进界面。"
       : `放进本次会话的工作区，智能体就能读到。单个文件最大 ${limit}。也可以直接把文件拖进界面。`,

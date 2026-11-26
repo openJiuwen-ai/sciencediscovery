@@ -2212,6 +2212,19 @@ body.is-resizing {
   line-height: 1.45;
 }
 
+/* Why the mode can be changed while a turn is running (#1330). The two rows
+   above already say what each mode allows; this says when the choice lands. */
+.session-flyout-note {
+  margin: 8px 10px 2px;
+  padding-top: 8px;
+  border-top: 1px solid #ececec;
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.session-flyout-note:empty { display: none; }
+
 /* Read by assistive technology, drawn for nobody: the row's explanation is in
    a tooltip the eye sees and the name must not swallow. */
 .sr-only {
