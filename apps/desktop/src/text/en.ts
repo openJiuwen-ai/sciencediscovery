@@ -392,7 +392,17 @@ export const EN: Text = {
     permissionAskDesc: "Always ask before editing external files or using the internet",
     permissionFull: "Full access",
     permissionFullDesc: "Access the internet and any file on your computer without restriction",
-    permissionLocked: "You can change permissions when this run finishes",
+    /** The pill stays usable during a run (#1330): the switch applies to the
+     *  tool calls that have not run yet. It settles a waiting approval only
+     *  when the new policy covers it: `direct_code` keeps asking, even under
+     *  full access. */
+    permissionModeRunning: "Permission mode (this run is going; changes affect later tool calls)",
+    /** Says what the server actually does: the switch waits for an executing
+     *  tool to finish, then stops the session's kernels and shell sessions and
+     *  loses their in-memory state; it settles a waiting approval only when the
+     *  new policy covers it. Allow once is the safe path for a run that only
+     *  needs the current request released. */
+    permissionRunningHint: "Still running: the change affects later tool calls and stops this session's kernels and shell sessions (their in-memory state is lost; an executing tool finishes first, then the switch takes effect); only approvals the new policy covers are settled, direct-on-machine requests still ask separately; to release only this request, use Allow once.",
     attachHint: (limit?: string) => limit === undefined
       ? "Files go into this session's workspace, where the agent can read them. You can also drag files onto the window."
       : `Files go into this session's workspace, where the agent can read them. A single file may be up to ${limit}. You can also drag files onto the window.`,

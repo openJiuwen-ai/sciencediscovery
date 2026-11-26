@@ -20,7 +20,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { Attachment } from "../src/app/attachments.js";
-import { TEXT } from "../src/text.js";
+import { setLanguage, TEXT } from "../src/text.js";
+import { EN } from "../src/text/en.js";
 import { Composer, ExpertFlyout, ModelMenu, PermissionFlyout, SessionSettingsMenu } from "../src/views/Composer.js";
 import { filterExperts } from "../src/views/expert-catalog.js";
 import { modelBrand } from "../src/views/model-brand.js";
@@ -293,6 +294,43 @@ test("a permission option says on screen what it allows", () => {
   assert.match(markup, /aria-describedby="session-permission-full-desc"/);
   // The mode in force is the one marked.
   assert.equal(markup.split("is-selected").length - 1, 1);
+  // Idle: no running-turn note, so the flyout is not longer than its choices.
+  assert.doesNotMatch(markup, /session-flyout-note/u);
+});
+
+test("opening the mode switch mid-run says when the change lands", () => {
+  const markup = renderToStaticMarkup(
+    <PermissionFlyout mode="ask_for_dangerous" onApprovalMode={() => {}} onClose={() => {}} running />,
+  );
+  // The note promises exactly what the server does: the switch stops the
+  // session's kernels and shell sessions, and only a request the new policy
+  // covers is settled (a direct-on-machine request still asks separately).
+  assert.match(
+    markup,
+    /class="session-flyout-note">本轮仍在运行：切换影响后续工具调用，并会停掉本会话的科研内核与 Shell 会话（其中的内存状态会丢失；正在执行的工具会先跑完，切换随后生效）；仅结算新策略覆盖的批准，本机直接执行仍需单独确认；只放行当前请求请用「仅允许一次」。/u,
+  );
+});
+
+test("the mid-run note is English in the English interface", () => {
+  // The note is a sentence, not a key: the English interface has to get the
+  // copy from en.ts. The language is module state, so the test puts it back for
+  // whatever runs next.
+  setLanguage("en");
+  try {
+    const markup = renderToStaticMarkup(
+      <PermissionFlyout mode="ask_for_dangerous" onApprovalMode={() => {}} onClose={() => {}} running />,
+    );
+    // React escapes the apostrophes in "session's" as &#x27;, so the sentence is
+    // compared in the form it reaches the document.
+    const expected = EN.composer.permissionRunningHint.replace(/'/gu, "&#x27;");
+    assert.ok(
+      markup.includes(`class="session-flyout-note">${expected}<`),
+      "the English flyout note is the English sentence from en.ts",
+    );
+    assert.doesNotMatch(markup, /本轮仍在运行/u, "the English interface does not print the Chinese note");
+  } finally {
+    setLanguage("zh-CN");
+  }
 });
 
 /** Two experts, enough to tell a catalog from a list of fixed choices. */
@@ -387,12 +425,16 @@ test("the 专家 row is named by its label and value, and its hint is attached",
   assert.doesNotMatch(markup, /role="tooltip"/);
 });
 
-test("permission cannot be switched mid-run", () => {
-  // The footer control is the only door now, so it is the one that has to lock:
-  // a policy change mid-run would land on a turn already running under the old
-  // one.
-  const markup = render(true);
-  assert.match(markup, /<button[^>]*class="composer-permission[^"]*"[^>]*disabled=""/);
+test("the permission mode can be switched mid-run and says it affects later calls", () => {
+  // The server switches the session's policy while a run is active and settles
+  // the request the turn is blocked on (#1330). The footer control is the only
+  // door, so it must stay open — with a title that scopes the change to the
+  // tool calls still to come rather than claiming the run cannot be re-scoped.
+  const markup = render(true, { approvalMode: "ask_for_dangerous" });
+  const trigger = markup.match(/<button[^>]*class="composer-permission[^"]*"[^>]*>/u)?.[0];
+  assert.ok(trigger !== undefined, "the permission control is drawn while running");
+  assert.doesNotMatch(trigger, /disabled=""/, "the run no longer locks the control");
+  assert.match(trigger, /title="权限模式（本轮进行中，更改会影响后续工具调用）"/u);
 });
 
 test("the landing arrangement carries the project and the approval mode under the card", () => {

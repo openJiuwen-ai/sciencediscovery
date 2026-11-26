@@ -330,11 +330,16 @@ export function PermissionFlyout({
   mode,
   onApprovalMode,
   onClose,
+  running = false,
 }: {
   /** The current mode, or `undefined` while nothing has been chosen. */
   mode?: ApprovalMode;
   onApprovalMode: (mode: ApprovalMode) => void;
   onClose: () => void;
+  /** A turn is in progress: the switch applies to what has not run yet, stops
+   *  the session's kernels and shell sessions, and settles a waiting approval
+   *  only when the new policy covers it. */
+  running?: boolean;
 }) {
   return (
     <div className="session-menu-flyout">
@@ -388,6 +393,14 @@ export function PermissionFlyout({
           </span>
         ) : null}
       </button>
+      {running ? (
+        /* Visible, not only a title (#1330): the reader who opened this flyout
+           mid-run is deciding what the rest of the running turn may do. The
+           copy states the server's actual scope: teardown of the session's
+           kernels and shell sessions, and a `direct_code` request that still
+           asks on its own. */
+        <p className="session-flyout-note">{TEXT.composer.permissionRunningHint}</p>
+      ) : null}
     </div>
   );
 }
@@ -1348,12 +1361,11 @@ export function Composer({
             aria-expanded={menu === "permission"}
             aria-label={fullAccess ? TEXT.composer.permissionFull : TEXT.composer.permission}
             className={`composer-permission${fullAccess ? " is-danger" : ""}`}
-            disabled={running}
             onClick={(event) => {
               event.stopPropagation();
               setMenu(menu === "permission" ? undefined : "permission");
             }}
-            title={running ? TEXT.composer.permissionLocked : TEXT.composer.permissionMode}
+            title={running ? TEXT.composer.permissionModeRunning : TEXT.composer.permissionMode}
             type="button"
           >
             <ShieldGlyph alert={fullAccess} />
@@ -1367,6 +1379,7 @@ export function Composer({
                 mode={mode}
                 onApprovalMode={onApprovalMode}
                 onClose={() => setMenu(undefined)}
+                running={running}
               />
             </div>
           ) : null}
