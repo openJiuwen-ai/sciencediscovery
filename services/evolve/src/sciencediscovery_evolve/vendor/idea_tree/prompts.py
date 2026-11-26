@@ -5,8 +5,16 @@ mechanisms, explanations, or intervention paths.
 Later hypotheses must address a specific prior weakness or unresolved alternative, naming the
 source candidate, change, evaluation question and tradeoff. Never invent literature evidence.
 Only candidate leaves execute; a completed candidate can be the parent of a new research direction.
-Return each candidate under one of selectedParentIds. When expanding ROOT or a completed candidate,
-provide direction; refinements are optional progressively more specific subdirections. Do not pad
+Return each candidate under one of selectedParentIds and follow its selectedParentConstraints entry.
+remainingDepth counts all available levels below that parent; reserve one for the candidate itself.
+maxPathSteps is the remaining allowance for intermediate direction/refinement nodes.
+Provide direction when directionRequired is true; otherwise omit it. A direction consumes one
+path step only when directionNodeAllowed is true. Under ROOT, direction is a required label when
+directionRequired is true, but does not add a node. Under a completed candidate with no room for a
+direction node, still name the direction: it is retained as candidate metadata and the candidate
+attaches directly to the parent. Use at most maxRefinements progressively more specific refinements;
+when maxRefinements is zero, return refinements: []. Compress the hierarchy to fit these limits,
+keeping essential scientific constraints in the hypothesis rather than dropping them. Do not pad
 the path to maxDepth: it is a safety ceiling, and the tree grows only when evidence calls for it.
 For every proposal include expectedImprovement, newRisk and rationale. For every exploit proposal,
 include basedOnCandidateIds, addressesInsightIds and targetedWeakness.

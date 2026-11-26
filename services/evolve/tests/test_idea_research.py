@@ -418,6 +418,60 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected_parent['id'], '1')
         self.assertEqual(path, ['Mechanism follow-up'])
 
+    def test_expansion_constraints_reserve_the_candidate_and_required_direction(self):
+        # ROOT, existing directions, and completed candidates consume different
+        # intermediate steps. Include both the reported depth-3 case and the last level.
+        cases = [
+            ('ROOT', 'direction', 0, 5, True, False, 4),
+            ('ROOT', 'direction', 0, 1, False, False, 0),
+            ('1', 'direction', 3, 5, False, False, 1),
+            ('1', 'direction', 4, 5, False, False, 0),
+            ('1', 'candidate', 3, 5, True, True, 0),
+            ('1', 'candidate', 4, 5, True, False, 0),
+        ]
+        for identifier, kind, parent_depth, ceiling, required, allowed, refinements in cases:
+            with self.subTest(kind=kind, parent_depth=parent_depth, ceiling=ceiling):
+                self.state['settings']['maxDepth'] = ceiling
+                parent = node(identifier, None, 'Parent', kind, parent_depth)
+                parent['status'] = 'done'
+                self.state['nodes'] = [parent]
+                engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+                constraints = engine.expansion_constraints(parent)
+                self.assertEqual(constraints, dict(parentId=identifier, remainingDepth=ceiling - parent_depth,
+                    maxPathSteps=ceiling - parent_depth - 1, directionRequired=required,
+                    directionNodeAllowed=allowed, maxRefinements=refinements))
+                proposal = dict(parentId=identifier, refinements=['Refinement'] * refinements, hypothesis='Child')
+                if required:
+                    proposal['direction'] = 'Follow-up'
+                _, path = engine.proposal_path(proposal)
+                self.assertEqual(len(path), refinements + int(allowed))
+                self.assertEqual(parent_depth + len(path) + 1, ceiling)
+
+    async def test_ideation_and_correction_receive_selected_parent_constraints(self):
+        attempts = []
+        async def model(role, payload):
+            if role == 'ideate':
+                attempts.append(payload)
+                constraints = payload['selectedParentConstraints']
+                self.assertEqual([entry['parentId'] for entry in constraints], payload['selectedParentIds'])
+                if len(attempts) == 1:
+                    # Trigger the existing correction without altering the tree.
+                    return json.dumps(dict(candidates=[dict(parentId='missing', hypothesis='Invalid')], reason='Retry')), 10
+                entry = constraints[0]
+                proposal = dict(parentId=entry['parentId'], refinements=[], hypothesis=f"Child {payload['round']}")
+                if entry['directionRequired']:
+                    proposal['direction'] = 'New direction'
+                return json.dumps(dict(candidates=[proposal], reason='Fits the parent budget')), 10
+            return await self.model(role, payload)
+        self.state['settings'].update(maxDepth=3, maxRounds=2)
+        await IdeaTreeEngine(self.state, self.store, {}, model).run()
+        self.assertEqual(self.state['status'], 'completed', self.state['reason'])
+        self.assertEqual(len(attempts), 3)
+        self.assertIn('correction', attempts[1])
+        self.assertEqual(attempts[0]['selectedParentConstraints'], attempts[1]['selectedParentConstraints'])
+        self.assertTrue(all(n['depth'] <= 3 for n in self.state['nodes']))
+        self.assertEqual(sum(n['kind'] == 'candidate' for n in self.state['nodes']), 2)
+
     def test_a_proposal_past_the_ceiling_is_trimmed_not_rejected(self):
         """maxDepth is a ceiling, not a target: a model that adds one refinement too
         many keeps the steps that fit. Raising instead cost the whole research — a
