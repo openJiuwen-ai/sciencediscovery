@@ -26,7 +26,7 @@ import type {
   SkillReviewDraftSummary,
 } from "@sciencediscovery/schema";
 
-import type { ApiClient } from "./api.js";
+import { ApiRequestError, type ApiClient } from "./api.js";
 import { translate, useLocale, type MessageKey } from "./i18n/index.js";
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, FileIcon, PlusIcon, TrashIcon } from "./icons.js";
 import { createSkillFolderArchive } from "./skill-folder-import.js";
@@ -55,6 +55,34 @@ interface GitImportLocation {
   ref: string;
   repositoryUrl: string;
   subdirectory: string;
+}
+
+type Translate = (key: MessageKey, variables?: Record<string, string | number>) => string;
+
+function archiveCount(details: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = details?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** A ZIP the server refused for its shape or size arrives with a stable code
+ *  and the numbers behind it. The manager explains the rule that produced the
+ *  refusal — one ZIP is one Skill package — and where a whole repository goes,
+ *  instead of printing the server's English sentence. */
+function archiveRefusal(reason: unknown, t: Translate): string | undefined {
+  if (!(reason instanceof ApiRequestError)) return undefined;
+  const entries = archiveCount(reason.details, "entries");
+  const limit = archiveCount(reason.details, "limit");
+  if (entries === undefined || limit === undefined) return undefined;
+  if (reason.code === "SKILL_ARCHIVE_TOO_LARGE") {
+    return t("skillManager.error.importArchiveTooLarge", { entries, limit });
+  }
+  if (reason.code === "SKILL_ARCHIVE_MULTIPLE_ROOTS") {
+    return t("skillManager.error.importArchiveMultipleRoots", { entries, limit });
+  }
+  if (reason.code === "SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD") {
+    return t("skillManager.error.importArchiveRootWithoutSkillMd", { entries, limit });
+  }
+  return undefined;
 }
 
 const EMPTY_DRAFT: SkillEditorDraft = {
@@ -485,9 +513,13 @@ function SkillCatalogManager({
       await refreshCatalog();
       openWorkspace(imported.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : t("skillManager.error.importSkill");
+      // The banner above the settings dialog renders what `onError` receives,
+      // so a refused ZIP has to travel there as the localized copy too; the
+      // raw error would put the server's English sentence back on screen.
+      const refusal = archiveRefusal(reason, t);
+      const message = refusal ?? (reason instanceof Error ? reason.message : t("skillManager.error.importSkill"));
       setLocalError(message);
-      onError(reason instanceof Error ? reason : message);
+      onError(refusal ?? (reason instanceof Error ? reason : message));
     } finally {
       setBusy(false);
       if (importInput.current) importInput.current.value = "";
@@ -504,9 +536,10 @@ function SkillCatalogManager({
       await refreshCatalog();
       openWorkspace(imported.id);
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : t("skillManager.error.importSkillFolder");
+      const refusal = archiveRefusal(reason, t);
+      const message = refusal ?? (reason instanceof Error ? reason.message : t("skillManager.error.importSkillFolder"));
       setLocalError(message);
-      onError(reason instanceof Error ? reason : message);
+      onError(refusal ?? (reason instanceof Error ? reason : message));
     } finally {
       setBusy(false);
       if (importFolderInput.current) importFolderInput.current.value = "";

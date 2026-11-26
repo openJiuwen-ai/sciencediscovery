@@ -23,7 +23,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { ApiClient } from "../src/api.js";
+import { ApiRequestError } from "../src/api/auth.js";
 import { normalizeGitSkillLocation, requestFromDraft, SkillManager, validateSkillDraft } from "../src/SkillManager.js";
+import { translate } from "../src/i18n/index.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -166,6 +168,65 @@ test("enables folder import only when the browser exposes directory selection", 
   } finally {
     if (original) Object.defineProperty(globalThis, "document", original);
     else Reflect.deleteProperty(globalThis, "document");
+  }
+});
+
+test("a refused ZIP import explains the one-package rule with its entry numbers", async () => {
+  const refusals = [
+    {
+      code: "SKILL_ARCHIVE_TOO_LARGE",
+      details: { entries: 501, limit: 500 },
+      key: "skillManager.error.importArchiveTooLarge",
+      serverMessage: "Skill archive exceeds 500 entries",
+    },
+    {
+      code: "SKILL_ARCHIVE_MULTIPLE_ROOTS",
+      details: { entries: 3, limit: 500 },
+      key: "skillManager.error.importArchiveMultipleRoots",
+      serverMessage: "Skill ZIP must contain one package root",
+    },
+    {
+      code: "SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD",
+      details: { entries: 2, limit: 500 },
+      key: "skillManager.error.importArchiveRootWithoutSkillMd",
+      serverMessage: "Skill ZIP package root must contain SKILL.md",
+    },
+  ] as const;
+  for (const refusal of refusals) {
+    const client = {
+      importSkill: async () => {
+        throw new ApiRequestError(refusal.serverMessage, 400, refusal.code, refusal.details);
+      },
+      listSkillReviewDrafts: async () => [],
+    } as unknown as ApiClient;
+    let renderer: ReactTestRenderer | undefined;
+    // App keeps what `onError` receives in the settings banner, so the raw
+    // English error there would undo the localized copy rendered in the list.
+    const reported: unknown[] = [];
+    await act(async () => {
+      renderer = create(createElement(SkillManager, {
+        client,
+        onCatalogChange: () => undefined,
+        onError: (reason) => { reported.push(reason); },
+        skills: [skill],
+      }));
+    });
+    await act(async () => undefined);
+
+    const input = renderer!.root.findByProps({ "aria-label": "Import SKILL.md or ZIP" });
+    await act(async () => {
+      input.props.onChange({ target: { files: [new File(["PK"], "repository.zip", { type: "application/zip" })], value: "" } });
+    });
+    await act(async () => undefined);
+
+    const text = JSON.stringify(renderer!.toJSON());
+    const expected = translate("en", refusal.key, { entries: refusal.details.entries, limit: refusal.details.limit });
+    assert.ok(text.includes(expected), `${refusal.code} shows the localized rule and numbers`);
+    // One ZIP is one Skill package, and a whole repository belongs in Git import.
+    assert.match(expected, /Import → Git repository/);
+    assert.equal(text.includes(refusal.serverMessage), false, `${refusal.code} does not print the server sentence`);
+    assert.deepEqual(reported, [expected], `${refusal.code} reports the localized copy to the settings banner`);
+    await act(async () => renderer!.unmount());
   }
 });
 

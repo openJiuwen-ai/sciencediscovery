@@ -1132,6 +1132,14 @@ export const EN: Text = {
         remove: "Remove",
         fileSize: (kilobytes: number) => `${kilobytes} KB`,
         writeInstead: "Write from scratch instead",
+        /** A refused ZIP is one Skill package at a time; the server's English
+         *  sentence says neither that nor where a whole repository goes. */
+        archiveTooLarge: (entries: number, limit: number) =>
+          `This ZIP has ${entries} entries, and one Skill package may have at most ${limit}. One ZIP is one Skill package: a single folder with SKILL.md at its root. To import a whole repository, use Import from GitHub.`,
+        archiveMultipleRoots: (entries: number, limit: number) =>
+          `This ZIP has ${entries} entries across more than one top-level folder, but one ZIP must be one Skill package: a single folder (up to ${limit} entries) with SKILL.md at its root. To import a whole repository, use Import from GitHub.`,
+        archiveRootWithoutSkillMd: (entries: number, limit: number) =>
+          `This ZIP has ${entries} entries and its single top-level folder has no SKILL.md. One ZIP is one Skill package: a folder (up to ${limit} entries) with SKILL.md at its root. To import a whole repository, use Import from GitHub.`,
       },
       importAction: "Import",
       importBusy: "Importing…",

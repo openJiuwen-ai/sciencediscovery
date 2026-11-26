@@ -295,6 +295,9 @@ import {
   BUNDLED_SKILL_IDS,
   createDialogueSkillDraft,
   createSessionSkillDraft,
+  SKILL_ARCHIVE_MULTIPLE_ROOTS,
+  SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD,
+  SKILL_ARCHIVE_TOO_LARGE,
   SkillCatalogError,
   type RuntimeSkillSnapshot,
 } from "@sciencediscovery/specialist";
@@ -5087,6 +5090,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "UNSUPPORTED_MEDIA_TYPE") sendError(response, 415, message);
       else if (code === "SKILL_NOT_FOUND") sendError(response, 404, message);
       else if (code === "SKILL_CONFLICT" || code === "SKILL_READ_ONLY") sendError(response, 409, message);
+      // A refused Skill ZIP names its cause in a stable code and carries the
+      // entry count and cap, so the desktop and web explain it in their own
+      // language instead of printing the server's English sentence.
+      else if (error instanceof SkillCatalogError && error.code === SKILL_ARCHIVE_TOO_LARGE)
+        sendError(response, 413, message, error.code, error.details);
+      else if (
+        error instanceof SkillCatalogError
+        && (error.code === SKILL_ARCHIVE_MULTIPLE_ROOTS || error.code === SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD)
+      ) sendError(response, 400, message, error.code, error.details);
       // A package the caller handed over is wrong, whatever wording the
       // validator chose: the code is the stable signal, not its prose.
       else if (code === "SKILL_VALIDATION") sendError(response, 400, message);

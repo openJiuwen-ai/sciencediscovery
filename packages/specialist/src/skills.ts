@@ -96,6 +96,14 @@ export const SKILL_LIMITS = {
   skillMarkdownBytes: 512 * 1024,
 } as const;
 
+/** Stable reasons for a refused Skill ZIP. Both clients localize these codes
+ *  from `details.entries` / `details.limit` instead of printing the English
+ *  prose, which says neither that one ZIP is one package nor that a whole
+ *  repository belongs in the Git import. */
+export const SKILL_ARCHIVE_TOO_LARGE = "SKILL_ARCHIVE_TOO_LARGE";
+export const SKILL_ARCHIVE_MULTIPLE_ROOTS = "SKILL_ARCHIVE_MULTIPLE_ROOTS";
+export const SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD = "SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD";
+
 const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "antibody-design": "1.0.0",
   "assessment-screening": "1.0.0",
@@ -212,11 +220,20 @@ export interface PreparedSkillReviewDraft {
 }
 
 export class SkillCatalogError extends Error {
-  code: "SKILL_CONFLICT" | "SKILL_NOT_FOUND" | "SKILL_READ_ONLY" | "SKILL_VALIDATION";
+  code:
+    | "SKILL_CONFLICT"
+    | "SKILL_NOT_FOUND"
+    | "SKILL_READ_ONLY"
+    | "SKILL_VALIDATION"
+    | typeof SKILL_ARCHIVE_TOO_LARGE
+    | typeof SKILL_ARCHIVE_MULTIPLE_ROOTS
+    | typeof SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD;
 
   constructor(
     code: SkillCatalogError["code"],
     message: string,
+    /** The numbers a client needs to explain the refusal in its own words. */
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.code = code;
@@ -225,6 +242,17 @@ export class SkillCatalogError extends Error {
 
 function validationError(message: string): SkillCatalogError {
   return new SkillCatalogError("SKILL_VALIDATION", message);
+}
+
+/** A ZIP the reader can fix: one package per archive, and no more entries than
+ *  the catalog accepts. The entry count and cap travel with the code so a
+ *  localized message can print them instead of the server's prose. */
+function archiveRefusal(
+  code: typeof SKILL_ARCHIVE_TOO_LARGE | typeof SKILL_ARCHIVE_MULTIPLE_ROOTS | typeof SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD,
+  message: string,
+  entries: number,
+): SkillCatalogError {
+  return new SkillCatalogError(code, message, { entries, limit: SKILL_LIMITS.files });
 }
 
 function slugify(value: string): string {
@@ -892,7 +920,10 @@ async function writePackageDirectory(root: string, files: ReadonlyMap<string, Bu
   }
 }
 
-function inspectZip(bytes: Buffer): void {
+/** The ZIP central-directory record count, directory records included. The
+ *  cap and every refusal report this one measure, so "entries" means the same
+ *  thing in the limit, in `details` and in the docs. */
+function inspectZip(bytes: Buffer): number {
   if (bytes.length > SKILL_LIMITS.archiveBytes) {
     throw payloadTooLarge(`Skill archive exceeds ${SKILL_LIMITS.archiveBytes} bytes`);
   }
@@ -904,7 +935,13 @@ function inspectZip(bytes: Buffer): void {
   const entries = bytes.readUInt16LE(eocd + 10);
   const centralOffset = bytes.readUInt32LE(eocd + 16);
   if (entries === 0xffff || centralOffset === 0xffffffff) throw validationError("ZIP64 skill archives are not supported");
-  if (entries > SKILL_LIMITS.files) throw payloadTooLarge(`Skill archive exceeds ${SKILL_LIMITS.files} entries`);
+  if (entries > SKILL_LIMITS.files) {
+    throw archiveRefusal(
+      SKILL_ARCHIVE_TOO_LARGE,
+      `Skill archive exceeds ${SKILL_LIMITS.files} entries`,
+      entries,
+    );
+  }
   let offset = centralOffset;
   let extractedBytes = 0;
   for (let index = 0; index < entries; index += 1) {
@@ -933,10 +970,11 @@ function inspectZip(bytes: Buffer): void {
     }
     offset += 46 + nameLength + extraLength + commentLength;
   }
+  return entries;
 }
 
-function extractZip(bytes: Buffer): Map<string, Buffer> {
-  inspectZip(bytes);
+function extractZip(bytes: Buffer): { entries: number; files: Map<string, Buffer> } {
+  const entries = inspectZip(bytes);
   const extracted = new Map<string, Buffer>();
   let extractedBytes = 0;
   const unzip = new Unzip((file) => {
@@ -964,13 +1002,25 @@ function extractZip(bytes: Buffer): Map<string, Buffer> {
   });
   unzip.register(UnzipInflate);
   unzip.push(bytes, true);
-  return extracted;
+  return { entries, files: extracted };
 }
 
-function stripArchiveRoot(files: ReadonlyMap<string, Buffer>): { directoryName?: string; files: Map<string, Buffer> } {
+/** `entries` is the archive's central-directory count, not `files.size`: the
+ *  extraction drops directory records, and a refusal that said "2 entries" for
+ *  an archive the limit counted as 4 would disagree with its own cap. */
+function stripArchiveRoot(
+  files: ReadonlyMap<string, Buffer>,
+  entries: number,
+): { directoryName?: string; files: Map<string, Buffer> } {
   if (files.has("SKILL.md")) return { files: cloneFiles(files) };
   const firstSegments = new Set([...files.keys()].map((path) => path.split("/")[0]!));
-  if (firstSegments.size !== 1) throw validationError("Skill ZIP must contain one package root");
+  if (firstSegments.size !== 1) {
+    throw archiveRefusal(
+      SKILL_ARCHIVE_MULTIPLE_ROOTS,
+      "Skill ZIP must contain one package root",
+      entries,
+    );
+  }
   const directoryName = [...firstSegments][0]!;
   const prefix = `${directoryName}/`;
   const stripped = new Map<string, Buffer>();
@@ -978,14 +1028,21 @@ function stripArchiveRoot(files: ReadonlyMap<string, Buffer>): { directoryName?:
     if (!path.startsWith(prefix)) throw validationError("Skill ZIP contains entries outside its package root");
     stripped.set(path.slice(prefix.length), Buffer.from(bytes));
   }
-  if (!stripped.has("SKILL.md")) throw validationError("Skill ZIP package root must contain SKILL.md");
+  if (!stripped.has("SKILL.md")) {
+    throw archiveRefusal(
+      SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD,
+      "Skill ZIP package root must contain SKILL.md",
+      entries,
+    );
+  }
   return { directoryName, files: stripped };
 }
 
 export function packageFromUpload(filename: string, bytes: Buffer): LoadedPackage {
   const zip = filename.toLowerCase().endsWith(".zip") || bytes.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
   if (!zip) return validateSkillPackage(new Map([["SKILL.md", bytes]]));
-  const rooted = stripArchiveRoot(extractZip(bytes));
+  const extracted = extractZip(bytes);
+  const rooted = stripArchiveRoot(extracted.files, extracted.entries);
   return validateSkillPackage(rooted.files, { directoryName: rooted.directoryName });
 }
 

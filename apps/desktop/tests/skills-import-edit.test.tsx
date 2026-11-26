@@ -134,6 +134,53 @@ test("one SKILL.md goes up as the multipart field the route reads", async () => 
   } finally { await act(async () => { view.unmount(); }); }
 });
 
+test("a refused ZIP names the one-package rule with its entry numbers instead of the server's English", async () => {
+  const cases = [
+    {
+      code: "SKILL_ARCHIVE_TOO_LARGE",
+      details: { entries: 501, limit: 500 },
+      expected: TEXT.settings.skills.uploadView.archiveTooLarge(501, 500),
+      serverMessage: "Skill archive exceeds 500 entries",
+    },
+    {
+      code: "SKILL_ARCHIVE_MULTIPLE_ROOTS",
+      details: { entries: 3, limit: 500 },
+      expected: TEXT.settings.skills.uploadView.archiveMultipleRoots(3, 500),
+      serverMessage: "Skill ZIP must contain one package root",
+    },
+    {
+      code: "SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD",
+      details: { entries: 2, limit: 500 },
+      expected: TEXT.settings.skills.uploadView.archiveRootWithoutSkillMd(2, 500),
+      serverMessage: "Skill ZIP package root must contain SKILL.md",
+    },
+  ];
+  for (const refusal of cases) {
+    const stub = new StubClient().fail(new ApiRequestError(refusal.serverMessage, 400, refusal.code, refusal.details));
+    const view = await mount(
+      <SkillUploadView
+        client={stub.asClient()}
+        onImported={() => {}}
+        onWriteInstead={() => {}}
+      />,
+    );
+    try {
+      const file = new File(["PK"], "repository.zip", { type: "application/zip" });
+      const input = view.root.findAllByType("input").find((node) => node.props.type === "file");
+      assert.ok(input);
+      await act(async () => { input.props.onChange({ target: { files: [file] } }); });
+      await act(async () => { buttonWithText(view, TEXT.settings.skills.importAction).props.onClick(); });
+      await settle();
+
+      const text = JSON.stringify(view.toJSON());
+      assert.ok(text.includes(refusal.expected), `${refusal.code} shows the localized rule and numbers`);
+      // One ZIP is one Skill package, and a whole repository belongs in Git import.
+      assert.ok(text.includes(TEXT.settings.skills.git.title), `${refusal.code} names the Git import path`);
+      assert.equal(text.includes(refusal.serverMessage), false, `${refusal.code} does not print the server sentence`);
+    } finally { await act(async () => { view.unmount(); }); }
+  }
+});
+
 test("a Git inspection pins the commit and never overwrites without the revision the user saw", async () => {
   const commit = "0123456789abcdef0123456789abcdef01234567";
   const inspection: GitSkillRepositoryInspection = {

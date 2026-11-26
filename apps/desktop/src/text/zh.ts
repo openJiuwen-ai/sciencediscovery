@@ -1167,6 +1167,14 @@ export const ZH = {
         remove: "移除",
         fileSize: (kilobytes: number) => `${kilobytes} KB`,
         writeInstead: "改为从零开始写",
+        /** 被拒的 ZIP 一次只能是一个技能包；服务端的英文句子既没说这点，也没说
+         *  整个仓库该走 Git 导入。 */
+        archiveTooLarge: (entries: number, limit: number) =>
+          `这个 ZIP 有 ${entries} 个条目，单个技能包最多 ${limit} 个。一个 ZIP 就是一个技能包：一个顶层文件夹，根部有 SKILL.md。要导入整个仓库，请用「从 GitHub 导入」。`,
+        archiveMultipleRoots: (entries: number, limit: number) =>
+          `这个 ZIP 有 ${entries} 个条目，分布在多个顶层文件夹里，但一个 ZIP 只能是一个技能包：一个顶层文件夹（最多 ${limit} 个条目），根部有 SKILL.md。要导入整个仓库，请用「从 GitHub 导入」。`,
+        archiveRootWithoutSkillMd: (entries: number, limit: number) =>
+          `这个 ZIP 有 ${entries} 个条目，唯一的顶层文件夹里没有 SKILL.md。一个 ZIP 就是一个技能包：一个顶层文件夹（最多 ${limit} 个条目），根部有 SKILL.md。要导入整个仓库，请用「从 GitHub 导入」。`,
       },
       importAction: "导入",
       importBusy: "正在导入…",

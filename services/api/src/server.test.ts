@@ -4555,6 +4555,71 @@ test("ART-001 a missing artifact version answers 404 on provenance and diff like
   assert.ok(diff.body.lines.some((line) => line.kind === "added" && line.text === "Corrected value."));
 });
 
+test("a refused skill ZIP carries the code, entry count and cap both clients localize", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `skill-zip-refusals-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  const { origin } = await startTestApi(context, tempRoot);
+
+  const importArchive = async (archive: Uint8Array<ArrayBuffer>, filename: string) => {
+    const form = new FormData();
+    form.set("file", new Blob([archive], { type: "application/zip" }), filename);
+    const response = await fetch(`${origin}/api/skills/import`, {
+      body: form,
+      headers: authorization,
+      method: "POST",
+    });
+    return { body: await response.json() as ApiError & { id?: string }, status: response.status };
+  };
+
+  // The cap counts ZIP entries, not just files with content: 501 references are
+  // one entry over the 500 the catalog accepts, and the refusal has to say so
+  // in numbers the desktop and web can print in their own language.
+  const entries = Object.fromEntries(Array.from({ length: 501 }, (_, index) => [
+    `bulk-skill/references/file-${index}.md`,
+    strToU8(`reference ${index}`),
+  ]));
+  const tooLarge = await importArchive(Buffer.from(zipSync(entries)), "repository.zip");
+  assert.equal(tooLarge.status, 413);
+  assert.equal(tooLarge.body.code, "SKILL_ARCHIVE_TOO_LARGE");
+  assert.deepEqual(tooLarge.body.details, { entries: 501, limit: 500 });
+
+  // A ZIP of a whole repository has several package roots; one ZIP is one Skill
+  // package, and that is what the reader has to be told instead of a bare 400.
+  // The directory records count: the cap and `details.entries` both read the
+  // central directory, so this archive is 4 entries although only 2 files reach
+  // extraction.
+  const multipleRoots = await importArchive(Buffer.from(zipSync({
+    "first-skill/": new Uint8Array(),
+    "first-skill/SKILL.md": strToU8("---\nname: first-skill\ndescription: First package.\n---\n\n# First\n"),
+    "second-skill/": new Uint8Array(),
+    "second-skill/SKILL.md": strToU8("---\nname: second-skill\ndescription: Second package.\n---\n\n# Second\n"),
+  })), "repository.zip");
+  assert.equal(multipleRoots.status, 400);
+  assert.equal(multipleRoots.body.code, "SKILL_ARCHIVE_MULTIPLE_ROOTS");
+  assert.deepEqual(multipleRoots.body.details, { entries: 4, limit: 500 });
+
+  // The single wrapper directory is still stripped, so a package that keeps its
+  // SKILL.md one level down is refused for the missing manifest, not for having
+  // a root at all. Its two directory records plus one file are 3 entries.
+  const withoutSkillMd = await importArchive(Buffer.from(zipSync({
+    "some-skill/": new Uint8Array(),
+    "some-skill/references/": new Uint8Array(),
+    "some-skill/references/guide.md": strToU8("Only a reference"),
+  })), "some-skill.zip");
+  assert.equal(withoutSkillMd.status, 400);
+  assert.equal(withoutSkillMd.body.code, "SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD");
+  assert.deepEqual(withoutSkillMd.body.details, { entries: 3, limit: 500 });
+
+  // Stripping the same wrapper stays the accepted path: the export/import
+  // round-trip keeps working and only the refusals above gained a code.
+  const accepted = await importArchive(Buffer.from(zipSync({
+    "wrapped-skill/SKILL.md": strToU8("---\nname: wrapped-skill\ndescription: Wrapped package.\n---\n\n# Wrapped\n"),
+  })), "wrapped-skill.zip");
+  assert.equal(accepted.status, 201);
+  assert.equal(accepted.body.id, "wrapped-skill");
+});
+
 test("Agent-created Skill stays in draft until review publishes it to a Library and installs it in the catalog", { tags: ["swarm:required"] }, async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `agent-skill-creator-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

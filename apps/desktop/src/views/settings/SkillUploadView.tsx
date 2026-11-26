@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 
-import type { ApiClient } from "../../api/client.js";
+import { ApiRequestError, type ApiClient } from "../../api/client.js";
 import { importSkillFile } from "../../api/settings.js";
 import type { SkillDetail } from "../../api/types.js";
 import { TEXT } from "../../text.js";
@@ -29,7 +29,30 @@ interface Props {
 }
 
 function messageOf(reason: unknown): string {
+  const archive = archiveRefusal(reason);
+  if (archive) return archive;
   return reason instanceof Error ? reason.message : TEXT.settings.skills.importFailed;
+}
+
+function archiveCount(details: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = details?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** A ZIP the server refused for its shape or size arrives with a stable code
+ *  and the numbers behind it. The reader gets the rule that produced the
+ *  refusal — one ZIP is one Skill package — and the way out for a whole
+ *  repository, instead of the server's English sentence. */
+function archiveRefusal(reason: unknown): string | undefined {
+  if (!(reason instanceof ApiRequestError)) return undefined;
+  const entries = archiveCount(reason.details, "entries");
+  const limit = archiveCount(reason.details, "limit");
+  if (entries === undefined || limit === undefined) return undefined;
+  const copy = TEXT.settings.skills.uploadView;
+  if (reason.code === "SKILL_ARCHIVE_TOO_LARGE") return copy.archiveTooLarge(entries, limit);
+  if (reason.code === "SKILL_ARCHIVE_MULTIPLE_ROOTS") return copy.archiveMultipleRoots(entries, limit);
+  if (reason.code === "SKILL_ARCHIVE_ROOT_WITHOUT_SKILL_MD") return copy.archiveRootWithoutSkillMd(entries, limit);
+  return undefined;
 }
 
 /**
