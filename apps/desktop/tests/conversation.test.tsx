@@ -161,10 +161,20 @@ test("a review card does not cross into the next turn", () => {
   assert.ok(card < markup.indexOf("QUESTION-B"));
 });
 
-/** A review checkpoint message, stamped so the live-turn rule can read it. */
-function checkpointMessage(id: string, createdAt: string): ChatMessage {
+/** A review checkpoint message, stamped so the live-turn rule can read it.
+ *  `overrides` lets a test make two checkpoints distinguishable on screen. */
+function checkpointMessage(
+  id: string,
+  createdAt: string,
+  overrides: Partial<NonNullable<ChatMessage["reviewerCheckpoint"]>> = {},
+): ChatMessage {
   const message = { content: "Reviewer Specialist review", createdAt, id, kind: "reviewer_checkpoint" as const, role: "assistant" as const };
-  return { ...message, reviewerCheckpoint: { status: "completed", toolCallId: `tool-${id}` } };
+  return { ...message, reviewerCheckpoint: { status: "completed", toolCallId: `tool-${id}`, ...overrides } };
+}
+
+/** A running checkpoint's progress, named so the card renders the name. */
+function runningProgress(artifactLogicalName: string): NonNullable<NonNullable<ChatMessage["reviewerCheckpoint"]>["progress"]> {
+  return { artifactCompleted: 0, artifactLogicalName, artifactTotal: 0, completed: 0, failed: 0, queued: 0, total: 0 };
 }
 
 test("a review card written by the running turn waits for that turn's answer", () => {
@@ -218,20 +228,25 @@ test("a card written before the first question keeps its place at the head", () 
 });
 
 test("two cards written in one turn both follow its answer, in the order they were written", () => {
+  // The two cards must be distinguishable on screen, or the assertions below
+  // would pass just as well with their order reversed: an empty completed
+  // card renders the same markup for every checkpoint. A running card names
+  // the artifact it is on, which gives each one a unique string to find.
   const markup = render({
     detail: detail([
       message("question-a", "user", "QUESTION-A"),
-      checkpointMessage("review-one", "2026-01-01T00:00:01.000Z"),
-      checkpointMessage("review-two", "2026-01-01T00:00:02.000Z"),
+      checkpointMessage("review-one", "2026-01-01T00:00:01.000Z", { progress: runningProgress("one.md"), status: "running" }),
+      checkpointMessage("review-two", "2026-01-01T00:00:02.000Z", { progress: runningProgress("two.md"), status: "running" }),
       message("answer-a", "assistant", "ANSWER-A"),
       message("question-b", "user", "QUESTION-B"),
     ]),
   });
-  const first = markup.indexOf('data-testid="review-card"');
-  const second = markup.indexOf('data-testid="review-card"', first + 1);
+  const first = markup.indexOf("one.md");
+  const second = markup.indexOf("two.md");
   assert.notEqual(first, -1);
   assert.notEqual(second, -1);
   assert.ok(markup.indexOf("ANSWER-A") < first);
+  assert.ok(first < second);
   assert.ok(second < markup.indexOf("QUESTION-B"));
 });
 
