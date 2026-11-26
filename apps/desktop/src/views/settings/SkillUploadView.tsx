@@ -14,7 +14,9 @@
 
 import { useRef, useState } from "react";
 
-import type { ApiClient } from "../../api/client.js";
+import type { SkillPackageRefusal } from "@sciencediscovery/schema";
+
+import { ApiRequestError, type ApiClient } from "../../api/client.js";
 import { importSkillFile } from "../../api/settings.js";
 import type { SkillDetail } from "../../api/types.js";
 import { TEXT } from "../../text.js";
@@ -28,7 +30,70 @@ interface Props {
   onImported: (skill: SkillDetail) => void | Promise<void>;
 }
 
+/** The server's structured refusal, when this is one the pane can explain. */
+function refusalOf(reason: unknown): SkillPackageRefusal | undefined {
+  if (!(reason instanceof ApiRequestError) || reason.code !== "SKILL_PACKAGE_REFUSED") return undefined;
+  const refusal = reason.details?.refusal as SkillPackageRefusal | undefined;
+  return refusal && typeof refusal === "object" && "reason" in refusal ? refusal : undefined;
+}
+
+function size(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Number((bytes / (1024 * 1024)).toFixed(1))} MB`;
+  if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+/**
+ * A refused archive, in the pane's language.
+ *
+ * The server's sentence is English and names the cap without the count that
+ * was over it. For the entry cap — the one a repository-wide ZIP hits first —
+ * the reader sees both numbers. The remedy is the same for every shape
+ * refusal: one ZIP is one package, and a whole repository is a Git import.
+ */
+function refusalMessage(refusal: SkillPackageRefusal): string | undefined {
+  const text = TEXT.settings.skills.uploadDialog.refusals;
+  switch (refusal.reason) {
+    case "too-large": {
+      let over: string;
+      switch (refusal.limit) {
+        case "entries":
+          over = text.entries(refusal.actual, refusal.cap);
+          break;
+        case "files":
+          over = text.files(refusal.actual, refusal.cap);
+          break;
+        case "archive-bytes":
+          over = text.archiveBytes(size(refusal.actual), size(refusal.cap));
+          break;
+        case "extracted-bytes":
+          over = text.extractedBytes(size(refusal.actual), size(refusal.cap));
+          break;
+        default:
+          over = text.fileBytes(refusal.path ?? "", size(refusal.cap));
+          break;
+      }
+      return `${over} ${text.onePackage}`;
+    }
+    // A ZIP with no SKILL.md at its root is the repository-download case: the
+    // skills live in subdirectories, which is exactly what one package cannot
+    // be. Saying that, rather than naming the rule, is the next step.
+    case "missing-root":
+      return `${text.missingRoot} ${text.onePackage}`;
+    case "several-roots":
+      return `${text.severalRoots} ${text.onePackage}`;
+    case "outside-root":
+      return `${text.outsideRoot} ${text.onePackage}`;
+    default: return undefined;
+  }
+}
+
 function messageOf(reason: unknown): string {
+  const refusal = refusalOf(reason);
+  if (refusal) {
+    const explained = refusalMessage(refusal);
+    if (explained) return explained;
+  }
   return reason instanceof Error ? reason.message : TEXT.settings.skills.importFailed;
 }
 

@@ -30,6 +30,8 @@ Open the library management view in **System settings → Skills** and choose a 
 - **Folder**: select the skill directory, preserving script and reference paths.
 - **Git**: provide an HTTPS/SSH repository URL and, optionally, a ref and subdirectory. Inspect detected skills before importing. Private repositories use Git credentials or SSH configuration on the backend host; do not place tokens in URLs.
 
+A File import accepts one package per archive: `SKILL.md` must sit at the ZIP's root, the archive may hold at most 500 entries (directory records included), the package at most 500 files, and the limits are 25 MiB for the archive and 50 MiB unpacked. A `Code → Download ZIP` archive of a repository that holds several skills does not have that shape — the skills sit in subdirectories and there is no root `SKILL.md` — so File import refuses it. Use **Git** with the repository URL instead: inspect the skills it detects, then choose what to import.
+
 Open the imported Skill and inspect its name, instructions, and supporting files. Packaging a script does not execute it or install Python/R dependencies. Dependencies remain managed through scientific environments.
 
 ### Folder import compatibility and automation limits

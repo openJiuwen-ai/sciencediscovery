@@ -5116,6 +5116,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           message,
         );
       }
+      // A refused Skill import answers with the facts behind the sentence, so
+      // a localized surface can say what was over the cap, by how much, and
+      // what to do next instead of echoing the validator's English. The prose
+      // stays in `error` for callers that show the server's own text.
+      else if ((error as { skillRefusal?: unknown }).skillRefusal !== undefined) {
+        sendError(
+          response,
+          code === "PAYLOAD_TOO_LARGE" ? 413 : 400,
+          message,
+          "SKILL_PACKAGE_REFUSED",
+          { refusal: (error as { skillRefusal: unknown }).skillRefusal },
+        );
+      }
       else if (code === "EVOLVE_UNAVAILABLE") sendError(response, 503, message);
       else if (code === "ENOENT") sendError(response, 404, "File not found");
       else if (code === "PAYLOAD_TOO_LARGE" || code === "QUOTA_EXCEEDED") {
