@@ -35,7 +35,7 @@ import { ExportHistoryStore } from "./export-history.ts";
 import {
   effectiveDataDir, loadWizardState, needsWizard, pidAlive, saveWizardState, type WizardState,
 } from "./wizard-state.ts";
-import { defaultDataDir, probeDataDir } from "./wizard-data-dir.ts";
+import { defaultDataDir, ensureWritableDir, probeDataDir } from "./wizard-data-dir.ts";
 import {
   runSelfCheck,
 } from "./wizard-api.ts";
@@ -1265,6 +1265,16 @@ function registerWizardIpc(proxyEnv: NodeJS.ProcessEnv | null): void {
     if (!clean) return { ok: false, message: "路径不能为空。" };
     const check = probeDataDir(clean, installRootForWizard());
     if (!check.ok) return { ok: false, message: check.reason ?? "目录不可用。" };
+    // Confirm-time creation: the input probe is deliberately mkdir-free
+    // (probeWritableWithoutMkdir — it runs on half-typed values every 400ms),
+    // so THIS is where the chosen dir first comes to exist on disk. Matches
+    // the page copy "确认后将在选定的目录准备运行环境". ensureWritableDir
+    // re-probes writability on the real dir (a file squatting on the target
+    // was invisible to the read-only probe and fails here with a truthful
+    // message instead of after the wizard state was already saved).
+    if (!ensureWritableDir(clean)) {
+      return { ok: false, message: "目录创建失败（请检查权限或杀毒软件）。" };
+    }
     // Wizard half-takeover: confirming the data dir is all the shell wizard
     // still owns — the SPA takes over model config and boot waiting from
     // here. Mark the wizard done and hand the window to the normal startup

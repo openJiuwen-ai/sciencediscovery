@@ -1,6 +1,6 @@
 // Data-directory page logic. Decisions are pure (unit-tested); the
 // fs probes (statfs of the nearest existing ancestor, write probe) are thin.
-import { mkdirSync, rmSync, statfsSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, win32 } from "node:path";
 import { CURRENT_SHELL_PLATFORM } from "./shell-platform.ts";
 
@@ -216,7 +216,62 @@ export function installRootCollision(dataDir: string, installRoot: string | null
   return { collides: false };
 }
 
-/** Create the dir (idempotent) and prove it accepts writes. */
+/** Nearest existing ancestor of `path` — the dir itself when it exists.
+ * Walks up like freeBytesForPath, because a probe of a half-typed path
+ * must find SOME real dir to touch without creating any of the missing
+ * middle segments (the mkdir-free probe discipline). Returns null only
+ * for a fully-qualified path whose root does not exist (unmounted drive). */
+export function nearestExistingDir(path: string): string | null {
+  let current = path;
+  while (true) {
+    try {
+      const stats = statSync(current);
+      if (stats.isDirectory()) return current;
+      // An ancestor exists but is a FILE: mkdir -p would fail ENOTDIR
+      // here; report the ancestor so the probe writes into it and fails
+      // with a truthful "not writable" instead of a silent wrong verdict.
+      return current;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return null;
+      current = parent;
+    }
+  }
+}
+
+/** Read-only writability probe: proves the volume accepts writes WITHOUT
+ * creating the target dir. The probe file lands in the nearest EXISTING
+ * ancestor (see nearestExistingDir) and is deleted immediately — a
+ * half-typed intermediate path therefore never mkdirs anything (the
+ * 400ms-debounced input probe ran mkdirSync on every intermediate value;
+ * typing `D:\ai\sd\data` left `D:\ai` and `D:\ai\sd` behind when the user
+ * changed their mind mid-typing — the same litter class as problems W8,
+ * which guarded the CWD, but on the user's own drives).
+ *
+ * Weakening vs ensureWritableDir, accepted deliberately: "the target itself
+ * is occupied by a file" is not discovered until confirm time — where
+ * ensureWritableDir mkdirs and fails with a truthful error. The check-page
+ * verdict on that case reads "not writable" via the ENOTDIR ancestor below.
+ */
+export function probeWritableWithoutMkdir(path: string): boolean {
+  if (!isFullyQualifiedPath(path)) return false;
+  const anchor = nearestExistingDir(path);
+  if (anchor === null) return false;
+  const probe = join(anchor, ".sd-wizard-probe");
+  try {
+    writeFileSync(probe, "ok");
+    rmSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Create the dir (idempotent) and prove it accepts writes.
+ * CONFIRM-TIME ONLY: this is the primitive behind wizard-confirm-dir —
+ * the input-time probe must never reach it (probeWritableWithoutMkdir
+ * instead). Kept side-effecting by design: creating the chosen dir IS
+ * the confirmed action. */
 export function ensureWritableDir(path: string): boolean {
   // Self-defence: this is a side-effecting helper other callers may reach
   // without going through probeDataDir's validation. Never mkdir a relative
@@ -258,9 +313,9 @@ export function probeDataDir(
       ok: false, reason: "请输入完整路径（例如 D:\\data）", warnings: [],
     };
   }
-  // And decide the collision BEFORE ensureWritableDir: that helper mkdirs and
-  // drops a probe file, so probing the install dir itself would otherwise
-  // litter it — the same class of mistake as problems W8.
+  // And decide the collision BEFORE any write probe: probeWritableWithoutMkdir
+  // drops a temp file in the nearest existing dir, so probing the install dir
+  // itself would litter it — the same class of mistake as problems W8.
   const collision = installRootCollision(clean, installRoot);
   if (collision.collides) {
     return {
@@ -269,7 +324,11 @@ export function probeDataDir(
       ok: false, reason: collision.reason, warnings: [],
     };
   }
-  return evaluateDataDir(clean, freeBytesForPath(clean), ensureWritableDir(clean), installRoot, platform);
+  // Read-only writability probe: the 400ms-debounced input probe runs on
+  // HALF-TYPED values, so this must never mkdir the target (see
+  // probeWritableWithoutMkdir). Directory creation belongs to confirm time
+  // (wizard-confirm-dir → ensureWritableDir) only.
+  return evaluateDataDir(clean, freeBytesForPath(clean), probeWritableWithoutMkdir(clean), installRoot, platform);
 }
 
 export function formatBytes(bytes: number): string {
