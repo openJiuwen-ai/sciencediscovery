@@ -172,6 +172,20 @@ function rowScope(skill: SkillDescriptor | JiuwenSwarmSkill): Exclude<SkillScope
   return skill.source === "built-in" || skill.source === "builtin" ? "official" : "mine";
 }
 
+/** The rows the list is showing: the search narrows by name, the tab by scope.
+ *  The toolbar's bulk pair sits outside the list but writes to these same
+ *  rows, so both read them through this one function. */
+function visibleRows(page: SkillPage, scope: SkillScope, term: string) {
+  // The search matches names only: descriptions are long prose, and a word
+  // that happens to appear in one is a poor reason to keep a package while
+  // the user is hunting for a name they remember.
+  const matches = (name: string) => term === "" || name.toLowerCase().includes(term);
+  return [
+    ...page.skills.filter((skill) => matches(skill.name)).map((skill) => ({ kind: "catalog" as const, skill })),
+    ...page.jiuwenSwarmSkills.filter((skill) => matches(skill.name)).map((skill) => ({ kind: "jiuwenswarm" as const, skill })),
+  ].filter((row) => scope === "all" || rowScope(row.skill) === scope);
+}
+
 /** The card's name with the searched-for text marked.
  *
  *  The search is literal, so a name holding `(` or `.` is not a pattern. Every
@@ -657,6 +671,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
           mine: allRows.length - officialCount,
           official: officialCount,
         };
+        const bulkRows = page ? visibleRows(page, scope, query.trim().toLowerCase()) : [];
         return (
           <div className="skill-toolbar">
             {page ? (
@@ -682,6 +697,13 @@ export function SkillsSettings({ client, onConfirm }: Props) {
               </div>
             ) : <div className="skill-tabs" />}
             <div className="skill-toolbar-end">
+              {page?.switchesAvailable && bulkRows.length > 0
+                ? <BulkToggles
+                  busy={busy || bulkPending}
+                  onAll={(next) => void setAll(next, bulkRows.map((row) => row.skill))}
+                  variant="toolbar"
+                />
+                : null}
               <div className="skill-search-field">
                 <input
                   aria-label={TEXT.settings.skills.search}
@@ -732,18 +754,9 @@ export function SkillsSettings({ client, onConfirm }: Props) {
       {view.kind === "list" ? (
         <LoadGate loaded={loaded}>
           {(page) => {
-            // The search matches names only: descriptions are long prose, and
-            // a word that happens to appear in one is a poor reason to keep a
-            // package while the user is hunting for a name they remember.
             const term = query.trim().toLowerCase();
-            const matches = (name: string) => term === "" || name.toLowerCase().includes(term);
-            const catalog = page.skills.filter((skill) => matches(skill.name));
-            const swarm = page.jiuwenSwarmSkills.filter((skill) => matches(skill.name));
             const allRows = [...page.skills, ...page.jiuwenSwarmSkills];
-            const rows = [
-              ...catalog.map((skill) => ({ kind: "catalog" as const, skill })),
-              ...swarm.map((skill) => ({ kind: "jiuwenswarm" as const, skill })),
-            ].filter((row) => scope === "all" || rowScope(row.skill) === scope);
+            const rows = visibleRows(page, scope, term);
             const emptyMessage = allRows.length === 0
               ? TEXT.settings.skills.empty
               : rows.length > 0
@@ -850,12 +863,6 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                 </div> : null}
                 {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
                 {notice ? <small className="row-note" role="status">{notice}</small> : null}
-                {emptyMessage === undefined && page.switchesAvailable
-                  ? <BulkToggles
-                    busy={busy || bulkPending}
-                    onAll={(next) => void setAll(next, rows.map((row) => row.skill))}
-                  />
-                  : null}
                 <div aria-labelledby="skill-tabs" id="skill-list-panel" role="tabpanel">
                   {emptyMessage === undefined ? (
                     <div className="settings-list skill-grid">
