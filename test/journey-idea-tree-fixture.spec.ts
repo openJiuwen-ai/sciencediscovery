@@ -3,6 +3,7 @@ import { test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { ideaResearchModel } from "./helpers/idea-research-model.ts";
+import { getIdeaResearchView, listIdeaResearches } from "./helpers/idea-research-api.ts";
 
 // Static suite metadata is inherited by each framework-expanded journey.
 test.describe("journey-idea-tree-fixture.spec", { tag: ["@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@sandbox:bubblewrap"] }, () => {
@@ -46,12 +47,13 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
   const read = async () => {
     // Retry connection resets only for this idempotent status read. HTTP
     // errors and an incorrect research state must still fail the journey.
-    const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`, {
+    return await listIdeaResearches(page.request, fixture!.session.id, {
       headers: authorizationHeader(), maxRetries: 2, timeout: 10_000,
     });
-    expect(response.ok()).toBe(true);
-    return (await response.json()).items;
   };
+  const viewOf = async (researchId: string) => getIdeaResearchView(page.request, fixture!.session.id, researchId, {
+    headers: authorizationHeader(), maxRetries: 2, timeout: 10_000,
+  });
   journey.scenario({goal: "从给定材料自主探索多个方向，暂停后手动继续，并完成多轮改进", preconditions: ["隔离 API 与 Python evolve 服务", "本地模拟模型，实际主 Agent 工具交接、Python 后端与文件持久化，无 Subagent 或 Neo4j"]});
   try {
     await journey.step("在系统设置选定研究模板与探索强度", "选水处理材料模板与标准强度（预设 3 轮），再从会话启动，不创建输入弹窗或聊天计划", async () => {
@@ -100,8 +102,9 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await expect(panel).toContainText("正在暂停");
       stub.resume();
       await expect(panel).toContainText("已暂停");
-      const [{graph, research}] = await read();
+      const [{ research }] = await read();
       expect(research.status).toBe("paused");
+      const { graph } = await viewOf(research.id);
       expect(graph.nodes.filter((n: any) => n.kind === "candidate")[0].score).toBeNull();
       expect(stub.requests.some(r => r.payload.perspective)).toBe(false);
     });
@@ -123,7 +126,8 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       await expect(progress.getByRole("listitem").filter({hasText: "执行中"})).toHaveCount(3);
       stub.releaseAssessments();
       await expect.poll(async () => (await read())[0].research.status, {timeout: 30_000}).toBe("completed");
-      const [{graph, research}] = await read();
+      const [{ research }] = await read();
+      const { graph } = await viewOf(research.id);
       // Three rounds because `标准` maps to maxRounds 3; one candidate per round
       // because the journey's own stub answers each ideation with a single
       // proposal and the engine takes `candidates[:maximumCandidates]`. The

@@ -101,3 +101,39 @@ test("explicit operator Idea Tree/research HTTP calls omit absent bearer and ret
     assert.deepEqual(requests.slice(0, 4).map(request => request.path), ["/idea-tree/command", "/idea-tree/research/command", "/idea-tree/research/events", "/idea-tree/research/command"]);
   } finally { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
 });
+
+test("agent research summary lists only the newest id, then gets the full tree", async () => {
+  // #1470: the list is a summary projection. Using its graph (or assuming it has
+  // one) would reproduce the reported failure, so this path must list then get.
+  const original = globalThis.fetch; const bodies: Array<Record<string, any>> = [];
+  const full = {
+    research: { id: "research-new", status: "paused", objective: "Newest objective", phase: "design", round: 1,
+      batch: [], batchCompleted: 0, tokens: 0, usageKnown: true, reason: null, modelId: "m", currentNodeId: null },
+    graph: { treeId: "research-new", objective: "Newest objective", revision: 1, updatedAt: "2026-11-26T00:00:00Z",
+      nodes: [{ id: "ROOT", kind: "direction", insight: "root insight" },
+        { id: "candidate-1", kind: "candidate", hypothesis: "Synthetic hypothesis", status: "done", score: 8, insight: "candidate insight" }],
+      edges: [] },
+  };
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); bodies.push(body);
+    if (body.operation === "list") return Response.json({ items: [
+      { research: { id: "research-new", status: "paused" } },
+      { research: { id: "research-old", status: "completed" } },
+    ] });
+    if (body.operation === "get") { assert.equal(body.researchId, "research-new"); return Response.json(full); }
+    return Response.json({ error: "unexpected operation" }, { status: 500 });
+  };
+  const store = { getSession: () => ({ id: "s", projectId: "p" }) } as unknown as SessionStore;
+  const research = createIdeaResearchClient({ url: "http://synthetic.invalid", apiOrigin: "http://synthetic.invalid",
+    store, tokens: new RunTokenRegistry() });
+  try {
+    const summary = await research.summary("s");
+    assert.deepEqual(bodies.map(body => body.operation), ["list", "get"]);
+    assert.equal(bodies[1]!.researchId, "research-new", "the newest listed id is the get target");
+    assert.ok("id" in summary, "the summary path must not come back as an empty-session message");
+    assert.equal(summary.id, "research-new");
+    assert.equal(summary.objective, "Newest objective");
+    assert.deepEqual(summary.candidates, [{ id: "candidate-1", hypothesis: "Synthetic hypothesis", status: "done", score: 8, insight: "candidate insight" }]);
+    assert.equal(summary.insight, "root insight");
+  } finally { research.close(); globalThis.fetch = original; }
+});

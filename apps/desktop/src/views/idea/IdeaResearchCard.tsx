@@ -25,7 +25,7 @@
  * shown as 0, and a phase the UI does not know is printed verbatim.
  */
 
-import type { IdeaResearchState, IdeaResearchView } from "@sciencediscovery/schema";
+import type { IdeaResearchState, IdeaResearchSummary } from "@sciencediscovery/schema";
 import { TITLE_COLUMNS, truncateColumns } from "../../text/columns.js";
 import { TEXT } from "../../text.js";
 import { EvolveTreeGlyph } from "../evolve/glyphs.js";
@@ -85,7 +85,7 @@ function BurstGlyph() {
 
 /** The session's researches as the Idea Tree block of the transcript: one card
  *  per research, in the order the list reports them. */
-export function IdeaResearchCards({ onOpen, views }: { onOpen: (researchId: string) => void; views: readonly IdeaResearchView[] }) {
+export function IdeaResearchCards({ onOpen, views }: { onOpen: (researchId: string) => void; views: readonly IdeaResearchSummary[] }) {
   if (!views.length) return null;
   return (
     <div className="idea-cards">
@@ -100,7 +100,7 @@ export function IdeaResearchCards({ onOpen, views }: { onOpen: (researchId: stri
   );
 }
 
-export function IdeaResearchCard({ onOpen, view }: { onOpen: (researchId: string) => void; view: IdeaResearchView }) {
+export function IdeaResearchCard({ onOpen, view }: { onOpen: (researchId: string) => void; view: IdeaResearchSummary }) {
   const research = view.research;
   const active = isIdeaResearchActive(research.status);
   const batchTotal = research.batch.length;

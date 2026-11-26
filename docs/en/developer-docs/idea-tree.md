@@ -55,7 +55,10 @@ results, and cannot be reversed by resuming.
 The only persistent state is
 `$SCIENCE_AGENT_DATA_DIR/idea-research/<projectId>/<sessionId>/<researchId>.json` in
 the Python service, saved through atomic replacement. It includes materials, budget,
-nodes, stage results, and usage, but not model credentials. This path does not use
+nodes, stage results, and usage, but not model credentials. A companion projection in
+`<sessionId>/.summaries/<researchId>.json` keeps the list's card fields without nodes or
+materials, so the polled list never parses or rebuilds every tree; an explicit `get`
+still reads the full document and graph. This path does not use
 external revisions, leases, `childDigest`, SHA verification, or result handles. The old
 tree remains viewable through its existing read API. Its write operations return a
 read-only error and its prior execution state is not migrated automatically.

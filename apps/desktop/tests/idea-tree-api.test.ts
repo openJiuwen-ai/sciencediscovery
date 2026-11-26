@@ -42,6 +42,19 @@ test("the list route accepts both shapes the engine has answered with", async ()
   assert.equal((await listIdeaResearches(listing, "s1")).length, 2);
 });
 
+test("a summary list keeps the fields the card draws and needs no graph", async () => {
+  const summary = {
+    research: { ...VIEW.research, objective: "Summary objective", batch: ["c1"], batchCompleted: 1 },
+  };
+  const api = { request: async () => ({ items: [summary] }) } as unknown as ApiClient;
+  const items = await listIdeaResearches(api, "s1");
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.research.objective, "Summary objective");
+  assert.deepEqual(items[0]!.research.batch, ["c1"]);
+  assert.equal(items[0]!.research.batchCompleted, 1);
+  assert.equal("graph" in items[0]!, false, "the polled list is a research-only projection");
+});
+
 test("control sends one operation with its research id", async () => {
   const api = fakeClient();
   await controlIdeaResearch(api, "s1", "research-1", "pause");

@@ -23,7 +23,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { IdeaResearchView } from "@sciencediscovery/schema";
+import type { IdeaResearchSummary, IdeaResearchView } from "@sciencediscovery/schema";
 import type { ApiClient } from "../api/client.js";
 import { ApiRequestError } from "../api/client.js";
 import { listIdeaResearches } from "../api/idea-tree.js";
@@ -35,7 +35,7 @@ function isLive(status: string | undefined): boolean {
 }
 
 export interface IdeaResearchListState {
-  views: IdeaResearchView[];
+  views: IdeaResearchSummary[];
   loading: boolean;
   unavailable: boolean;
   error?: string;
@@ -44,7 +44,7 @@ export interface IdeaResearchListState {
   loads: number;
   reload: () => void;
   /** Take a fresher snapshot of one research — a whole view, as every write and
-   *  every stream frame is — and put it in the list. The panel produces one when
+   *  every stream frame is — and put its summary in the list. The panel produces one when
    *  the reader presses 继续, and the card at the transcript's foot reads the same
    *  research from this list: neither a resume nor a pause creates a research, so
    *  nothing else would make the shell read the list again, and the card would
@@ -57,7 +57,7 @@ export interface IdeaResearchListState {
 }
 
 export function useIdeaResearches(client: ApiClient, sessionId: string | undefined): IdeaResearchListState {
-  const [views, setViews] = useState<IdeaResearchView[]>([]);
+  const [views, setViews] = useState<IdeaResearchSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [error, setError] = useState<string>();
@@ -135,8 +135,9 @@ export function useIdeaResearches(client: ApiClient, sessionId: string | undefin
   }, [anyLive, sessionId]);
 
   /** The snapshots a reader's own action produced, with the moment they were
-   *  taken, so a list read that started earlier cannot undo them. */
-  const applied = useRef(new Map<string, { view: IdeaResearchView; at: number }>());
+   *  taken, so a list read that started earlier cannot undo them. The list holds
+   *  summaries; the panel still needs the full view, which it reads itself. */
+  const applied = useRef(new Map<string, { view: IdeaResearchSummary; at: number }>());
 
   // One research replaced by a snapshot the reader has already seen elsewhere. Only
   // a research this list already holds is replaced: the panel reports answers that
@@ -147,12 +148,13 @@ export function useIdeaResearches(client: ApiClient, sessionId: string | undefin
     // A panel that outlived a session switch still finishes its requests; its
     // answer belongs to the session it was opened in, not to the one on screen.
     if (fromSession !== undefined && fromSession !== loadedFor.current) return;
-    applied.current.set(view.research.id, { view, at: Date.now() });
+    const summary: IdeaResearchSummary = { research: view.research };
+    applied.current.set(view.research.id, { view: summary, at: Date.now() });
     setViews((current) => {
       const index = current.findIndex((item) => item.research.id === view.research.id);
       if (index < 0) return current;
       const next = current.slice();
-      next[index] = view;
+      next[index] = summary;
       return next;
     });
   }, []);

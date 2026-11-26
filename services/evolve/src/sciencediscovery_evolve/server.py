@@ -64,23 +64,26 @@ log = get_logger("server")
 
 from .vendor.idea_tree.idea_tree_service import router as idea_tree_router
 
-from .vendor.idea_tree.research_service import reconcile_orphaned_researches, router as idea_research_router
+from .vendor.idea_tree.research_service import backfill_research_summaries, reconcile_orphaned_researches, router as idea_research_router
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Settle Idea Tree researches a previous process left running, once.
+    """Settle orphaned researches and backfill list projections, once at boot.
 
     A read may not do this: `list`/`get`/`events` run per streamed frame and
     also for archived, read-only Sessions, so persisting the restart verdict
     there turned an observation into a write. Here it lands at the restart
-    itself, before the first request is served. A failure is logged rather than
-    raised so a damaged data directory cannot stop the sidecar from booting.
+    itself, before the first request is served. The summary backfill finishes the
+    same migration for older documents, so a 5 s list never parses a full file.
+    A failure is logged rather than raised so a damaged data directory cannot
+    stop the sidecar from booting.
     """
     try:
         await asyncio.to_thread(reconcile_orphaned_researches)
+        await asyncio.to_thread(backfill_research_summaries)
     except Exception:  # noqa: BLE001 - boot must survive a data-directory problem
-        log.exception("idea research restart reconciliation failed")
+        log.exception("idea research startup migration failed")
     yield
 
 

@@ -6,6 +6,7 @@ import asyncio
 import copy
 import io
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -912,6 +913,182 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settled['status'], 'interrupted')
         self.assertEqual(settled['reason'], 'Service restarted; continue manually')
         self.assertEqual(settled['activities'][0]['status'], 'stopped')
+    def test_list_reads_the_saved_summary_not_the_full_document(self):
+        # #1470: the 5 s list path must not parse each research's full file. Saving
+        # leaves a companion projection; list reads that instead of the document.
+        self.state['nodes'].append(node('candidate-1', 'ROOT', 'A candidate', 'candidate', 1))
+        self.state.update(batch=['candidate-1'], batchCompleted=1)
+        self.store.save(self.state)
+        full = self.store.path('p', 's', 'research-test')
+        summary = self.store.summary_path('p', 's', 'research-test')
+        reads = []
+        original = Path.read_text
+        def counted(path, *args, **kwargs):
+            reads.append(path)
+            return original(path, *args, **kwargs)
+        with unittest.mock.patch.object(Path, 'read_text', counted):
+            rows = self.store.list('p', 's')
+        self.assertIn(summary, reads)
+        self.assertNotIn(full, reads)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['objective'], 'No cobalt. Compare catalyst directions.')
+        self.assertEqual(rows[0]['batch'], ['candidate-1'])
+        self.assertEqual(rows[0]['batchCompleted'], 1)
+        self.assertIn('updatedAt', rows[0])
+        self.assertNotIn('nodes', rows[0])
+        self.assertNotIn('materials', rows[0])
+
+    def test_startup_backfills_list_projections_for_older_documents(self):
+        # A document saved before the projection existed must not keep the 5 s
+        # list parsing a full tree forever. The boot pass writes the companion
+        # once; a second boot has nothing to do.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        path = self.store.path('p', 's', 'research-test')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.state, ensure_ascii=False), encoding='utf-8')
+        self.assertFalse(self.store.summary_path('p', 's', 'research-test').exists())
+        with patch.object(service, '_store', self.store), patch.object(service.log, 'info') as info:
+            self.assertEqual(service.backfill_research_summaries(), 1)
+            info.assert_called_once_with('created %d research summary projection(s)', 1)
+            info.reset_mock()
+            self.assertEqual(service.backfill_research_summaries(), 0)
+            info.assert_not_called()
+        self.assertTrue(self.store.summary_path('p', 's', 'research-test').is_file())
+        self.assertEqual(self.store.list('p', 's')[0]['objective'], self.state['objective'])
+
+    def test_summary_write_failure_does_not_break_the_authoritative_save(self):
+        # The projection is a cache for the polled list, not the research. A full
+        # or read-only data directory must not turn a successful checkpoint into a
+        # failed run from save()'s finally block.
+        with unittest.mock.patch.object(self.store, 'write_summary', side_effect=OSError('disk full')):
+            self.store.save(self.state)
+        self.assertEqual(self.store.read('p', 's', 'research-test')['objective'], self.state['objective'])
+        self.assertFalse(self.store.summary_path('p', 's', 'research-test').exists())
+        # list still works, one full read at a time, until a later save writes it.
+        self.assertEqual(self.store.list('p', 's')[0]['objective'], self.state['objective'])
+
+    def test_a_stale_summary_marker_falls_back_when_the_document_size_changes(self):
+        # mtime alone can miss an in-place replacement whose timestamp was preserved.
+        # The marker also records the document size, so list reads the document when
+        # either part of the identity no longer matches.
+        self.store.save(self.state)
+        path = self.store.path('p', 's', 'research-test')
+        original = path.stat()
+        changed = dict(self.store.read('p', 's', 'research-test'), objective='Changed without a summary update')
+        path.write_text(json.dumps(changed, ensure_ascii=False), encoding='utf-8')
+        os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+        self.assertEqual(path.stat().st_mtime_ns, original.st_mtime_ns)
+        self.assertNotEqual(path.stat().st_size, original.st_size)
+        self.assertFalse(self.store.summary_is_current('p', 's', 'research-test'))
+        self.assertEqual(self.store.list('p', 's')[0]['objective'], 'Changed without a summary update')
+
+    def test_non_object_summary_projection_falls_back_and_backfills(self):
+        # A valid-JSON non-object (or otherwise corrupt projection) must be stale,
+        # not a 500: list reads the document and the boot pass repairs it. Two
+        # damaged files prove one bad projection cannot stop the other's migration.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        first = dict(copy.deepcopy(self.state), id='research-first', createdAt='2026-11-26T00:00:00+00:00')
+        second = dict(copy.deepcopy(self.state), id='research-second', objective='Second objective',
+                      createdAt='2026-11-26T00:00:01+00:00')
+        self.store.save(first)
+        self.store.save(second)
+        first_summary = self.store.summary_path('p', 's', 'research-first')
+        second_summary = self.store.summary_path('p', 's', 'research-second')
+        for raw in ('[]', 'null', '"text"', '3'):
+            first_summary.write_text(raw, encoding='utf-8')
+            self.assertIsNone(self.store.read_summary('p', 's', 'research-first'), raw)
+        first_summary.write_text('[]', encoding='utf-8')
+        second_summary.write_text('null', encoding='utf-8')
+        self.assertFalse(self.store.summary_is_current('p', 's', 'research-first'))
+        self.assertFalse(self.store.summary_is_current('p', 's', 'research-second'))
+        rows = {row['id']: row for row in self.store.list('p', 's')}
+        self.assertEqual(rows['research-first']['objective'], self.state['objective'])
+        self.assertEqual(rows['research-second']['objective'], 'Second objective')
+        with patch.object(service, '_store', self.store):
+            self.assertEqual(service.backfill_research_summaries(), 2)
+        self.assertTrue(self.store.summary_is_current('p', 's', 'research-first'))
+        self.assertTrue(self.store.summary_is_current('p', 's', 'research-second'))
+        repaired = {row['id']: row for row in self.store.list('p', 's')}
+        self.assertEqual(set(repaired), {'research-first', 'research-second'})
+        self.assertEqual(repaired['research-second']['objective'], 'Second objective')
+
+    async def test_service_list_uses_live_in_memory_state_without_reading_or_building_a_graph(self):
+        # The list still has to show a research this process is driving, but that
+        # branch must also stay on the summary path: no document read, no graph().
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        self.store.save(self.state)
+        live = dict(copy.deepcopy(self.state), objective='Live objective', round=7, batch=['c'], batchCompleted=1)
+        engine = IdeaTreeEngine(live, self.store, {})
+
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError('the live list branch must not read or build a full tree')
+
+        with patch.object(service, '_store', self.store), \
+                patch.object(service, '_running', {live['id']: (engine, None)}), \
+                patch.object(ResearchStore, 'read', forbidden), \
+                patch.object(IdeaTreeEngine, 'graph', forbidden):
+            listed = await service.command(service.Command(projectId='p', sessionId='s', operation='list'))
+
+        self.assertNotIn('graph', listed['items'][0])
+        research = listed['items'][0]['research']
+        self.assertEqual(research['objective'], 'Live objective')
+        self.assertEqual(research['round'], 7)
+        self.assertEqual(research['batch'], ['c'])
+        self.assertEqual(research['batchCompleted'], 1)
+        self.assertEqual(research['status'], self.state['status'])
+        self.assertNotIn('nodes', research)
+
+    async def test_service_list_answers_summaries_without_reading_full_files_or_building_graphs(self):
+        # #1470: the service list branch must use the store's projection. Reading a
+        # full document or calling graph() here would fail this test, and it would
+        # have failed before the summary companion existed.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        self.state['nodes'].append(node('candidate-1', 'ROOT', 'A candidate', 'candidate', 1))
+        self.state.update(batch=['candidate-1'], batchCompleted=1, activities=[
+            dict(role='design', nodeId='candidate-1', round=1, status='completed',
+                 startedAt=now(), finishedAt=now(), error=None)])
+        self.store.save(self.state)
+
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError('the list path must not read a full research document')
+
+        full = self.store.path('p', 's', 'research-test')
+        summary = self.store.summary_path('p', 's', 'research-test')
+        reads = []
+        original = Path.read_text
+        def counted(path, *args, **kwargs):
+            reads.append(path)
+            return original(path, *args, **kwargs)
+        with patch.object(service, '_store', self.store), patch.object(service, '_running', {}), \
+                patch.object(ResearchStore, 'read', forbidden), \
+                patch.object(IdeaTreeEngine, 'graph', forbidden), \
+                patch.object(Path, 'read_text', counted):
+            listed = await service.command(service.Command(projectId='p', sessionId='s', operation='list'))
+
+        self.assertIn(summary, reads, 'the list must read the saved projection')
+        self.assertNotIn(full, reads, 'the list must not read the full document')
+        self.assertEqual(len(listed['items']), 1)
+        self.assertNotIn('graph', listed['items'][0])
+        research = listed['items'][0]['research']
+        for key in ('id', 'status', 'phase', 'round', 'tokens', 'usageKnown', 'reason',
+                    'updatedAt', 'objective', 'batch', 'batchCompleted', 'activities'):
+            self.assertIn(key, research)
+        self.assertEqual(research['objective'], 'No cobalt. Compare catalyst directions.')
+        self.assertEqual(research['batch'], ['candidate-1'])
+        self.assertEqual(research['batchCompleted'], 1)
+        self.assertNotIn('nodes', research)
+        self.assertNotIn('materials', research)
+
+        # An explicit get keeps the complete document and its graph.
+        with patch.object(service, '_store', self.store), patch.object(service, '_running', {}):
+            fetched = await service.command(service.Command(projectId='p', sessionId='s',
+                                                             researchId='research-test', operation='get'))
+        self.assertIn('graph', fetched)
+        self.assertTrue(any(n['id'] == 'candidate-1' for n in fetched['graph']['nodes']))
 
     async def test_reading_a_research_never_writes_it(self):
         # #1456: list/get/events are reads. A `running` record with no engine in

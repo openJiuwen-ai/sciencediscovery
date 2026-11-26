@@ -145,7 +145,7 @@ export class ArtifactsApiClient extends RunsApiClient {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/artifact-dashboard`);
   }
 
-  listIdeaResearch(sessionId: string): Promise<{items: import("@sciencediscovery/schema").IdeaResearchView[]}> {
+  listIdeaResearch(sessionId: string): Promise<{items: import("@sciencediscovery/schema").IdeaResearchSummary[]}> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`);
   }
 

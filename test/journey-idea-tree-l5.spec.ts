@@ -1,11 +1,12 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect } from "@playwright/test";
-import type { IdeaResearchView } from "@sciencediscovery/schema";
+import type { IdeaResearchSummary, IdeaResearchView } from "@sciencediscovery/schema";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, type JourneyRun } from "./helpers/journeys.ts";
 import { RunPollRecovery } from "./helpers/run-poll-recovery.ts";
+import { getIdeaResearchView } from "./helpers/idea-research-api.ts";
 
 const cases = [
   { id: "iteration", title: "Multi-round water treatment research", template: "water-treatment-materials/v1", prompt: "Explore low-cost iron and manganese catalysts for near-neutral water treatment. Consider activity, recovery and leaching. Do not retrieve literature; distinguish hypotheses from evidence.", pause: false },
@@ -99,9 +100,23 @@ for (const scenario of cases) {
         }
       }
     };
-    const read = async () => ((await readJson(researchUrl())) as { items: IdeaResearchView[] }).items;
-    const researchById = async () => (await read()).find((item) => item.research.id === researchId);
-    const status = async () => (await researchById())?.research.status ?? "";
+    const read = async () => ((await readJson(researchUrl())) as { items: IdeaResearchSummary[] }).items;
+    const summaryById = async () => (await read()).find((item) => item.research.id === researchId);
+    const readView = async (identifier: string): Promise<IdeaResearchView> => {
+      for (;;) {
+        try {
+          const view = await getIdeaResearchView(page.request, fixture!.session.id, identifier, {
+            headers, timeout: 15_000, maxRetries: 2,
+          });
+          recovery.succeeded();
+          return view;
+        } catch (error) {
+          const failures = recovery.failed(error);
+          console.warn(`[l5-get] transient failure ${failures}/3: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    };
+    const status = async () => (await summaryById())?.research.status ?? "";
     const readRuns = async () => (await readJson(`${base()}/api/sessions/${fixture!.session.id}/runs`)) as JourneyRun[];
     // A run waits for a person in two shapes: `permissions/index.ts` reports
     // "Waiting for permission decision" and `runs/index.ts` reports "Waiting for
@@ -258,9 +273,8 @@ for (const scenario of cases) {
           const current = await status();
           return terminalStatuses.includes(current) ? current : "waiting";
         }, { timeout: terminalBudget, message: "the research should settle in a terminal status" }).toMatch(/^(completed|interrupted|paused|ended|budget_exhausted)$/);
-        const stored = await researchById();
-        expect(stored, `research ${researchId} should still be readable`).toBeDefined();
-        const { research, graph } = stored!;
+        const stored = await readView(researchId);
+        const { research, graph } = stored;
         expect(research.status, `research settled as "${research.status}"${research.reason ? `: ${research.reason}` : ""}`).toBe("completed");
         expect(research.settings).toMatchObject({ templateId: scenario.template, explorationIntensity: "standard" });
         expect(research.round).toBeGreaterThanOrEqual(2);
@@ -288,9 +302,10 @@ for (const scenario of cases) {
         // The API answering is not the same claim as the page still showing the
         // research: check the user-visible control region first, then the API.
         await expect(card).toBeVisible({ timeout: 60_000 });
-        const saved = await researchById();
-        expect(saved?.research.status).toBe("completed");
-        expect(saved?.graph.nodes.find((node) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
+        const listed = await summaryById();
+        expect(listed?.research.status).toBe("completed");
+        const saved = await readView(researchId);
+        expect(saved.graph.nodes.find((node) => node.id === "ROOT")?.insight?.trim()).toBeTruthy();
       });
     } finally {
       for (const started of startedSessions) {

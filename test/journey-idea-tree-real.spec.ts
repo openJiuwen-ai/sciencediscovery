@@ -2,6 +2,7 @@ import { expect } from "@playwright/test";
 import { requireRealEnv, requireRealStack, test } from "./helpers/e2e.ts";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
+import { getIdeaResearchView, listIdeaResearches } from "./helpers/idea-research-api.ts";
 
 test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category:e2e", "@os:linux", "@arch:amd64", "@model:real", "@tier:l4", "@sandbox:bubblewrap"] }, () => {
   test.use({ locale: "zh-CN" });
@@ -57,12 +58,13 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
     const terminalStatuses = ["completed", "interrupted", "paused", "ended", "budget_exhausted"];
     let fixture: Awaited<ReturnType<typeof createProjectAndSession>> | undefined;
     let researchId = "";
-    const read = async () => {
-      const response = await page.request.get(`${apiBaseUrl()}/api/sessions/${fixture!.session.id}/idea-tree/research`, { headers, timeout: 10_000, maxRetries: 2 });
-      expect(response.ok()).toBe(true);
-      return (await response.json()).items;
+    const read = async () => listIdeaResearches(page.request, fixture!.session.id, { headers, timeout: 10_000, maxRetries: 2 });
+    const summaryById = async () => (await read()).find((entry: any) => entry.research.id === researchId);
+    const viewById = async () => {
+      const summary = await summaryById();
+      return summary === undefined ? undefined
+        : await getIdeaResearchView(page.request, fixture!.session.id, summary.research.id, { headers, timeout: 10_000, maxRetries: 2 });
     };
-    const researchById = async () => (await read()).find((entry: any) => entry.research.id === researchId);
     try {
       await journey.step("Start a small research", "Quick research starts from the session", async () => {
         // `always_allow` is load-bearing, not convenience: the agent's preparation
@@ -123,11 +125,11 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
         const progressOf = (view: any) => {
           const seen = view?.research;
           if (!seen) return "absent";
-          return [seen.status, seen.phase, seen.round, seen.batchCompleted, seen.tokens, (seen.activities ?? []).length, (view.graph?.nodes ?? []).length].join("|");
+          return [seen.status, seen.phase, seen.round, seen.batchCompleted, seen.tokens, (seen.activities ?? []).length].join("|");
         };
         try {
           await expect.poll(async () => {
-            last = await researchById();
+            last = await summaryById();
             const seen = last?.research;
             if (seen && terminalStatuses.includes(seen.status)) return seen.status;
             const now = progressOf(last);
@@ -145,7 +147,7 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
           const seen = last?.research;
           throw new Error(`research ${researchId} never settled: status=${seen?.status ?? "absent from the list"} phase=${seen?.phase ?? "?"} round=${seen?.round ?? "?"} tokens=${seen?.tokens ?? "?"} reason=${seen?.reason ?? "none"}`, { cause: failure });
         }
-        const { graph, research } = (await researchById())!;
+        const { graph, research } = (await viewById())!;
         // A real model can stop short of `completed`; name the persisted reason
         // so a provider or JSON-parse failure is not reported as a value mismatch.
         expect(research.status, `research settled as "${research.status}"${research.reason ? `: ${research.reason}` : ""}`).toBe("completed");
@@ -157,9 +159,10 @@ test.describe("Idea Tree real research", { tag: ["@isolation:global", "@category
       await journey.step("Reload the session", "The API still returns the same completed research after a reload", async () => {
         await page.reload();
         await expect(page.getByRole("region", { name: "Idea Tree 研究控制" })).toBeVisible();
-        const saved = await researchById();
+        const saved = await summaryById();
         expect(saved?.research.status).toBe("completed");
-        expect(saved.graph.nodes.some((node: any) => node.kind === "candidate" && typeof node.score === "number" && node.insight?.trim())).toBeTruthy();
+        const reopened = await viewById();
+        expect(reopened?.graph.nodes.some((node: any) => node.kind === "candidate" && typeof node.score === "number" && node.insight?.trim())).toBeTruthy();
       });
     } finally {
       if (fixture) await cleanupJourney(page, fixture);
