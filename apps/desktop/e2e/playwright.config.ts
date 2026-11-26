@@ -64,6 +64,11 @@ export default defineConfig({
   webServer: {
     command: "./node_modules/.bin/vite --port 4175 --strictPort",
     cwd: resolve(here, ".."),
+    // The desktop config defaults sign-in to the production account service.
+    // Pin this run to a same-origin base with a path prefix instead: the sign-in
+    // URL is then absolute (as in production) while the mocked `/v1/**` routes
+    // below still answer it without crossing origins.
+    env: { VITE_ACCOUNTS_API: "http://127.0.0.1:4175/accounts" },
     url: "http://127.0.0.1:4175",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

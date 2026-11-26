@@ -303,7 +303,19 @@
 }
 
 .login-huawei-button:hover { background: #000; }
+/* An empty account-service base disables the entry rather than bouncing back
+   to the workspace; the notice beside it explains why. */
+.login-huawei-button:disabled { cursor: default; opacity: .45; }
+.login-huawei-button:disabled:hover { background: var(--login-ink); }
 .login-huawei-button:focus-visible { outline: 2px solid var(--login-ink); outline-offset: 2px; }
+
+.login-notice {
+  max-width: 600px;
+  margin: 16px 0 0;
+  color: var(--login-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
 
 .login-huawei-mark {
   display: grid;

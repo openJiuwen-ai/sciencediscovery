@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   AccountApiError,
+  accountsConfigured,
   fetchAccountMe,
   fetchAccountUsage,
   huaweiSignInUrl,
@@ -630,7 +631,7 @@ export function SignedOutAccount({ pending = false, onClose }: { pending?: boole
               <span className="login-spinner" aria-hidden="true" />
               {TEXT.login.verifying}
             </p>
-          ) : (
+          ) : accountsConfigured() ? (
             <button
               className="login-huawei-button account-signin"
               // `?account=1` is how the panel survives the full-page redirect:
@@ -640,6 +641,11 @@ export function SignedOutAccount({ pending = false, onClose }: { pending?: boole
             >
               <span className="login-huawei-mark" aria-hidden="true">ID</span>{TEXT.login.huaweiButton}
             </button>
+          ) : (
+            // No account-service base in this build: the panel says so instead of
+            // navigating to a path this app's own static host would answer with
+            // the SPA, which reloads the workspace with nothing to show for it.
+            <p className="account-signin-notice" role="status">{TEXT.login.accountServiceMissing}</p>
           )}
         </div>
       </div>

@@ -303,7 +303,7 @@ test.describe("the two-step entry gate", () => {
   });
 
   test("a HUAWEI callback opens the workspace without an enter press", async ({ page }) => {
-    await installMockApi(page, { models: [], sessions: [makeSession()] });
+    const mock = await installMockApi(page, { models: [], sessions: [makeSession()] });
     // The loopback credential is issued after the ticket is exchanged; the real
     // service verifies the account token, the mock hands the machine token over.
     await page.route("**/api/bootstrap/local-token", (route) => route.fulfill({ json: { token: TOKEN } }));
@@ -318,6 +318,15 @@ test.describe("the two-step entry gate", () => {
     await expect
       .poll(() => page.evaluate((key) => localStorage.getItem(key), TOKEN_STORAGE_KEY))
       .toBe(TOKEN);
+
+    // A build that *does* name an account service registers the credits-backed
+    // provider from that gateway's model list, which is what lets a signed-in
+    // user chat without any model setup (#1430). The provider's base URL is the
+    // pinned account service (`…/accounts/v1`), not this page's own origin.
+    await expect.poll(() => mock.state.providers.length).toBe(1);
+    const provider = mock.state.providers[0] as { baseUrl?: unknown; name?: unknown };
+    expect(provider.name).toBe("华为账号积分");
+    expect(new URL(String(provider.baseUrl)).pathname).toBe("/accounts/v1");
   });
 });
 

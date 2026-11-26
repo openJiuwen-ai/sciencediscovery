@@ -14,6 +14,7 @@ import {
   AccountApiError,
   DEFAULT_ACCOUNT_NAME,
   accountSessionToUserSession,
+  accountsConfigured,
   type AccountSession,
   describeDevice,
   exchangeTicket,
@@ -95,6 +96,8 @@ export function LoginPage({
   const [step, setStep] = useState<Step>(() => (readSession() ? "verifying" : "idle"));
   const [entry, setEntry] = useState<Entry>("account");
   const [localToken, setLocalToken] = useState("");
+  // Baked at build time, so this never changes while the page is mounted.
+  const accountServiceConfigured = accountsConfigured();
   // Settling consumes the ticket and rotates the refresh token, so it must run
   // exactly once per mount.
   const settlementStarted = useRef(false);
@@ -221,6 +224,10 @@ export function LoginPage({
   }
 
   function startSignIn(): void {
+    // An empty base cannot start a server-owned sign-in: the navigation would be
+    // answered by this app's own static host. The entry renders the "not
+    // configured" notice instead, so this is only the guard behind it.
+    if (!accountServiceConfigured) return;
     setStep("redirecting");
     // This workbench has no `/login` route: the sign-in page is what `/`
     // renders while the local service credential is missing. Returning to the
@@ -314,7 +321,12 @@ export function LoginPage({
                 <h1>{TEXT.login.title}</h1>
                 <p className="login-lead is-ink">{TEXT.login.subtitle}</p>
                 <div className="login-actions login-entry-actions">
-                  <button className="login-huawei-button login-entry-primary" onClick={startSignIn} type="button">
+                  <button
+                    className="login-huawei-button login-entry-primary"
+                    disabled={!accountServiceConfigured}
+                    onClick={startSignIn}
+                    type="button"
+                  >
                     <span className="login-huawei-mark" aria-hidden="true">ID</span>{TEXT.login.huaweiButton}
                   </button>
                   {offerModelSetup ? (
@@ -323,6 +335,13 @@ export function LoginPage({
                     </button>
                   ) : null}
                 </div>
+                {accountServiceConfigured ? null : (
+                  // The build carries no account-service base URL, so the button
+                  // above cannot reach a sign-in page. Say so here: navigating
+                  // anyway is answered by this app's own static host, which reads
+                  // as "nothing happened" and lands back on the workspace.
+                  <p className="login-notice" role="status">{TEXT.login.accountServiceMissing}</p>
+                )}
               </section>
             )}
           </div>

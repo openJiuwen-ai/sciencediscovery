@@ -25,7 +25,7 @@ import { appendEvolveDirection, isEvidenceSessionReadOnly, isEvolveRunActive, ty
 
 import { ApiClient } from "./api/client.js";
 import { TOKEN_STORAGE_KEY } from "./state/storage.js";
-import { AccountApiError, revokeAccountSession } from "./auth/account.js";
+import { AccountApiError, accountsConfigured, revokeAccountSession } from "./auth/account.js";
 import { CREDITS_PROVIDER_NAME, ensureCreditsModel } from "./auth/credits-model.js";
 import { requiresLocalToken } from "./auth/gate.js";
 import { clearSession, readSession, saveSession, sessionRefreshDelayMs, type UserSession } from "./auth/session.js";
@@ -254,6 +254,10 @@ export function App({ initialToken }: Props) {
 
   useEffect(() => {
     if (!accountSession || boot !== "ready") return;
+    // A build with no account-service base cannot reach the credits gateway:
+    // `ensureCreditsModel` would fetch `/v1/models` from the local API and get
+    // the SPA's index.html. Skip it instead of failing invisibly.
+    if (!accountsConfigured()) return;
     if (creditsModelToken.current === accountSession.accessToken) return;
     creditsModelToken.current = accountSession.accessToken;
     void ensureCreditsModel(client, accountSession)
@@ -896,12 +900,16 @@ export function App({ initialToken }: Props) {
    *  already chose to pay with credits). */
   const authenticate = useCallback(async (session: UserSession, localToken: string) => {
     let creditsModelReady = false;
-    try {
-      await ensureCreditsModel(new ApiClient(localToken, onAuthRejected), session);
-      creditsModelReady = true;
-    } catch {
-      // The gateway may be unreachable; the model wizard is the fallback.
+    if (accountsConfigured()) {
+      try {
+        await ensureCreditsModel(new ApiClient(localToken, onAuthRejected), session);
+        creditsModelReady = true;
+      } catch {
+        // The gateway may be unreachable; the model wizard is the fallback.
+      }
     }
+    // Otherwise this build has no account service to bill credits to: no
+    // provider is registered, so the custom-model wizard is the way in.
     // A signed-out workspace already holds this machine's token: re-accepting
     // the same one would restart boot behind the account panel, and a sign-in
     // that came from that panel lands on the panel itself. Only the catalog

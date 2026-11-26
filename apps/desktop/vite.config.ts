@@ -13,9 +13,10 @@
 // limitations under the License.
 
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 /** Release version + build hash, stamped into feedback metadata the same way
  *  apps/web does it so a report from either front end names its build. */
@@ -30,11 +31,47 @@ try { build = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encodin
  *  the file. */
 const controlPlane = process.env.SCIENCE_AGENT_API_URL ?? "http://127.0.0.1:4310";
 
+/** Account service a desktop build talks to when nothing else names one.
+ *
+ *  The deployment docs, `.env.example` and `docker-compose.yml` all record this
+ *  address, but the desktop app was the one front end whose own build applied
+ *  none of them: a bare `pnpm build` baked an empty base URL, so the sign-in
+ *  navigation went to `/v1/auth/huawei/start` on this app's own static host and
+ *  was answered with `index.html` (#1430). Keeping the default here leaves the
+ *  resolution path (`accountsBaseUrl()`) untouched for both front ends. */
+const DEFAULT_ACCOUNTS_API = "https://sciencediscovery.openjiuwen.com/accounts";
+
+/**
+ * Bakes `VITE_ACCOUNTS_API`, falling back to the desktop default.
+ *
+ * `loadEnv` is the same reader Vite uses, so `.env`, `.env.local` and the
+ * process environment keep their precedence and an exported or file-level
+ * empty value stays empty: the default is applied with `??`, never `||`,
+ * because empty is the documented "same origin" opt-out. The directory is
+ * taken from the config being resolved, which is also how a test can point a
+ * build at a temp directory.
+ */
+function accountsApiDefault(): Plugin {
+  return {
+    name: "sciencediscovery:accounts-api-default",
+    config(config, env) {
+      const root = resolve(config.root ?? process.cwd());
+      const envDir = config.envDir ? resolve(root, config.envDir) : root;
+      const configured = loadEnv(env.mode, envDir, "VITE_").VITE_ACCOUNTS_API;
+      return {
+        define: {
+          "import.meta.env.VITE_ACCOUNTS_API": JSON.stringify(configured ?? DEFAULT_ACCOUNTS_API),
+        },
+      };
+    },
+  };
+}
+
 export default defineConfig({
   define: { __SCIENCE_DISCOVERY_BUILD__: JSON.stringify(`${process.env.SCIENCE_DISCOVERY_VERSION ?? version} (${build})`) },
   // Deliberately no `base`: this app is meant to live at "/" so that swapping
   // it in for apps/web is a change of the static directory alone.
-  plugins: [react()],
+  plugins: [react(), accountsApiDefault()],
   // Pre-bundle the Mol* entry points the structure viewer imports. They are
   // reached through a lazy import, so the dev server would otherwise discover
   // them on the first structure someone opens and reload the page under them;

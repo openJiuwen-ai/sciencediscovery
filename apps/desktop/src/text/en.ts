@@ -216,6 +216,8 @@ export const EN: Text = {
     verifying: "Confirming your session…",
     errorTitle: "Sign-in did not complete",
     errorBody: "HUAWEI ID returned an error, or the account service could not verify the code. Try again.",
+    accountServiceMissing:
+      "This build has no account service address, so HUAWEI ID sign-in is unavailable. Ask whoever built the app to set VITE_ACCOUNTS_API and rebuild.",
     localTokenMissing: "Sign-in completed, but this machine's access credential could not be issued. Check that the local service is running and try again, or sign out.",
     retry: "Try again",
     accountTab: "HUAWEI ID",
