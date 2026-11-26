@@ -90,7 +90,6 @@ function jsonObjectLine(line: string): JsonRecord | undefined {
   }
 }
 
-/** Whether a parsed object is the shell execution envelope. */
 /**
  * Whether a parsed object is the shell execution envelope.
  *
