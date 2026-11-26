@@ -63,7 +63,23 @@ const errorText = (reason: unknown) => {
   if (isAbortError(reason)) return translateActive("researchPackage.exportCanceled");
   return reason instanceof Error ? reason.message : translateActive("researchPackage.operationFailed");
 };
-const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
+// One decimal at every magnitude: file rows and the estimate are compared across
+// rows, so the shape of the number should not change with its size. KiB-only output
+// turned a multi-GB Session into a seven-digit KiB count.
+const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B`
+  : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB`
+  : bytes < 1024 * 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+  : `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+/**
+ * The size the user actually downloads.
+ *
+ * A `.sdresearch` file is the gzip-compressed archive, so the preview's
+ * `downloadBytes` is what belongs next to 预计大小; the uncompressed numbers
+ * (`estimatedBytes`, `archiveBytes`) stay available for the limit line, which
+ * measures the archive the server refuses on (#1347). Only a server that does
+ * not answer `downloadBytes` falls back to the old value.
+ */
+const downloadBytesOf = (value?: { estimatedBytes: number; downloadBytes?: number }) => value?.downloadBytes ?? value?.estimatedBytes;
 
 function PackageScope({ profile }: { profile?: ResearchPackageExportProfile }) {
   const { t } = useLocale();
@@ -127,11 +143,26 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   const [includeFullMemoryGraph, setIncludeFullMemoryGraph] = useState(false);
   const [files, setFiles] = useState<Array<{ path: string; size: number; selected?: boolean }>>(() => previewCache.peekDefaults(target.projectId, target.sessionId)?.necessary.files ?? []);
   const [selectedPaths, setSelectedPaths] = useState<string[] | undefined>();
-  const [preview, setPreview] = useState<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; omissions: string[]; exportProfile?: ResearchPackageExportProfile; maxBytes?: number; archiveBytes?: number } | undefined>(() => previewCache.peekDefaults(target.projectId, target.sessionId)?.necessary);
+  const [preview, setPreview] = useState<{ revision?: string; estimatedBytes: number; estimateKind?: "uncompressed"; omissions: string[]; exportProfile?: ResearchPackageExportProfile; maxBytes?: number; archiveBytes?: number; downloadBytes?: number } | undefined>(() => previewCache.peekDefaults(target.projectId, target.sessionId)?.necessary);
   const [busy, setBusy] = useState(false);
   const exportAbortRef = useRef<AbortController | undefined>(undefined);
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
+  // A preview failure is an estimate failure, not an export failure: the dialog
+  // shows a localized lead and keeps the service's own sentence as the technical
+  // detail instead of presenting English raw text as the visible message.
+  const [estimateFailure, setEstimateFailure] = useState<string>();
+  // Which request produced `estimateFailure`. The dialogs poll the defaults every
+  // 3 s; a successful defaults refresh must not clear a failure that belongs to the
+  // selection preview, or the dialog would sit on "calculating" with no retry.
+  const estimateFailureSource = useRef<"defaults" | "selection" | undefined>(undefined);
+  // A custom selection whose preview has not answered yet owns the estimate message:
+  // a defaults-poll failure must not replace it, or a later defaults success would
+  // clear the failure and leave the dialog on "calculating" with no retry (#1347).
+  const selectionUnresolved = useRef(false);
+  // A selection preview that keeps answering PENDING is still computing, not
+  // failing: after a bounded wait the dialog says so instead of showing red text.
+  const [selectionStalled, setSelectionStalled] = useState(false);
   // "Not answered yet" and "the server says there are none" are different states.
   // Conflating them is what let a slow preview claim the session had no files
   // while it had 176 of them (#1140).
@@ -174,7 +205,9 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
     });
     setScopeGone(false);
     const refresh = () => { void previewCache.refreshDefaults(target.projectId, target.sessionId).then(() => {
-      if (active) setPreparing(false);
+      if (!active) return;
+      setPreparing(false);
+      if (estimateFailureSource.current !== "selection") setEstimateFailure(undefined);
     }).catch((reason: unknown) => {
       if (!active) return;
       // The dialog renders this state from its own snapshot, so the wording can
@@ -192,8 +225,13 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_PENDING") {
         setPreparing(true); setError(undefined); return;
       }
+      // The selection preview is the active estimate; if it is still unresolved its
+      // own state stays authoritative, whatever the defaults poll says.
+      if (selectionUnresolved.current) return;
       setPreparing(false);
-      setError(errorText(reason));
+      setError(undefined);
+      estimateFailureSource.current = "defaults";
+      setEstimateFailure(reason instanceof Error ? reason.message : String(reason));
     }); };
     refresh();
     const timer = window.setInterval(refresh, 3_000);
@@ -202,6 +240,10 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   useEffect(() => {
     let active = true;
     setError(undefined);
+    setEstimateFailure(undefined);
+    setSelectionStalled(false);
+    estimateFailureSource.current = undefined;
+    selectionUnresolved.current = false;
     if (!defaults) { setPreview(undefined); return () => { active = false; }; }
     if (!selectedPaths) {
       const result = level === "necessary" ? defaults.necessary : includeFullMemoryGraph
@@ -211,16 +253,50 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       return () => { active = false; };
     }
     setPreview(undefined);
+    selectionUnresolved.current = true;
+    // The selection preview retries the server's pending answer the way the desktop
+    // dialog does: it is still computing, not a failure, so no red estimate lead is
+    // shown while the bounded wait runs (#1347 review).
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let pendingTries = 0;
     const load = () => { void previewCache.get(target.projectId, target.sessionId, level, selectedPaths, level === "complete" && includeFullTrajectory, sessionRevision, level === "complete" && includeFullMemoryGraph).then((result) => {
-        if (active) { setPreview(result); setFiles(result.files); }
-      }).catch((reason: unknown) => { if (active) setError(errorText(reason)); }); };
+        if (!active) return;
+        pendingTries = 0;
+        selectionUnresolved.current = false;
+        setPreparing(false); setSelectionStalled(false);
+        estimateFailureSource.current = undefined;
+        setEstimateFailure(undefined);
+        setPreview(result); setFiles(result.files);
+      }).catch((reason: unknown) => {
+        if (!active) return;
+        if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_RESOURCE_DELETED") {
+          // Same gone contract as the defaults poll: the scope cannot answer, so the
+          // dialog shows its localized deletion state and disables the exports.
+          selectionUnresolved.current = false;
+          setScopeGone(true); estimateFailureSource.current = undefined; setEstimateFailure(undefined); setPreparing(false); return;
+        }
+        if (reason instanceof ApiRequestError && reason.code === "EXPORT_PREVIEW_PENDING") {
+          pendingTries += 1;
+          if (pendingTries < 6) {
+            setPreparing(true); setSelectionStalled(false);
+            timer = setTimeout(load, 1_500);
+          } else {
+            setPreparing(false); setSelectionStalled(true);
+          }
+          return;
+        }
+        setPreparing(false); setSelectionStalled(false);
+        estimateFailureSource.current = "selection";
+        setEstimateFailure(reason instanceof Error ? reason.message : String(reason));
+      }); };
     // Collapse rapid checkbox changes; level defaults use their own cached/in-flight result.
-    const timer = selectedPaths ? setTimeout(load, 180) : undefined;
+    timer = selectedPaths ? setTimeout(load, 180) : undefined;
     if (!selectedPaths) load();
     return () => { active = false; if (timer !== undefined) clearTimeout(timer); };
   }, [previewCache, defaults, level, includeFullTrajectory, includeFullMemoryGraph, selectedPaths, sessionRevision, target.projectId, target.sessionId]);
   const cancelExport = () => { exportAbortRef.current?.abort(); };
   const exportPackage = async () => {
+    setEstimateFailure(undefined);
     const controller = new AbortController();
     exportAbortRef.current = controller;
     setBusy(true); setMessage(undefined); setError(undefined);
@@ -236,6 +312,7 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   };
   const exportPackageInBackground = async () => {
     if (!preview?.revision) return;
+    setEstimateFailure(undefined);
     setBusy(true); setMessage(undefined); setError(undefined);
     try {
       const safeTitle = sessionTitle.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 120) || t("researchPackage.scientificSession");
@@ -261,8 +338,8 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   const overLimitKey = overLimit ? `${preview?.revision ?? ""}:${archiveBytes}` : undefined;
   const overLimitAcknowledged = overLimitKey !== undefined && acknowledgedLimitKey === overLimitKey;
   const blockedByLimit = overLimit && !overLimitAcknowledged;
-  const necessarySize = defaults && defaults.necessary.revision === defaults.revision ? defaults.necessary.estimatedBytes : undefined;
-  const completeSize = completeDefaultPreview && completeDefaultPreview.revision === defaults?.revision ? completeDefaultPreview.estimatedBytes : undefined;
+  const necessarySize = defaults && defaults.necessary.revision === defaults.revision ? downloadBytesOf(defaults.necessary) : undefined;
+  const completeSize = completeDefaultPreview && completeDefaultPreview.revision === defaults?.revision ? downloadBytesOf(completeDefaultPreview) : undefined;
   // A gone scope will never finish a preview, so the dialog stops promising
   // "Calculating…" next to an alert that says the opposite (#1074 F6).
   const unavailableSize = "—";
@@ -280,9 +357,11 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
   return <DialogFrame busy={busy} description={t("researchPackage.exportDescription")} onClose={busy ? cancelExport : onClose} title={t("researchPackage.exportEvidence")}>
     <div className="research-export-body">
       <div className="research-choice-grid"><ChoiceCard checked={level === "necessary"} description={t("researchPackage.necessaryDescription", { size: sizeText(necessarySize) })} onClick={() => chooseLevel("necessary")} title={t("researchPackage.scopeNecessary")} /><ChoiceCard checked={level === "complete"} description={t("researchPackage.completeDescription", { size: sizeText(completeSize) })} onClick={() => chooseLevel("complete")} title={t("researchPackage.scopeComplete")} /></div>
-      <div className="research-export-estimate" aria-live="polite"><strong>{preview ? t("researchPackage.estimatedSize", { size: formatSize(preview.estimatedBytes) }) : sizeText(undefined)}</strong><span>{t("researchPackage.selectedFiles", { selected: checkedPaths.length, total: files.length })}</span></div>
+      <div className="research-export-estimate" aria-live="polite"><strong>{preview ? t("researchPackage.estimatedSize", { size: formatSize(downloadBytesOf(preview)!) }) : sizeText(undefined)}</strong><span>{t("researchPackage.selectedFiles", { selected: checkedPaths.length, total: files.length })}</span></div>
       <p className="research-export-note">{t("researchPackage.previewNote")}</p>
-      {preview?.estimateKind === "uncompressed" ? <p className="research-export-note">{t("researchPackage.uncompressedNote")}</p> : null}
+      {preview?.downloadBytes !== undefined
+        ? <p className="research-export-note">{t("researchPackage.downloadEstimateNote", { size: formatSize(preview.estimatedBytes) })}</p>
+        : preview?.estimateKind === "uncompressed" ? <p className="research-export-note">{t("researchPackage.uncompressedNote")}</p> : null}
       {limit !== undefined ? <p className="research-export-note">{t("researchPackage.sizeLimit", { size: formatLimit(limit) })}</p> : null}
       {blockedByLimit ? <div role="alert" className="research-export-limit">
         <p>{t("researchPackage.overLimit", { size: formatLimit(archiveBytes ?? 0), limit: formatLimit(limit ?? 0) })}</p>
@@ -306,7 +385,13 @@ function PackageExportDialog({ client, target, onClose, onExportQueued }: Dialog
       <p className="research-export-note">{t("researchPackage.completeNote")}</p>
       {preview?.omissions.length ? <details className="research-export-details"><summary>{t("researchPackage.omissions", { count: preview.omissions.length })}</summary><ul>{preview.omissions.map((item, index) => <li key={index}>{item}</li>)}</ul></details> : null}
       {preparing && !preview ? <p role="status" className="research-export-status">{t("researchPackage.previewPreparing")}</p> : null}
-      {scopeGone ? <p role="alert" className="research-export-error">{t(hasVisibleSizes ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p> : error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
+      {selectionStalled ? <p role="status" className="research-export-status">{t("researchPackage.previewStalled")}</p> : null}
+      {scopeGone ? <p role="alert" className="research-export-error">{t(hasVisibleSizes ? "researchPackage.resourceDeleted" : "researchPackage.resourceDeletedNoSizes")}</p>
+        : estimateFailure !== undefined ? <div role="alert" className="research-export-error">
+          <p>{t("researchPackage.estimateFailed")}</p>
+          <details className="research-export-details"><summary>{t("researchPackage.technicalDetails")}</summary><code>{estimateFailure}</code></details>
+        </div>
+        : error ? <p role="alert" className="research-export-error">{error}</p> : null}{message ? <p role="status" className="research-export-status">{message}</p> : null}
     </div>
     <footer className="dialog-actions"><button className="secondary-button" onClick={() => { if (busy) cancelExport(); else onClose(); }} type="button">{t("researchPackage.cancel")}</button><span className="dialog-actions-spacer" /><button className="secondary-button" disabled={busy || scopeGone || blockedByLimit || !preview?.revision} onClick={() => void exportPackageInBackground()} type="button">{t("researchPackage.backgroundExport")}</button><button className="primary-button" disabled={busy || scopeGone || blockedByLimit || !preview} onClick={() => void exportPackage()} type="button">{busy ? t("researchPackage.processing") : t("researchPackage.immediateExport")}</button></footer>
   </DialogFrame>;

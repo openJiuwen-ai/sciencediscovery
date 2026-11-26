@@ -3,6 +3,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -111,8 +112,9 @@ test("incremental previews match exported evidence and profile sizes", async (co
     const query = `sessionId=${target.firstSession.id}&level=${level}&includeFullTrajectory=${Number(trajectory)}&includeFullMemoryGraph=${Number(memory)}`;
     const base = `/api/projects/${target.id}/research-package`;
     const preview = await (await request(`${base}/preview?${query}`)).json() as {
-      estimatedBytes: number; maxBytes?: number; archiveBytes?: number };
-    const exported = importResearchPackage(new Uint8Array(await (await request(`${base}?${query}`)).arrayBuffer()));
+      estimatedBytes: number; maxBytes?: number; archiveBytes?: number; downloadBytes?: number };
+    const download = await (await request(`${base}?${query}`)).arrayBuffer();
+    const exported = importResearchPackage(new Uint8Array(download));
     const exportedInput = {
       source: exported.manifest.source, records: exported.records, readme: Buffer.from(exported.readme).toString(),
       omissions: exported.manifest.omissions, exportProfile: exported.manifest.exportProfile,
@@ -123,10 +125,67 @@ test("incremental previews match exported evidence and profile sizes", async (co
     // the exporter refuses on (which is not the same number as the estimate above).
     assert.equal(preview.maxBytes, RESEARCH_PACKAGE_MAX_BYTES, query);
     assert.equal(preview.archiveBytes, researchPackageArchiveBytes(exportedInput), query);
+    // The dialog presents `downloadBytes` as the download, because the saved file is
+    // the gzip archive (#1347). It is derived from the tar above plus a bounded 256 KiB
+    // gzip of the records sample — no archive build — and must stay in the same order
+    // as the bytes this very endpoint just produced, rather than echoing the tar.
+    assert.equal(typeof preview.downloadBytes, "number", query);
+    assert.ok(preview.downloadBytes! < preview.archiveBytes!, query);
+    // ...and it must predict the download far better than the uncompressed tar did:
+    // the old headline was the tar, which is what #1347 is about. The ratio is an
+    // estimate (JSON compresses further than images), so the bound is on the error,
+    // not on an exact byte count.
+    const downloadError = Math.abs(preview.downloadBytes! - download.byteLength);
+    const tarError = Math.abs(preview.archiveBytes! - download.byteLength);
+    assert.ok(downloadError < tarError / 2,
+      `${query}: download estimate ${preview.downloadBytes} vs actual ${download.byteLength} (tar was ${preview.archiveBytes})`);
+    assert.ok(preview.downloadBytes! > download.byteLength * 0.5
+      && preview.downloadBytes! < download.byteLength * 2,
+      `${query}: estimate ${preview.downloadBytes} actual ${download.byteLength} tar ${preview.archiveBytes}`);
     // A package this fixture just exported cannot be over its own cap: a mismatch
     // here would mean the dialog refuses work the server would happily do.
     assert.ok(preview.archiveBytes! <= preview.maxBytes!, query);
   }
+});
+
+test("the download estimate keeps an already-compressed payload at its own size (#1347 F3.3)", async (context) => {
+  // Review F3.3: a fixed ratio understates exactly the export that needs the warning
+  // most. The preview classifies object bytes from names and media types it already
+  // has — never by reading them — so a PNG is counted at its own size and text at the
+  // text ratio. This pins the classification to the real downloaded bytes.
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const sized = async (sessionId: string, query: string) => {
+    const base = `/api/projects/${target.id}/research-package`;
+    const preview = await (await request(`${base}/preview?${query}`)).json() as {
+      estimatedBytes: number; archiveBytes?: number; downloadBytes?: number };
+    const download = await (await request(`${base}?${query}`)).arrayBuffer();
+    return { preview, downloaded: download.byteLength };
+  };
+  const importInto = async (sessionId: string, extra: Array<{ path: string; bytes: Buffer }>) => {
+    const pkg = researchTrajectoryFixture(extra);
+    const response = await request(`/api/projects/${target.id}/research-package/import?sessionId=${sessionId}`, { method: "POST", body: Buffer.from(pkg.bytes) });
+    assert.ok(response.ok);
+  };
+  const session = async (title: string) => (await (await request(`/api/projects/${target.id}/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title }) })).json() as { id: string }).id;
+
+  const opaqueSession = await session("Opaque payload session");
+  const figure = randomBytes(300_000);
+  await importInto(opaqueSession, [{ path: "figures/figure.png", bytes: figure }]);
+  const opaque = await sized(opaqueSession, `sessionId=${opaqueSession}&level=complete&includeFullTrajectory=1`);
+  // gzip cannot shrink the image, so the estimate keeps it near its full size...
+  assert.ok(opaque.preview.downloadBytes! >= figure.byteLength,
+    `opaque estimate ${opaque.preview.downloadBytes} vs image ${figure.byteLength}`);
+  assert.ok(opaque.preview.downloadBytes! < opaque.downloaded * 1.5,
+    `opaque estimate ${opaque.preview.downloadBytes} vs download ${opaque.downloaded}`);
+  // ...while the same file as text is scaled down, which is what a single ratio would
+  // wrongly do to the image too.
+  const textSession = await session("Text payload session");
+  const notes = Buffer.from("# Notes\n\n" + "the same measured sentence. ".repeat(12_000));
+  await importInto(textSession, [{ path: "notes/notes.md", bytes: notes }]);
+  const text = await sized(textSession, `sessionId=${textSession}&level=complete&includeFullTrajectory=1`);
+  assert.ok(text.preview.downloadBytes! < text.preview.archiveBytes! * 0.5,
+    `text estimate ${text.preview.downloadBytes} vs tar ${text.preview.archiveBytes}`);
 });
 
 test("an absent object is an omission while a corrupt one fails the export", async (context) => {
@@ -943,10 +1002,14 @@ test("the preview reports the cap and the tar size the exporter refuses on", asy
   const query = `sessionId=${target.firstSession.id}&level=complete`;
   const base = `/api/projects/${target.id}/research-package`;
   const preview = await (await request(`${base}/preview?${query}`)).json() as {
-    estimatedBytes: number; maxBytes?: number; archiveBytes?: number };
+    estimatedBytes: number; maxBytes?: number; archiveBytes?: number; downloadBytes?: number };
   assert.equal(preview.maxBytes, RESEARCH_PACKAGE_MAX_BYTES);
   assert.equal(typeof preview.archiveBytes, "number");
   assert.ok((preview.archiveBytes ?? 0) > 0);
+  // The download estimate rides along with the tar it is derived from; the cap above
+  // still describes the uncompressed archive, so the two never gate each other.
+  assert.equal(typeof preview.downloadBytes, "number");
+  assert.ok((preview.downloadBytes ?? 0) > 0 && preview.downloadBytes! < preview.archiveBytes!);
   // The dialog refuses work on this number, so it must be the tar the exporter builds.
   const exported = importResearchPackage(new Uint8Array(await (await request(`${base}?${query}`)).arrayBuffer()));
   const rebuilt = {
@@ -966,8 +1029,10 @@ test("an over-cap export is refused before it starts, and accepted once acknowle
     revision: "sized", estimatedBytes: archiveBytes, estimateKind: "uncompressed" as const,
     files: [], omissions: [], maxBytes: RESEARCH_PACKAGE_MAX_BYTES, archiveBytes,
   });
-  context.mock.method(ResearchExportPreviews.prototype, "get",
-    async () => sized(RESEARCH_PACKAGE_MAX_BYTES + 1));
+  // One mock for the whole case: mocking the same method twice made restoration put
+  // the first mock back, which then leaked an over-cap preview into every later test.
+  let sizedArchiveBytes = RESEARCH_PACKAGE_MAX_BYTES + 1;
+  context.mock.method(ResearchExportPreviews.prototype, "get", async () => sized(sizedArchiveBytes));
 
   const body = { level: "complete", sessionId, revision: "sized" };
   const refusedTask = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify(body) });
@@ -985,8 +1050,7 @@ test("an over-cap export is refused before it starts, and accepted once acknowle
   assert.equal(acknowledged.status, 200);
 
   // Nothing may cross the hard ceiling, acknowledgement or not.
-  context.mock.method(ResearchExportPreviews.prototype, "get",
-    async () => sized(RESEARCH_PACKAGE_MAX_MAX_BYTES + 1));
+  sizedArchiveBytes = RESEARCH_PACKAGE_MAX_MAX_BYTES + 1;
   const beyond = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify({ ...body, allowOverCap: true }) });
   assert.equal(beyond.status, 413);
   assert.equal((await beyond.json() as { code: string }).code, "RESEARCH_PACKAGE_TOO_LARGE");
@@ -1079,3 +1143,69 @@ test("a package whose workspace objects are all absent reports the loss instead 
   const detail = await (await request(`/api/sessions/${target.firstSession.id}`)).json() as { messages: unknown[] };
   assert.deepEqual(detail.messages, []);
 });
+
+test("a custom selection estimates only the payload it keeps (#1347 review)", async (context) => {
+  // The preview used to classify payload while it walked, before the selection dropped
+  // the objects it excluded: deselecting the 300,000 B image still added ~300,000 B to
+  // `downloadBytes`, which could exceed the archive the dialog gates on. The estimate
+  // must describe the archive that is downloaded.
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const figure = randomBytes(300_000);
+  const words = ["analysis", "sample", "measurement", "baseline", "result", "control", "variance", "signal"];
+  const notes = Buffer.from(Array.from({ length: 2000 }, (_, index) =>
+    `# ${words[index % words.length]} ${(index * 2654435761) % 1000003}\n${words[(index * 7) % words.length]} ${index % 1009} ${words[(index * 3) % words.length]} ${index}\n`).join(""));
+  const pkg = researchTrajectoryFixture([{ path: "figures/figure.png", bytes: figure }, { path: "notes/notes.md", bytes: notes }]);
+  await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, { method: "POST", body: Buffer.from(pkg.bytes) });
+  const base = `/api/projects/${target.id}/research-package`;
+  const sessionId = target.firstSession.id;
+  const read = async (extra: string) => {
+    const query = `sessionId=${sessionId}&level=complete&includeFullTrajectory=1${extra}`;
+    const preview = await (await request(`${base}/preview?${query}`)).json() as { downloadBytes?: number; archiveBytes?: number };
+    const download = await (await request(`${base}?${query}`)).arrayBuffer();
+    return { preview, downloaded: download.byteLength };
+  };
+  const textOnly = await read("&customFiles=1&filePath=notes%2Fnotes.md");
+  assert.ok(textOnly.preview.downloadBytes! <= textOnly.preview.archiveBytes!,
+    `download ${textOnly.preview.downloadBytes} must fit the ${textOnly.preview.archiveBytes} B archive`);
+  assert.ok(textOnly.preview.downloadBytes! > textOnly.downloaded * 0.5 && textOnly.preview.downloadBytes! < textOnly.downloaded * 2,
+    `excluded image: estimate ${textOnly.preview.downloadBytes} vs download ${textOnly.downloaded}`);
+  // The same image, selected, is still counted — at its own size rather than a third.
+  const imageOnly = await read("&customFiles=1&filePath=figures%2Ffigure.png");
+  assert.ok(imageOnly.preview.downloadBytes! >= figure.byteLength,
+    `selected image: estimate ${imageOnly.preview.downloadBytes} vs image ${figure.byteLength}`);
+  assert.ok(imageOnly.preview.downloadBytes! < imageOnly.downloaded * 1.5,
+    `selected image: estimate ${imageOnly.preview.downloadBytes} vs download ${imageOnly.downloaded}`);
+});
+
+test("the same content referenced twice is counted once in the download estimate (#1347 review)", async (context) => {
+  // A workspace file and an artifact version can address the same bytes. Payload was
+  // counted per call, so the shared bytes were added twice while the archive carried
+  // one object; the estimate must count the address once.
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const base = researchHistoryFixture();
+  const small = Buffer.from("value\n42\n");
+  const words = ["analysis", "sample", "measurement", "baseline", "result", "control", "variance", "signal"];
+  const shared = Buffer.from(Array.from({ length: 2000 }, (_, index) =>
+    `${index % 97} ${words[index % words.length]} ${(index * 2654435761) % 1000003} ${words[(index * 7) % words.length]} ${index % 1009}\n`).join(""));
+  const smallHash = sha256(small), sharedHash = sha256(shared);
+  // The fixture references its one workspace/artifact payload from the workspace, the
+  // artifact version and the derivation; replacing that payload keeps every reference.
+  const records = JSON.parse(JSON.stringify(base.records).split(smallHash).join(sharedHash)
+    .split(`"size":${small.length}`).join(`"size":${shared.length}`)) as typeof base.records;
+  const imported = importResearchPackage(base.bytes);
+  const objects = [...imported.objects].filter(([path]) => path !== smallHash).map(([path, bytes]) => ({ path, bytes }));
+  objects.push({ path: sharedHash, bytes: shared });
+  const bytes = createResearchPackage({ source: imported.manifest.source, records, objects }).bytes;
+  await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, { method: "POST", body: Buffer.from(bytes) });
+  const baseUrl = `/api/projects/${target.id}/research-package`;
+  const query = `sessionId=${target.firstSession.id}&level=complete&includeFullTrajectory=1`;
+  const preview = await (await request(`${baseUrl}/preview?${query}`)).json() as { downloadBytes?: number; archiveBytes?: number };
+  const download = await (await request(`${baseUrl}?${query}`)).arrayBuffer();
+  assert.ok(preview.downloadBytes! <= preview.archiveBytes!,
+    `download ${preview.downloadBytes} must fit the ${preview.archiveBytes} B archive`);
+  assert.ok(preview.downloadBytes! < download.byteLength * 1.5,
+    `shared content: estimate ${preview.downloadBytes} vs download ${download.byteLength}`);
+});
+

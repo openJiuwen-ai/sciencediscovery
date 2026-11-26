@@ -17,6 +17,13 @@ import { exportPollStep } from "./research-package-poll.js";
 import { omissionRows } from "./research-package-omissions.js";
 import "../styles/research-package.css";
 
+/**
+ * The size the user actually downloads: a `.sdresearch` is the gzip-compressed
+ * archive, so 预计大小 follows `downloadBytes`. The uncompressed numbers stay
+ * next to it, and the cap keeps measuring them (#1347).
+ */
+const downloadBytesOf = (value?: PackagePreview) => value?.downloadBytes ?? value?.estimatedBytes;
+
 export interface PackageRequest {
   kind: "export" | "import" | "branch"; projectId?: string; sessionId?: string; messageId?: string;
 }
@@ -155,6 +162,9 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [file, setFile] = useState<File>(), [inspection, setInspection] = useState<PackageInspection>();
   const [inspectedProject, setInspectedProject] = useState<string>();
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  // The preview service's own sentence: shown under 技术细节/Technical details, never as
+  // the visible lead, which stays localized (#1347 review).
+  const [estimateError, setEstimateError] = useState("");
   const [copy, setCopy] = useState<CopyOperation>();
   const [exports, setExports] = useState<ExportRecord[]>([]);
   const [progressExpanded, setProgressExpanded] = useState(false);
@@ -379,11 +389,11 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       pendingTries.current = 0;
       setPreviewStalled(false);
     }
-    setEstimating(true); setError("");
+    setEstimating(true); setError(""); setEstimateError("");
     const load = () => { void packagePreview(client, projectId, detail.id, level, false, graph && level === "complete", files).then(value => {
       if (!active) return;
       pendingTries.current = 0; setPreviewStalled(false);
-      setPreview(value); setEstimating(false);
+      setPreview(value); setEstimating(false); setEstimateError("");
     }).catch(reason => {
       if (!active) return;
       if (reason?.code === "EXPORT_PREVIEW_PENDING") {
@@ -393,7 +403,13 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         pendingTries.current += 1;
         if (pendingTries.current >= 6) { setPreviewStalled(true); setEstimating(false); }
         else { setEstimating(true); timer = setTimeout(load, 1500); }
-      } else { setEstimating(false); setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); }
+      } else if (reason?.status === 404) {
+        setEstimating(false); setError(t.sourceUnavailable);
+      } else {
+        // A failed estimate is not a raw service sentence on screen: the lead is
+        // localized and the service's own text moves under the technical details.
+        setEstimating(false); setError(t.estimateFailed); setEstimateError(String(reason?.message ?? reason));
+      }
     }); }; load();
     return () => { active = false; clearTimeout(timer); };
   }, [client, dialog, detail?.id, projectId, level, graph, files, previewNonce]);
@@ -546,7 +562,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
               ? [t.badgeConversation, t.badgeCurrentFiles, t.badgeDependencies]
               : [t.badgeConversation, t.badgeFileVersions, t.badgeHistory]).map(badge => <span className="research-badge" key={badge}>{badge}</span>)}</span>
             <span className="research-profile-description">{value === "necessary" ? t.necessaryHint : t.completeHint}</span>
-            <span className="research-package-size"><span>{t.estimate}</span><b>{profiles[value] ? formatBytes(profiles[value]!.estimatedBytes) : "—"}</b></span>
+            <span className="research-package-size"><span>{t.estimate}</span><b>{profiles[value] ? formatBytes(downloadBytesOf(profiles[value])!) : "—"}</b></span>
           </button>)}</div>
           {level === "complete" ? <>
             <p className="research-field-label">{t.otherContent}</p>
@@ -557,7 +573,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
           {estimating ? <p className="research-package-notice">{t.recalculating}</p> : null}
           {estimating && !preview ? <p className="research-package-status" role="status"><span aria-hidden="true" className="spinner" />{t.previewRetrying}</p> : null}
           {previewStalled ? <div className="research-package-pending" role="status"><p>{t.pendingLong}</p><button className="secondary-button" onClick={() => { pendingTries.current = 0; setPreviewStalled(false); setEstimating(true); setPreviewNonce(value => value + 1); }} type="button">{t.retryPreview}</button></div> : null}
-          <p className="research-package-selected-size">{preview ? <>{t.estimateUncompressed} <b>{formatBytes(preview.estimatedBytes)}</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
+          <p className="research-package-selected-size">{preview ? <>{t.estimateDownload} <b>{formatBytes(downloadBytesOf(preview)!)}</b> · {t.estimateUncompressed} <b>{formatBytes(preview.estimatedBytes)}</b>{estimating ? ` · ${t.recalculating}` : null}</> : t.calculating}</p>
+          {preview?.downloadBytes !== undefined ? <p className="research-package-notice">{t.downloadNote}</p> : null}
           {limitBytes !== undefined ? <p className="research-package-notice">{t.sizeLimit(formatLimit(limitBytes))}</p> : null}
           {blockedByLimit ? <div role="alert" className="research-package-limit">
             <p>{t.overLimit(formatLimit(archiveBytes ?? 0), formatLimit(limitBytes ?? 0))}</p>
@@ -610,7 +627,10 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
             <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><svg aria-hidden="true" className="research-upload-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11a3 3 0 0 1 3-3h8l4 4h12a3 3 0 0 1 3 3v16a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><circle cx="31" cy="13" r="7" fill="white"/><path d="M31 9v8m-4-4h8"/></svg><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
           )}
         </> : <p>{t.branchHint}</p>}
-        {error ? <p role="alert" className="research-package-error">{error}</p> : null}
+        {error ? <div role="alert" className="research-package-error">
+          <p>{error}</p>
+          {estimateError && error === t.estimateFailed ? <details className="research-package-raw"><summary>{t.detailsRaw}</summary><code>{estimateError}</code></details> : null}
+        </div> : null}
       </div>
       <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{dialog === "branch" ? t.close : t.cancelAction}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
