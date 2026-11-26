@@ -580,6 +580,7 @@ jobs:
     env:
       CI_WEB_UI_ST_SPECS: ${{ needs.policy.outputs.web_ui_st_specs }}
       CI_E2E_BACKEND: ${{ needs.policy.outputs.backend }}
+      CI_E2E_LOCAL_CONCURRENCY: ${{ matrix.local_concurrency }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:

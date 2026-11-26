@@ -15,9 +15,19 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTest } from '../test/support/tagged/compat.mjs';
-import { createPlan } from '../test/support/tagged/plan.mjs';
+import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
+import {
+  mockedBatches,
+  mockedExecutionLanes,
+  mockedLocalConcurrency,
+  mockedShards,
+  mockedSlotEnvironment,
+  PARALLEL_MOCKED_SHARDS,
+  swarmChecks,
+} from '../test/support/tagged/execution.mjs';
 import { sharedCacheEnv } from '../test/support/tagged/shared.mjs';
 import { HEAVY_MOCKED_SHARDS, buildMockedMatrix } from './mocked-matrix.mjs';
+import { reconcileMocked } from './mocked-report.mjs';
 import { SELF_HOSTED_RUNNER, route } from './tier-policy.mjs';
 
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
@@ -86,6 +96,7 @@ test('mocked E2E matrix routes only the three heavy shards to self-hosted when e
   for (const entry of hosted.include) {
     assert.equal(entry.runner, 'ubuntu-latest', entry.shard);
     assert.equal(entry.self_hosted, false, entry.shard);
+    assert.equal(entry.local_concurrency, PARALLEL_MOCKED_SHARDS.has(entry.shard) ? 2 : 1, entry.shard);
   }
 
   const routed = buildMockedMatrix(plan, { selfHostedMergeQueue: true });
@@ -95,11 +106,13 @@ test('mocked E2E matrix routes only the three heavy shards to self-hosted when e
     assert.ok(HEAVY_MOCKED_SHARDS.has(shard), shard);
     assert.deepEqual(byShard[shard].runner, [...SELF_HOSTED_RUNNER], shard);
     assert.equal(byShard[shard].self_hosted, true, shard);
+    assert.equal(byShard[shard].local_concurrency, PARALLEL_MOCKED_SHARDS.has(shard) ? 2 : 1, shard);
   }
   for (const shard of ['governed', 'literature']) {
     assert.ok(!HEAVY_MOCKED_SHARDS.has(shard), shard);
     assert.equal(byShard[shard].runner, 'ubuntu-latest', shard);
     assert.equal(byShard[shard].self_hosted, false, shard);
+    assert.equal(byShard[shard].local_concurrency, 1, shard);
   }
 });
 
@@ -177,6 +190,7 @@ test('ci.yml wires merge-queue self-hosted routing, cache toggles and idempotent
 
   assert.match(jobs.e2e, /max-parallel: 5/);
   assert.match(jobs.e2e, /runs-on: \$\{\{ matrix\.runner \}\}/);
+  assert.match(jobs.e2e, /CI_E2E_LOCAL_CONCURRENCY: \$\{\{ matrix\.local_concurrency \}\}/);
   assert.match(jobs.e2e, /cache: \$\{\{ !matrix\.self_hosted && 'pnpm' \|\| '' \}\}/);
   assert.match(jobs.e2e, /enable-cache: \$\{\{ !matrix\.self_hosted \}\}/);
   assert.match(jobs.e2e, /if ! bwrap --unshare-user --ro-bind \/ \/ --dev \/dev true 2>\/dev\/null; then/);
@@ -335,4 +349,163 @@ chmod +x "$JIUWENSWARM_SRC/.venv/bin/jiuwenswarm-start" "$JIUWENSWARM_SRC/.venv/
   });
   assert.notEqual(badKey.status, 0);
   assert.match(badKey.stderr, /Invalid CI_SWARM_CACHE_KEY/);
+});
+
+test('mockedExecutionLanes balances standard shards across 2 isolated lanes without splitting spec files', () => {
+  assert.equal(mockedLocalConcurrency(undefined), 1);
+  assert.equal(mockedLocalConcurrency('1'), 1);
+  assert.equal(mockedLocalConcurrency('2'), 2);
+  for (const invalid of ['0', '-1', '3', 'abc']) {
+    assert.throws(() => mockedLocalConcurrency(invalid), /CI_E2E_LOCAL_CONCURRENCY/);
+  }
+
+  const makeEntry = (id, source, extra = []) => ({
+    id,
+    source,
+    sourceHash: 'a'.repeat(64),
+    runner: 'playwright',
+    tags: ['category:e2e', 'os:linux', 'arch:amd64', 'model:mock', ...extra],
+  });
+
+  // standard-journeys with 4 spec files (including multi-test files) splits into 2 lanes.
+  const journeysPlan = createPlan([
+    makeEntry('j1a', 'test/j1.spec.ts', ['isolation:session']),
+    makeEntry('j1b', 'test/j1.spec.ts', ['isolation:session']),
+    makeEntry('j1c', 'test/j1.spec.ts', ['isolation:session']),
+    makeEntry('j2a', 'test/j2.spec.ts', ['isolation:session']),
+    makeEntry('j2b', 'test/j2.spec.ts', ['isolation:session']),
+    makeEntry('j3a', 'test/j3.spec.ts', ['isolation:session']),
+    makeEntry('j4a', 'test/j4.spec.ts', ['isolation:session']),
+  ], {
+    revision: 'candidate',
+    profile: 'merge',
+    targets: [{ os: 'linux', arch: 'amd64' }],
+    execution: { backend: 'jiuwenswarm' },
+  });
+  assert.equal(mockedExecutionLanes(journeysPlan, 1).length, 1);
+  const journeyLanes = mockedExecutionLanes(journeysPlan, 2);
+  assert.equal(journeyLanes.length, 2);
+  assert.deepEqual(journeyLanes.map(lane => lane.map(b => b.key)), [
+    ['mocked-standard-journeys'],
+    ['mocked-standard-journeys-2'],
+  ]);
+  const jSources0 = new Set(journeyLanes[0][0].entries.map(e => e.source));
+  const jSources1 = new Set(journeyLanes[1][0].entries.map(e => e.source));
+  for (const source of jSources0) assert.equal(jSources1.has(source), false, `split spec file: ${source}`);
+  assert.deepEqual(
+    journeyLanes.flat().flatMap(b => b.entries.map(e => e.key)).sort(),
+    journeysPlan.entries.map(e => e.key).sort(),
+  );
+
+  // Single-file standard-journeys stays 1 lane even with concurrency=2.
+  const singleFileJourneys = createPlan([
+    makeEntry('only1', 'test/only.spec.ts', ['isolation:session']),
+    makeEntry('only2', 'test/only.spec.ts', ['isolation:session']),
+  ], {
+    revision: 'candidate',
+    profile: 'pr',
+    targets: [{ os: 'linux', arch: 'amd64' }],
+    execution: { backend: 'jiuwenswarm' },
+  });
+  assert.equal(mockedExecutionLanes(singleFileJourneys, 2).length, 1);
+
+  // standard-config puts checks ONLY on lane 0 (mocked-standard-config-global) and
+  // keeps mocked-standard-config-fresh in its own pristine batch on lane 1.
+  const configPlan = createPlan([
+    makeEntry('fresh1', 'test/fresh.spec.ts', ['isolation:fresh']),
+    makeEntry('g1a', 'test/g1.spec.ts', ['isolation:global']),
+    makeEntry('g1b', 'test/g1.spec.ts', ['isolation:global']),
+    makeEntry('g2a', 'test/g2.spec.ts', ['isolation:global']),
+    makeEntry('g2b', 'test/g2.spec.ts', ['isolation:global']),
+    makeEntry('g3a', 'test/g3.spec.ts', ['isolation:global']),
+    makeEntry('g4a', 'test/g4.spec.ts', ['isolation:global']),
+  ], {
+    revision: 'candidate',
+    profile: 'merge',
+    targets: [{ os: 'linux', arch: 'amd64' }],
+    execution: { backend: 'jiuwenswarm' },
+  });
+  const configLanes = mockedExecutionLanes(configPlan, 2);
+  assert.equal(configLanes.length, 2);
+  assert.deepEqual(configLanes.map(lane => lane.map(b => b.key)), [
+    ['mocked-standard-config-global'],
+    ['mocked-standard-config-fresh', 'mocked-standard-config-global-2'],
+  ]);
+  assert.deepEqual(configLanes[0][0].checks, swarmChecks);
+  assert.deepEqual(configLanes[1][0].checks, []);
+  assert.deepEqual(configLanes[1][1].checks, []);
+  assert.ok(configLanes[1][0].entries.every(e => e.tags.includes('isolation:fresh')));
+  const gSources0 = new Set(configLanes[0][0].entries.map(e => e.source));
+  const gSources1 = new Set(configLanes[1][1].entries.map(e => e.source));
+  for (const source of gSources0) assert.equal(gSources1.has(source), false, `split global spec: ${source}`);
+  assert.deepEqual(
+    configLanes.flat().flatMap(b => b.entries.map(e => e.key)).sort(),
+    configPlan.entries.map(e => e.key).sort(),
+  );
+
+  // research shard never splits even with concurrency=2.
+  const researchPlan = createPlan([
+    makeEntry('r1', 'test/r1.spec.ts', ['fixture:research']),
+    makeEntry('r2', 'test/r2.spec.ts', ['fixture:research']),
+  ], {
+    revision: 'candidate',
+    profile: 'merge',
+    targets: [{ os: 'linux', arch: 'amd64' }],
+    execution: { backend: 'jiuwenswarm' },
+  });
+  assert.equal(mockedExecutionLanes(researchPlan, 2).length, 1);
+});
+
+test('mockedSlotEnvironment assigns disjoint port blocks and reconcileMocked audits sub-lane checks', t => {
+  const s0 = mockedSlotEnvironment(0, { swarmStartLock: '/tmp/lock', viteCacheDir: '/tmp/v0' });
+  const s1 = mockedSlotEnvironment(1, { swarmStartLock: '/tmp/lock', viteCacheDir: '/tmp/v1' });
+  const portsOf = slot => [
+    Number(slot.SCIENCE_AGENT_PORT),
+    Number(slot.SCIENCE_AGENT_PORT) + 5,
+    Number(slot.SCIENCE_AGENT_LEGACY_PORT),
+    Number(slot.SCIENCE_AGENT_RUNNER_PORT),
+    Number(slot.SCIENCE_AGENT_MEMORY_GRAPH_PORT),
+    Number(slot.E2E_DESKTOP_PORT),
+  ];
+  const allPorts = [...portsOf(s0), ...portsOf(s1)];
+  assert.equal(new Set(allPorts).size, allPorts.length, 'slots must have zero port overlap');
+  assert.equal(s0.CI_E2E_SWARM_START_LOCK, '/tmp/lock');
+  assert.equal(s1.E2E_DESKTOP_VITE_CACHE_DIR, '/tmp/v1');
+
+  // Verify run-e2e.sh closes fd 8 on child JiuwenSwarm commands so daemons never hold the lock.
+  const runE2e = readFileSync(join(repository, '.ci/run-e2e.sh'), 'utf8');
+  assert.match(runE2e, /CI_E2E_SWARM_START_LOCK/);
+  assert.match(runE2e, /scripts\/jiuwenswarm\.sh" start 8>&-/);
+  assert.match(runE2e, /release_swarm_lock/);
+
+  // Verify reconcileMocked allows clean sub-lane directories and rejects stray checks inside them.
+  const parent = join(repository, '.tmp', 'self-hosted-merge-queue-tests');
+  mkdirSync(parent, { recursive: true });
+  const root = mkdtempSync(join(parent, 'reconcile-lanes-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const p = fiveShardPlan();
+  const pass = e => ({ key: e.key, outcome: 'PASS', actualTarget: e.target, actualBackend: e.backend });
+  for (const shard of mockedShards(p)) {
+    const base = join(root, `mocked-e2e-results-${shard.name}`);
+    const dir = join(base, 'e2e/tagged');
+    mkdirSync(dir, { recursive: true });
+    const worker = subplan(p, p.entries.filter(e => shard.keys.includes(e.key)));
+    writeFileSync(join(dir, 'plan.json'), JSON.stringify(worker));
+    writeFileSync(join(dir, 'summary.json'), JSON.stringify(verifyResults(worker, worker.entries.map(pass))));
+  }
+  for (const batch of mockedBatches(p).filter(b => b.checks.length)) {
+    const checkDir = join(root, `mocked-e2e-results-${batch.shard}`, batch.key, 'e2e');
+    mkdirSync(checkDir, { recursive: true });
+    writeFileSync(join(checkDir, 'jiuwenswarm-checks.json'), JSON.stringify(batch.checks.map(name => ({ name, outcome: 'PASS' }))));
+  }
+  // Sub-lane directory without checks passes reconciliation.
+  const subLaneDir = join(root, 'mocked-e2e-results-standard-config', 'mocked-standard-config-global-2', 'e2e');
+  mkdirSync(subLaneDir, { recursive: true });
+  assert.equal(reconcileMocked(p, root).status, 'PASS');
+  // Stray checks inside sub-lane directory fail reconciliation with UNEXPECTED_SWARM_CHECKS.
+  writeFileSync(join(subLaneDir, 'jiuwenswarm-checks.json'), JSON.stringify(swarmChecks.map(name => ({ name, outcome: 'PASS' }))));
+  const bad = reconcileMocked(p, root);
+  assert.equal(bad.exitCode, 1);
+  assert.ok(bad.problems.some(msg => msg.includes('UNEXPECTED_SWARM_CHECKS')));
 });

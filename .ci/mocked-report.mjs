@@ -1,6 +1,6 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, cpSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, cpSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { canonical, validatePlan, verifyResults } from '../test/support/tagged/plan.mjs';
@@ -26,14 +26,20 @@ export function reconcileMocked(plan, root) {
       // where the partition is split. Locate the file through the same
       // projection instead of guessing a per-shard suffix.
       const batches = mockedBatches(plan).filter(batch => batch.shard === shard.name);
-      const evidence = batch => join(directory, batch.key, 'e2e/jiuwenswarm-checks.json');
-      // A checks file outside the designated batch proves they ran on the
-      // wrong stack, or more than once.
-      if (batches.some(batch => !batch.checks.length && existsSync(evidence(batch)))) throw new Error('UNEXPECTED_SWARM_CHECKS');
+      const evidence = key => join(directory, key, 'e2e/jiuwenswarm-checks.json');
+      const checkBatches = batches.filter(batch => batch.checks.length);
+      const designatedCheckKey = shard.checks.length ? checkBatches[0]?.key : null;
+      // A checks file outside the designated batch (including any concurrent
+      // local sub-lane such as mocked-standard-config-global-2) proves checks
+      // ran on the wrong stack, or more than once.
+      if (batches.some(batch => !batch.checks.length && existsSync(evidence(batch.key)))) throw new Error('UNEXPECTED_SWARM_CHECKS');
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !entry.name.startsWith('mocked-')) continue;
+        if (entry.name !== designatedCheckKey && existsSync(evidence(entry.name))) throw new Error('UNEXPECTED_SWARM_CHECKS');
+      }
       if (shard.checks.length) {
-        const checkBatches = batches.filter(batch => batch.checks.length);
         if (checkBatches.length !== 1) throw new Error('SWARM_CHECKS_BATCH_UNDEFINED');
-        const checks = JSON.parse(readFileSync(evidence(checkBatches[0])));
+        const checks = JSON.parse(readFileSync(evidence(checkBatches[0].key)));
         if (canonical(checks) !== canonical(shard.checks.map(name => ({ name, outcome: 'PASS' })))) throw new Error('SWARM_CHECKS_INCOMPLETE');
       }
     } catch (error) { errors.push(`${shard.name}: ${error.code === 'ENOENT' ? 'SHARD_EVIDENCE_MISSING' : error.message}`); }

@@ -141,8 +141,13 @@ The recorded host memory is capacity, not measured peak usage.
 ### Parallel mocked browser workers
 
 The mocked matrix is frozen from the same `e2e` slice, with up to five
-independent jobs (`max-parallel: 5`, `fail-fast: false`). No case list lives in
-the workflow:
+independent jobs (`max-parallel: 5`, `fail-fast: false`). In CI, the two long
+standard shards (`standard-config` and `standard-journeys`) set
+`CI_E2E_LOCAL_CONCURRENCY=2` so each job runs two fully isolated local stacks
+(disjoint loopback ports, runtime directories, `JIUWENSWARM_HOME` roots, and
+Vite cache directories, each keeping Playwright `workers: 1` and serializing
+JiuwenSwarm port allocation via `CI_E2E_SWARM_START_LOCK`) in parallel without
+splitting any spec file. No case list lives in the workflow:
 
 | Worker | Fixture | Existing browser cases | Supplemental checks |
 | --- | --- | ---: | --- |

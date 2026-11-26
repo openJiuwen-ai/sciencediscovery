@@ -31,6 +31,7 @@ try { build = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], { encodin
 const controlPlane = process.env.SCIENCE_AGENT_API_URL ?? "http://127.0.0.1:4310";
 
 export default defineConfig({
+  ...(process.env.E2E_DESKTOP_VITE_CACHE_DIR ? { cacheDir: process.env.E2E_DESKTOP_VITE_CACHE_DIR } : {}),
   define: { __SCIENCE_DISCOVERY_BUILD__: JSON.stringify(`${process.env.SCIENCE_DISCOVERY_VERSION ?? version} (${build})`) },
   // Deliberately no `base`: this app is meant to live at "/" so that swapping
   // it in for apps/web is a change of the static directory alone.
