@@ -43,6 +43,17 @@ export interface IdeaResearchListState {
    *  relative to a read that finished after the command that asked for it. */
   loads: number;
   reload: () => void;
+  /** Take a fresher snapshot of one research — a whole view, as every write and
+   *  every stream frame is — and put it in the list. The panel produces one when
+   *  the reader presses 继续, and the card at the transcript's foot reads the same
+   *  research from this list: neither a resume nor a pause creates a research, so
+   *  nothing else would make the shell read the list again, and the card would
+   *  keep the status it had before the control for the rest of the session.
+   *  A snapshot that says the research is running also makes it live, which is
+   *  what restarts the poll the list stopped when it last read `interrupted`.
+   *  `fromSession` is the session the answer came from: a panel that outlived a
+   *  session switch must not write into the list that is on screen now. */
+  apply: (view: IdeaResearchView, fromSession?: string) => void;
 }
 
 export function useIdeaResearches(client: ApiClient, sessionId: string | undefined): IdeaResearchListState {
@@ -83,10 +94,21 @@ export function useIdeaResearches(client: ApiClient, sessionId: string | undefin
     }
     const load = async () => {
       setLoading(true);
+      // A read answers with the list as it was when the request left, and a control
+      // can answer while it is in flight: the resume's `running` must not be put
+      // back to `interrupted` by a read that started before it (that would also
+      // switch the poll off again). Snapshots taken after this read started win.
+      const startedAt = Date.now();
       try {
         const next = await listIdeaResearches(client, sessionId);
         if (!active) return;
-        setViews(next);
+        const settled = next.map((item) => {
+          const kept = applied.current.get(item.research.id);
+          return kept !== undefined && kept.at > startedAt ? kept.view : item;
+        });
+        // Anything this read is newer than is the read's to decide from now on.
+        for (const [id, kept] of applied.current) if (kept.at <= startedAt) applied.current.delete(id);
+        setViews(settled);
         setLoads((count) => count + 1);
         setUnavailable(false);
         setError(undefined);
@@ -112,5 +134,28 @@ export function useIdeaResearches(client: ApiClient, sessionId: string | undefin
     return () => clearInterval(timer);
   }, [anyLive, sessionId]);
 
-  return { views, loading, unavailable, ...(error ? { error } : {}), loads, reload };
+  /** The snapshots a reader's own action produced, with the moment they were
+   *  taken, so a list read that started earlier cannot undo them. */
+  const applied = useRef(new Map<string, { view: IdeaResearchView; at: number }>());
+
+  // One research replaced by a snapshot the reader has already seen elsewhere. Only
+  // a research this list already holds is replaced: the panel reports answers that
+  // can arrive after the reader has moved to another session, and a research that
+  // session's list does not contain must not be added to it — the list is that
+  // session's set of researches, and a foreign card would outlive the switch.
+  const apply = useCallback((view: IdeaResearchView, fromSession?: string) => {
+    // A panel that outlived a session switch still finishes its requests; its
+    // answer belongs to the session it was opened in, not to the one on screen.
+    if (fromSession !== undefined && fromSession !== loadedFor.current) return;
+    applied.current.set(view.research.id, { view, at: Date.now() });
+    setViews((current) => {
+      const index = current.findIndex((item) => item.research.id === view.research.id);
+      if (index < 0) return current;
+      const next = current.slice();
+      next[index] = view;
+      return next;
+    });
+  }, []);
+
+  return { views, loading, unavailable, ...(error ? { error } : {}), loads, reload, apply };
 }

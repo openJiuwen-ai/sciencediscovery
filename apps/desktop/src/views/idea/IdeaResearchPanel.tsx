@@ -45,11 +45,20 @@ const MAX_RECONNECTS = 4;
 
 const LIVE = ["running", "pausing"];
 
-export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
+export function IdeaResearchPanel({ client, sessionId, researchId, onClose, onResearchChanged }: {
   client: ApiClient;
   sessionId: string;
   researchId: string;
   onClose?: () => void;
+  /** Reported with the view whenever the panel learns a newer one from its own
+   *  writes or reads, together with the session it was opened in. The card at the
+   *  transcript's foot shows the same research from the session list, and a resume
+   *  creates nothing that would make the shell read that list again, so the panel
+   *  is the only place that knows. The session id travels with it because the
+   *  panel can be closed while a request is still in flight: an answer for the
+   *  session that is gone must not be written into the one on screen, and an
+   *  answer for the session still shown is wanted even after the panel is gone. */
+  onResearchChanged?: (view: IdeaResearchView, sessionId: string) => void;
 }) {
   const [view, setView] = useState<IdeaResearchView>();
   const [error, setError] = useState<string>();
@@ -65,12 +74,27 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
    *  holding the old object would show a node that no longer matches the tree. */
   const [selectedId, setSelectedId] = useState<string>();
   const live = useRef<AbortController | undefined>(undefined);
+  /** Held in a ref so reporting a view cannot change the identity of the reads
+   *  and effects below: a caller that passes an inline lambda must not make the
+   *  panel refetch. */
+  const changed = useRef(onResearchChanged);
+  useEffect(() => { changed.current = onResearchChanged; }, [onResearchChanged]);
+  /** A read or a control can answer after the panel is gone — the reader closed
+   *  it, opened another research, or switched sessions — so its own state is only
+   *  written while it is mounted. Reporting is different: the answer is still the
+   *  truth for the session it was asked in, and that session, not the panel, is
+   *  what decides whether it still applies. */
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
 
   /** `keepError` is a control refusal that outlives the reload: the read refreshes the
    *  tree, but its own success or failure must not erase why the control was refused. */
   const load = useCallback(async (keepError?: string) => {
     try {
-      setView(await getIdeaResearch(client, sessionId, researchId));
+      const next = await getIdeaResearch(client, sessionId, researchId);
+      changed.current?.(next, sessionId);
+      if (!mounted.current) return;
+      setView(next);
       // A later read that works is what makes the prerequisite notice go away:
       // the service came back, and the panel should not keep saying it is down.
       setUnavailable(false);
@@ -127,7 +151,16 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose }: {
     setBusy(true);
     setError(undefined);
     try {
-      setView(await controlIdeaResearch(client, sessionId, researchId, operation));
+      const next = await controlIdeaResearch(client, sessionId, researchId, operation);
+      // The answer is the service's own state after the control, so it is also the
+      // truth for every other place that shows this research — the session list
+      // included. It is reported even if the reader closed the panel meanwhile:
+      // pressing 继续 and then closing is the shortest path to the reported bug,
+      // and the list is the thing that has to learn. Whether it still applies is
+      // decided by the session it names, not by this component's life.
+      changed.current?.(next, sessionId);
+      if (!mounted.current) return;
+      setView(next);
       setUnavailable(false);
     } catch (reason: unknown) {
       if (isUnavailable(reason)) {

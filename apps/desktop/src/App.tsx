@@ -1702,6 +1702,7 @@ export function App({ initialToken }: Props) {
                 client={client}
                 key={ideaResearch.research.id}
                 onClose={() => setIdeaResearchId(undefined)}
+                onResearchChanged={idea.apply}
                 researchId={ideaResearch.research.id}
                 sessionId={state.sessionId!}
               />
