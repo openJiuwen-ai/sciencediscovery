@@ -5529,7 +5529,9 @@ body.is-resizing {
 }
 .search-panel-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .search-panel-glyph { flex: 0 0 auto; color: var(--muted); }
-.search-panel-input { flex: 1 1 auto; min-width: 0; border: 0; outline: none; background: none; color: var(--text); font: inherit; font-size: 14px; }
+.search-panel-input { flex: 1 1 auto; min-width: 0; border: 0; background: none; color: var(--text); font: inherit; font-size: 14px; }
+/* The dialog is already the focus: a ring around the field would draw a second one. */
+.search-panel-input:focus, .search-panel-input:focus-visible { outline: none; box-shadow: none; }
 .search-panel-close {
   flex: 0 0 auto;
   width: 24px;
