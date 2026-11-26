@@ -84,6 +84,7 @@
 .settings-bulk.is-toolbar { gap: 20px; margin: 0; }
 .settings-bulk.is-toolbar .bulk-button {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   height: 32px;
@@ -93,6 +94,9 @@
   background: none;
   color: #191919;
   font-size: 14px;
+  /* The pair shares one line with the tabs and the search: a label that wrapped
+     inside its own button would make the two writes read as one column of text. */
+  white-space: nowrap;
 }
 .settings-bulk.is-toolbar .bulk-button:hover:not(:disabled) { background: none; color: #000; }
 .settings-bulk.is-toolbar .bulk-button:active:not(:disabled) { background: none; }
@@ -757,6 +761,15 @@ a.secondary-button {
   gap: 12px 24px;
   margin: 0 0 16px;
 }
+/* The handoff draws tabs, the bulk pair, the search and 添加技能 on one line.
+   From the default window up, the row keeps that line by letting the search
+   give up width instead of the whole right-hand group dropping below the tabs;
+   narrower windows wrap, where one line cannot hold them at a usable search. */
+@media (min-width: 1400px) {
+  .skill-toolbar { flex-wrap: nowrap; }
+  .skill-toolbar-end { flex: 1 1 auto; justify-content: flex-end; }
+  .skill-toolbar .skill-search-field { min-width: 150px; }
+}
 .skill-tabs { display: flex; align-items: flex-end; gap: 32px; }
 .skill-tab {
   position: relative;
@@ -785,6 +798,10 @@ a.secondary-button {
   align-items: center;
   gap: 16px;
   margin-left: auto;
+  /* The group is allowed to give up width to the search: without this its
+     automatic minimum keeps the row at its content width and pushes
+     添加技能 past the pane's right edge on a narrow window. */
+  min-width: 0;
 }
 .skill-search-field {
   position: relative;
