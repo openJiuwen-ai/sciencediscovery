@@ -976,8 +976,8 @@ test.describe("技能", () => {
     const dialog = await openSettings(page, "技能");
     await expect(dialog.locator(".settings-card")).toHaveCount(2);
     await dialog.getByRole("button", { name: "一键启用", exact: true }).click();
-    await expect(dialog.getByRole("switch", { name: "启用或停用「分子绘图」" })).toHaveAttribute("aria-checked", "false");
-    await expect(dialog.getByRole("switch", { name: "启用或停用「文献检索」" })).toHaveAttribute("aria-checked", "true");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「分子绘图」" })).toHaveAttribute("aria-checked", "true");
+    await expect(dialog.getByRole("switch", { name: "启用或停用「文献检索」" })).toHaveAttribute("aria-checked", "false");
     await expect(dialog).toContainText("Skill switch failed");
     expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-1")?.enabled).toBe(false);
     expect(mock.state.jiuwenSwarmSkills.find((skill) => skill.skillId === "skill-2")?.enabled).toBe(true);
