@@ -212,7 +212,9 @@ const ROW_RANK: Record<ReviewTone, number> = { fail: 0, warn: 1, pass: 2, pendin
  * reached no conclusion, or nothing was there to compare). The Quick pass's
  * sentence on that gap tells the reader to run a Deep review — which is the
  * level they just ran, so it contradicts the pill on the same card. A Deep
- * review says instead what its own attempt produced.
+ * review says instead what its own attempt produced. The status is written
+ * only once the stage runs, so an absent status lands on `noComparison` too:
+ * with no stage result, nothing was compared either way.
  */
 function gapBody(review: ArtifactReviewRun, gap: NonNullable<ArtifactReviewRun["notChecked"]>[number]): string {
   if (gap.check === "claim_support" && (review.reviewLevel === "deep" || review.reviewLevel === "smart")) {
