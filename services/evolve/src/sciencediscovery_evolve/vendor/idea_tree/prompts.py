@@ -5,7 +5,8 @@ mechanisms, explanations, or intervention paths.
 Later hypotheses must address a specific prior weakness or unresolved alternative, naming the
 source candidate, change, evaluation question and tradeoff. Never invent literature evidence.
 Only candidate leaves execute; a completed candidate can be the parent of a new research direction.
-Return each candidate under one of selectedParentIds and follow its selectedParentConstraints entry.
+Return each candidate with an explicit parentId from selectedParentIds, including parentId="ROOT"
+for ROOT proposals; never omit parentId. Follow that parent's selectedParentConstraints entry.
 remainingDepth counts all available levels below that parent; reserve one for the candidate itself.
 maxPathSteps is the remaining allowance for intermediate direction/refinement nodes.
 Provide direction when directionRequired is true; otherwise omit it. A direction consumes one

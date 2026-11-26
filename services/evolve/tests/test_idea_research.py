@@ -426,34 +426,40 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected_parent['id'], '1')
         self.assertEqual(path, ['Mechanism follow-up'])
 
-    def test_expansion_constraints_reserve_the_candidate_and_required_direction(self):
-        # ROOT, existing directions, and completed candidates consume different
-        # intermediate steps. Include both the reported depth-3 case and the last level.
-        cases = [
-            ('ROOT', 'direction', 0, 5, True, False, 4),
-            ('ROOT', 'direction', 0, 1, False, False, 0),
-            ('1', 'direction', 3, 5, False, False, 1),
-            ('1', 'direction', 4, 5, False, False, 0),
-            ('1', 'candidate', 3, 5, True, True, 0),
-            ('1', 'candidate', 4, 5, True, False, 0),
-        ]
-        for identifier, kind, parent_depth, ceiling, required, allowed, refinements in cases:
-            with self.subTest(kind=kind, parent_depth=parent_depth, ceiling=ceiling):
-                self.state['settings']['maxDepth'] = ceiling
-                parent = node(identifier, None, 'Parent', kind, parent_depth)
-                parent['status'] = 'done'
-                self.state['nodes'] = [parent]
-                engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
-                constraints = engine.expansion_constraints(parent)
-                self.assertEqual(constraints, dict(parentId=identifier, remainingDepth=ceiling - parent_depth,
-                    maxPathSteps=ceiling - parent_depth - 1, directionRequired=required,
-                    directionNodeAllowed=allowed, maxRefinements=refinements))
-                proposal = dict(parentId=identifier, refinements=['Refinement'] * refinements, hypothesis='Child')
-                if required:
-                    proposal['direction'] = 'Follow-up'
-                _, path = engine.proposal_path(proposal)
-                self.assertEqual(len(path), refinements + int(allowed))
-                self.assertEqual(parent_depth + len(path) + 1, ceiling)
+    def assert_expansion_constraints(self, identifier, kind, parent_depth, ceiling, required, allowed, refinements):
+        self.state['settings']['maxDepth'] = ceiling
+        parent = node(identifier, None, 'Parent', kind, parent_depth)
+        parent['status'] = 'done'
+        self.state['nodes'] = [parent]
+        engine = IdeaTreeEngine(self.state, self.store, {}, self.model)
+        constraints = engine.expansion_constraints(parent)
+        self.assertEqual(constraints, dict(parentId=identifier, remainingDepth=ceiling - parent_depth,
+            maxPathSteps=ceiling - parent_depth - 1, directionRequired=required,
+            directionNodeAllowed=allowed, maxRefinements=refinements))
+        proposal = dict(parentId=identifier, refinements=['Refinement'] * refinements, hypothesis='Child')
+        if required:
+            proposal['direction'] = 'Follow-up'
+        _, path = engine.proposal_path(proposal)
+        self.assertEqual(len(path), refinements + int(allowed))
+        self.assertEqual(parent_depth + len(path) + 1, ceiling)
+
+    def test_root_expansion_reserves_only_the_candidate_level(self):
+        self.assert_expansion_constraints('ROOT', 'direction', 0, 5, True, False, 4)
+
+    def test_depth_one_root_needs_no_direction(self):
+        self.assert_expansion_constraints('ROOT', 'direction', 0, 1, False, False, 0)
+
+    def test_direction_expansion_reserves_the_candidate_level(self):
+        self.assert_expansion_constraints('1', 'direction', 3, 5, False, False, 1)
+
+    def test_last_level_direction_has_no_refinement_budget(self):
+        self.assert_expansion_constraints('1', 'direction', 4, 5, False, False, 0)
+
+    def test_candidate_expansion_reserves_direction_and_candidate_levels(self):
+        self.assert_expansion_constraints('1', 'candidate', 3, 5, True, True, 0)
+
+    def test_last_level_candidate_keeps_direction_as_metadata(self):
+        self.assert_expansion_constraints('1', 'candidate', 4, 5, True, False, 0)
 
     async def test_ideation_and_correction_receive_selected_parent_constraints(self):
         attempts = []
