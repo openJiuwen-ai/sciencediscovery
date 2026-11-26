@@ -544,7 +544,8 @@ def test_a_stop_ends_an_evaluation_in_flight_and_reports_it_as_stopped_not_broke
     # evaluator is broken", which is the opposite of what happened.
     assert valid is False
     assert metrics["score"] == float("-inf")
-    assert error == "the search was stopped"
+    assert metrics["cancelled"] is True
+    assert error == "a stop request"
 
 
 @live
@@ -557,6 +558,40 @@ def test_once_stopped_no_further_evaluation_is_started():
         should_stop=lambda: True,
     )
     started = time.monotonic()
-    valid, _metrics, error = slow.evaluate(GOOD, [0, 1, 2, 3])
+    valid, metrics, error = slow.evaluate(GOOD, [0, 1, 2, 3])
     assert time.monotonic() - started < 2.0
-    assert (valid, error) == (False, "the search was stopped")
+    assert (valid, error) == (False, "a stop request")
+    assert metrics["cancelled"] is True
+
+
+def test_a_budget_stop_marks_the_candidate_unevaluated_and_keeps_the_cause(monkeypatch):
+    """A cancelled evaluation is not a broken candidate.
+
+    `valid: false` alone cannot say which of the two it was, and both clients
+    derive a candidate's verdict from that plus the category — so the cause is
+    carried in the metrics where the reporter can read it. Without the marker a
+    budget stop labels every base it touched `candidate-failed`.
+    """
+    from sciencediscovery_evolve.cancellation import StopGate
+    from sciencediscovery_evolve.sandbox_run import RunStopped
+
+    gate = StopGate()
+    gate.stop(reason="token budget reached (600000)", cause="budget")
+    built = script_domain(
+        scorecard=CARD, script=EVALUATOR, capability=detect_local_capability(),
+        statement="Get the length right", baseline_code=BAD, candidate_timeout=60.0,
+        should_stop=gate,
+    )
+
+    def killed(*_args, **_kwargs):
+        raise RunStopped("the search was stopped")
+
+    # The mapping, without needing a sandbox on the host: every real evaluation
+    # reaches this exception through `run_killable`.
+    monkeypatch.setattr("sciencediscovery_evolve.script_domain._run_evaluator", killed)
+    valid, metrics, error = built.evaluate(GOOD, [0, 1, 2, 3])
+
+    assert valid is False
+    assert metrics["cancelled"] is True
+    assert metrics["cancelReason"] == "token budget reached (600000)"
+    assert error == "token budget reached (600000)"

@@ -95,8 +95,13 @@ PUCT 和 OpenEvolve 共用同一套骨架（Domain 接缝、事件流、沙箱�
 GET  /health                 → {engine, running, sandbox_local, status}
 POST /probe                  → 判别力探针，返回 {baseline, worsened, flat, label}
 POST /runs                   → NDJSON 事件流（长连接）
-POST /runs/{search_id}/stop  → 停止
+POST /runs/{search_id}/stop  → 停止（可带 {cause, reason}）
 ```
+
+`POST /runs/{search_id}/stop` 可带可选请求体 `{cause, reason}`。cause 让 sidecar 能区分
+“预算耗尽”和“用户按下停止”：token/成本预算耗尽时仍可对最佳候选做一次受控的 held-out 评估，
+用户主动停止或墙钟超时则不做。不带请求体的 POST 视为用户停止；该原因同时会写入终止事件的
+`stopReason`，不再被框架自身的 `max_iters` 覆盖。
 
 `POST /runs` 的请求体 `RunRequest` 有 24 个字段。按性质分四类：
 

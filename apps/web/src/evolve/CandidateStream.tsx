@@ -68,10 +68,13 @@ export function CandidateStream({ candidates, onSelect, selectedIndex }: Candida
   </div>;
 }
 
-/** Exported: which of the four outcomes a row is showing is the whole point of
+/** Exported: which of the five outcomes a row is showing is the whole point of
  *  the block, and it is worth pinning without a DOM. */
 export function verdictOf(candidate: EvolveCandidateView): string {
   if (candidate.accepted) return "accepted";
+  // Before `valid`: a cancelled candidate is invalid too, and "did not run" is
+  // the wrong story for one the search never got to measure.
+  if (candidate.category === "cancelled") return "cancelled";
   if (!candidate.valid) return candidate.category === "constraint-violated" ? "violated" : "failed";
   return candidate.category === "constraint-violated" ? "violated" : "rejected";
 }
@@ -88,5 +91,6 @@ function verdictLabel(
     return candidate.rejectedBy ?? t("evolve.refusal.constraint-violated" as never);
   }
   if (verdict === "failed") return t("evolve.refusal.candidate-failed" as never);
+  if (verdict === "cancelled") return t("evolve.refusal.cancelled" as never);
   return t("evolve.refusal.below-threshold" as never);
 }

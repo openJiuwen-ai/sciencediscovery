@@ -41,6 +41,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from .cancellation import stop_reason_of
 from .logging_config import get_logger
 
 log = get_logger("completion")
@@ -101,6 +102,15 @@ def completion_for(
     dropped — the call is already paid for either way, and the difference is
     whether the user is made to wait for it.
 
+    An abandoned call is **not** an empty reply, and the returned callable says
+    so through its own ``on_cancelled`` sink rather than through ``on_failure``:
+    one is the provider or the ceiling, the other is the run being stopped, and
+    recording the second as the first sent readers looking for output that was
+    never requested. The two report through separate callbacks on purpose — a
+    caller that does not pass ``on_cancelled`` keeps the old silent-empty
+    behaviour, and a genuine empty reply still reaches ``on_failure`` only when
+    something actually failed.
+
     ``thinking`` is sent as ``{"type": ...}`` for explicit ``enabled`` or
     ``disabled`` modes. ``auto`` is omitted so the provider's own default
     remains in force. The value comes from the goal rather than being decided
@@ -133,19 +143,21 @@ def completion_for(
         prompt: str,
         sink: Optional[Callable[[CompletionUsage], None]] = None,
         on_failure: Optional[Callable[[str], None]] = None,
+        on_cancelled: Optional[Callable[[str], None]] = None,
     ) -> str:
         report = sink or on_usage
         # Already stopped: do not send the request at all. Every expansion the
         # search still has queued would otherwise fire a real, paid model call
         # and abandon it half a second later, once per remaining expansion.
         if should_stop is not None and should_stop():
+            _report_cancelled(on_cancelled, stop_reason_of(should_stop))
             return ""
         # Owned by the caller's thread rather than reported from `_call`: the
         # call runs on a daemon thread so it can be abandoned when the run
         # stops, and a thread-local set over there is invisible here.
         failures: list[str] = []
         deadline = time.monotonic() + timeout
-        box: list[str] = []
+        box: list[tuple[str, bool]] = []
         worker = threading.Thread(
             target=lambda: box.append(_call(prompt, report, failures, deadline)),
             daemon=True, name="evolve-completion",
@@ -160,8 +172,15 @@ def completion_for(
             worker.join(min(0.05, remaining))
             if should_stop is not None and should_stop():
                 log.info("completion abandoned: the run was stopped")
+                _report_cancelled(on_cancelled, stop_reason_of(should_stop))
                 return ""
-        text = box[0] if box else ""
+        text, cancelled = box[0] if box else ("", False)
+        if cancelled:
+            # The worker gave up because the run was stopped, not because the
+            # provider failed. Said with its own sink so the caller never files
+            # it as "the model returned an empty reply".
+            _report_cancelled(on_cancelled, stop_reason_of(should_stop))
+            return ""
         if failures and on_failure is not None:
             on_failure(failures[-1])
         return text
@@ -171,7 +190,10 @@ def completion_for(
         report: Optional[Callable[[CompletionUsage], None]],
         failures: list[str],
         deadline: float,
-    ) -> str:
+    ) -> tuple[str, bool]:
+        """``(text, cancelled)``. The flag exists so a stop is not inferred from
+        an empty string after the fact: a model that genuinely answered with
+        nothing must stay distinguishable from a request that was dropped."""
         body: dict[str, Any] = {
             "max_tokens": max_tokens,
             "messages": [{"content": prompt, "role": "user"}],
@@ -192,7 +214,7 @@ def completion_for(
         try:
             for attempt in range(max(0, min(max_retries, 2)) + 1):
                 if should_stop is not None and should_stop():
-                    return ""
+                    return "", True
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("completion retry deadline exceeded")
@@ -211,7 +233,7 @@ def completion_for(
                     log.warning("completion transient HTTP %s; retry %s/2", error.code, attempt + 1)
                     while time.monotonic() < delay_end:
                         if should_stop is not None and should_stop():
-                            return ""
+                            return "", True
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise TimeoutError("completion retry deadline exceeded")
@@ -231,11 +253,11 @@ def completion_for(
             # never produced.
             log.warning("completion failed: HTTP %s %s", error.code, detail)
             failures.append(f"HTTP {error.code}：{detail}")
-            return ""
+            return "", False
         except Exception as error:  # noqa: BLE001 - network, timeouts, malformed JSON
             log.warning("completion failed: %s", error)
             failures.append(str(error) or error.__class__.__name__)
-            return ""
+            return "", False
         if report is not None:
             usage = body.get("usage") if isinstance(body, dict) else None
             usage = usage if isinstance(usage, dict) else {}
@@ -249,9 +271,21 @@ def completion_for(
                                            capped=completion >= max_tokens - 2))
                 except Exception:  # Accounting is best effort; retain the already-paid answer.
                     log.warning("completion usage could not be recorded")
-        return _first_text(body)
+        return _first_text(body), False
 
     return complete
+
+
+def _report_cancelled(on_cancelled: Optional[Callable[[str], None]], reason: str) -> None:
+    """Tell the caller this call was abandoned. Best effort, like accounting:
+    the work is already dropped and a raising sink must not turn a stop into a
+    crash in the middle of the wind-down."""
+    if on_cancelled is None:
+        return
+    try:
+        on_cancelled(reason)
+    except Exception:  # noqa: BLE001 - see above
+        log.warning("a cancellation notice could not be delivered")
 
 
 def _first_text(body: object) -> str:

@@ -51,7 +51,16 @@ import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
+from .cancellation import CAUSE_TEXT, mark_cancelled, stop_reason_of
 from .logging_config import get_logger
+from .outcome import (
+    CASE_COUNT_KEY,
+    CASE_RESULTS_KEY,
+    FAILED_KEY,
+    SCORE_KEY,
+    VIOLATED_KEY,
+    build_outcome,
+)
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
 from .vendor.puct.domain import Domain
@@ -61,8 +70,6 @@ from .vendor.puct.sandbox import SandboxCapability, sandbox_command
 from .vendor.puct.tree import finite as _finite
 
 log = get_logger("test-gate")
-
-SCORE_KEY = "score"
 
 #: Where the suite is expected to write its results. Passed in the environment
 #: rather than appended to the command, because "how do I emit JUnit XML" is a
@@ -118,7 +125,11 @@ def test_gate_domain(
                 capability=capability, timeout=candidate_timeout, should_stop=should_stop,
             )
         except RunStopped:
-            return False, {SCORE_KEY: float("-inf")}, "the search was stopped"
+            # A run that was stopped has not measured this candidate at all, and
+            # an exception here would report a fault in a suite that never got
+            # to run. The marker keeps it out of `candidate-failed`.
+            reason = stop_reason_of(should_stop) or CAUSE_TEXT[""]
+            return (False, mark_cancelled({SCORE_KEY: float("-inf")}, reason), reason)
         if outcomes is None:
             return False, {SCORE_KEY: float("-inf")}, "the test suite produced no readable result"
 
@@ -139,22 +150,25 @@ def test_gate_domain(
         failed = [test for test, passed in selected.items() if not passed]
         raw = {criterion["id"]: rate}
         scored = score_candidate(scorecard, raw, reference or raw)
-        metrics: Dict[str, Any] = {
-            criterion["id"]: rate,
-            "cases": len(selected),
-            "failed": len(failed),
-            # The per-case outcome, keyed by test id. A rate is one number, and
-            # "did this candidate improve *this case*" is the pairing a paired
-            # test needs; `selected` already holds it, so carrying it out costs
-            # nothing and dropping it is what made the score unverifiable.
-            "caseResults": dict(selected),
-            SCORE_KEY: scored.reward,
-        }
+        metrics = build_outcome(
+            raw=raw,
+            scored=scored,
+            extra={
+                CASE_COUNT_KEY: len(selected),
+                FAILED_KEY: len(failed),
+                # The per-case outcome, keyed by test id. A rate is one number,
+                # and "did this candidate improve *this case*" is the pairing a
+                # paired test needs; `selected` already holds it, so carrying it
+                # out costs nothing and dropping it is what made the score
+                # unverifiable.
+                CASE_RESULTS_KEY: dict(selected),
+            },
+        )
 
         violations = evaluate_constraints(scorecard, raw, reference or raw)
         if violations:
             metrics[SCORE_KEY] = float("-inf")
-            metrics["violated"] = violations[0].constraint_id
+            metrics[VIOLATED_KEY] = violations[0].constraint_id
             return False, metrics, violations[0].detail
         # A candidate that fails tests is scored, not refused: the pass rate is
         # the signal, and "you broke three of them" is what the search learns

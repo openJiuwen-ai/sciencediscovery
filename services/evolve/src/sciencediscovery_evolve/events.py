@@ -219,6 +219,7 @@ def evaluated(
     *,
     gate_score: float | None = None,
     rollout_score: float | None = None,
+    raw_criteria: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """A candidate reached a score.
 
@@ -228,6 +229,16 @@ def evaluated(
     rollout aggregate survives its rollout (#1457); readers fall back from an
     absent ``rolloutScore`` to the gate/score line. Events persisted before that
     correction may still carry the duplicate, so a reader must tolerate both.
+
+    ``criteria`` is the documented normalised map. ``rawCriteria`` is what the
+    evaluator actually measured, carried so the event log — the audit and
+    replay record — can still show the 0.6 behind a normalised 0.3. Absent on
+    events from a sidecar that predates it; consumers that care about raw units
+    fall back to ``criteria`` for those, which is what it used to mean.
+
+    Non-finite raw values are dropped rather than rounded: ``-inf`` is the
+    failure sentinel and ``NaN`` is not JSON, and either one reaching
+    ``encode_ndjson`` would crash the stream.
     """
     event: dict[str, Any] = {
         "criteria": {key: round(value, 6) for key, value in criteria.items()},
@@ -239,6 +250,13 @@ def evaluated(
         event["gateScore"] = round(gate_score, 6)
     if rollout_score is not None:
         event["rolloutScore"] = round(rollout_score, 6)
+    if raw_criteria is not None:
+        measured = {}
+        for key, value in raw_criteria.items():
+            number = finite(value)
+            if number is not None:
+                measured[key] = round(number, 6)
+        event["rawCriteria"] = measured
     return event
 
 

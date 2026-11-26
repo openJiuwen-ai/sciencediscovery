@@ -51,6 +51,7 @@ from pydantic import BaseModel, Field
 
 from . import events
 from .auth import require_internal_token
+from .cancellation import DISCONNECT, FINISHED, StopGate, normalize_cause
 from .engine import Engine, RunSpec
 from .events import HEARTBEAT, EventStream, encode_ndjson
 from .logging_config import get_logger
@@ -126,9 +127,12 @@ _SHUTDOWN_TIMEOUT_SECONDS = 5.0
 #: and cannot be mistaken for something that happened.
 _HEARTBEAT_SECONDS = 15.0
 
-#: Searches currently in flight, and their stop flags. Cleared when the
-#: generator finishes, so a crashed stream cannot leak a flag forever.
-_running: dict[str, threading.Event] = {}
+#: Searches currently in flight, and their stop gates. Cleared when the
+#: generator finishes, so a crashed stream cannot leak a gate forever. A gate
+#: rather than a bare Event because the cause has to reach the engine: a token
+#: budget that ran out and a person pressing stop want opposite things from the
+#: final held-out evaluation.
+_running: dict[str, StopGate] = {}
 _running_lock = threading.Lock()
 
 
@@ -171,6 +175,20 @@ class RunRequest(BaseModel):
     #: ``{url, token}`` for the control plane's model proxy. Absent for engines
     #: that make no model calls (the stub).
     llm: dict[str, Any] = Field(default_factory=dict)
+
+
+class StopRequest(BaseModel):
+    """Why a search is being asked to stop, when the caller knows.
+
+    ``cause`` is the part the engine branches on; ``reason`` is the sentence it
+    shows the user. Both optional, because the endpoint predates this: a bare
+    POST is a user stop. An unrecognised cause is **not** rejected — it is
+    normalised to a user stop, the same safe default — because a 422 here would
+    leave the run spending while the caller believed it had asked for a stop.
+    """
+
+    reason: str = Field(default="", max_length=300)
+    cause: str = Field(default="", max_length=40)
 
 
 @app.get("/health")
@@ -253,14 +271,14 @@ def start_run(request: RunRequest) -> StreamingResponse:
                        "or run on macOS where sandbox-exec ships with the system",
         })
 
-    stop = threading.Event()
+    gate = StopGate()
     with _running_lock:
         if request.search_id in _running:
             raise HTTPException(status_code=409, detail={
                 "code": "already_running",
                 "message": f"search {request.search_id} is already in flight",
             })
-        _running[request.search_id] = stop
+        _running[request.search_id] = gate
 
     spec = _spec_of(request)
     log.info(
@@ -268,7 +286,7 @@ def start_run(request: RunRequest) -> StreamingResponse:
         spec.search_id, engine.name, spec.algorithm, spec.expansions,
     )
     return StreamingResponse(
-        encode_ndjson(_run_events(engine, spec, stop)),
+        encode_ndjson(_run_events(engine, spec, gate)),
         media_type="application/x-ndjson",
     )
 
@@ -307,20 +325,39 @@ def _spec_of(request: "RunRequest") -> RunSpec:
 
 
 @app.post("/runs/{search_id}/stop", dependencies=[Depends(require_internal_token)])
-def stop_run(search_id: str) -> dict[str, bool]:
+def stop_run(
+    search_id: str, request: "StopRequest | None" = None,
+) -> dict[str, bool]:
     """Idempotent: stopping an unknown or finished search is not an error —
-    the API may well be racing the stream's own completion."""
+    the API may well be racing the stream's own completion.
+
+    The optional body carries **why**, because the sidecar cannot work it out
+    for itself: it is handed a bare predicate and no budget, so a token gate
+    and a person pressing stop arrive here identically. The cause is recorded
+    before the flag is set, so the engine never sees the flag without the reason
+    it was raised for. A bare POST or an unrecognised cause is a user stop: not
+    finalizing is the safe default, and extending a run nobody asked to extend
+    is the mistake that cannot be taken back.
+
+    **The first cause wins, and a second stop can be answered up to one bounded
+    evaluation late.** `StopGate.stop` keeps the cause that set the flag, so a
+    user stop arriving while a budget stop's final held-out evaluation is
+    running does not rewrite why the run ended — and that evaluation is bounded
+    by the domain's own candidate timeout, so the delay is one execution rather
+    than an unbounded wait.
+    """
+    asked = request or StopRequest()
     with _running_lock:
-        flag = _running.get(search_id)
-    if flag is None:
+        gate = _running.get(search_id)
+    if gate is None:
         return {"stopped": False}
-    flag.set()
-    log.info("run %s stop requested", search_id)
+    gate.stop(reason=asked.reason, cause=normalize_cause(asked.cause))
+    log.info("run %s stop requested: cause=%s", search_id, gate.cause)
     return {"stopped": True}
 
 
 def _run_events(
-    engine: Engine, spec: RunSpec, stop: threading.Event,
+    engine: Engine, spec: RunSpec, gate: StopGate,
 ) -> Iterator[dict[str, Any] | bytes]:
     """Drive the engine on a worker thread and yield records as they are produced.
 
@@ -338,13 +375,14 @@ def _run_events(
     stream = EventStream(start_at=spec.resume_from_sequence)
     queue: Queue[dict[str, Any] | None] = Queue(maxsize=_QUEUE_DEPTH)
     failure: list[BaseException] = []
+    ended = False  # the engine put its sentinel: it finished, it was not cut off
 
     def emit(event: dict[str, Any]) -> None:
         queue.put(stream.record(event))
 
     def drive() -> None:
         try:
-            engine.run(spec, emit, stop.is_set)
+            engine.run(spec, emit, gate)
         except BaseException as exc:  # noqa: BLE001 - reported as a failed run below
             failure.append(exc)
             log.exception("run %s engine failed", spec.search_id)
@@ -364,6 +402,7 @@ def _run_events(
                 yield HEARTBEAT
                 continue
             if record is None:
+                ended = True
                 break
             yield record
         if failure:
@@ -373,7 +412,11 @@ def _run_events(
             yield stream.record(events.log("error", f"engine failed: {failure[0]!r}"))
             yield stream.record(events.search_finished("failed", None, 0))
     finally:
-        stop.set()
+        # A stream that closes while the engine is still running is the
+        # control plane hanging up, which is not a budget stop and must not be
+        # treated as one. The normal path is already finished by now, so its
+        # cause (if any) is kept: `StopGate.stop` keeps the first reason.
+        gate.stop(cause=FINISHED if ended else DISCONNECT)
         worker.join(timeout=_SHUTDOWN_TIMEOUT_SECONDS)
         with _running_lock:
             _running.pop(spec.search_id, None)

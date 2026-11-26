@@ -85,6 +85,18 @@ export class EvolveSidecarError extends Error {
  * than fatal: one malformed line must not discard the run around it. */
 export type EvolveSidecarWarning = (message: string) => void;
 
+/** Why the control plane is asking a search to stop.
+ *
+ *  `cause` is the part the sidecar branches on: only `budget` permits one bounded
+ *  held-out evaluation of the candidates already generated. `reason` is the
+ *  sentence the run record and the sidecar's terminal event carry, so the record
+ *  says `token budget reached (600000)` instead of the framework's own
+ *  `max_iters`. */
+export interface EvolveStopReason {
+  cause: "budget" | "wall_clock" | "user" | "disconnect";
+  reason?: string;
+}
+
 export interface EvolveSidecarOptions {
   internalToken: string;
   url: string;
@@ -211,12 +223,23 @@ export class EvolveSidecarClient {
   }
 
   /** Idempotent by contract: stopping an unknown or finished search is a
-   * no-op, because the API races the stream's own completion. */
-  async stop(searchId: string): Promise<boolean> {
+   * no-op, because the API races the stream's own completion.
+   *
+   * `why` travels with the request because the sidecar cannot work it out: it is
+   * handed a stop flag and no budget, so a token gate and a person pressing stop
+   * are the same request over there. The cause is what lets it run one bounded
+   * held-out evaluation for a budget that ran out, while a user stop still
+   * aborts immediately.
+   *
+   * The sidecar keeps the **first** cause it was given, so a second stop can be
+   * answered up to one bounded evaluation late while a budget finalization is
+   * already running; that evaluation is capped by the candidate timeout. */
+  async stop(searchId: string, why?: EvolveStopReason): Promise<boolean> {
     try {
       const { url, internalToken } = await this.connection();
       const response = await fetch(`${url}/runs/${encodeURIComponent(searchId)}/stop`, {
-        headers: { authorization: `Bearer ${internalToken}` },
+        body: JSON.stringify(why ?? {}),
+        headers: { authorization: `Bearer ${internalToken}`, "content-type": "application/json" },
         method: "POST",
       });
       if (!response.ok) return false;

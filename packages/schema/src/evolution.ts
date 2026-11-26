@@ -658,6 +658,12 @@ export type EvolveRejectionCategory =
    *  because the two need opposite fixes — one is a prompt or an environment
    *  problem, the other is a search that is not finding improvements. */
   | "candidate-failed"
+  /** The search stopped before this candidate was measured: the last model
+   *  call was abandoned, or its evaluation was cut short when the run ended.
+   *  Distinct from `candidate-failed` because nothing about the program was
+   *  tested — it is a candidate nobody measured, and the fix is to give the run
+   *  more budget rather than to read the candidate's code. */
+  | "cancelled"
   | "below-threshold"
   | "constraint-violated"
   | "stale"
@@ -724,6 +730,13 @@ export type EvolveEvent =
     gateScore?: number;
     nodeIndex: number;
     reward: number;
+    /** Per-criterion raw measurements, keyed by criterion id, before
+     *  normalisation — what the evaluator actually reported. A criterion
+     *  literally named `score`, whose normalised value necessarily collides
+     *  with the aggregate's name, keeps its 0.6 here next to the normalised
+     *  0.3. Absent on events written before the field existed; those carried
+     *  raw values in `criteria`. */
+    rawCriteria?: Record<string, number>;
     rolloutScore?: number;
     type: "evaluated";
   }

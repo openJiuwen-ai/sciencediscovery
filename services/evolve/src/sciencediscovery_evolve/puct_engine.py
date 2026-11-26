@@ -43,11 +43,21 @@ import math
 import os
 import tempfile
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from . import events
 from .acceptance import paired_evidence
+from .cancellation import (
+    CAUSE_TEXT,
+    cancelled_reason,
+    cancelled_text,
+    is_cancelled,
+    relax_stop,
+    stop_allows_finalization,
+    stop_reason_of,
+)
 from .candidates import CandidateStore
 from .completion import CompletionUnavailable, CompletionUsage, completion_for
 from .engine import RunSpec
@@ -63,8 +73,9 @@ from .measurement import (
     shard_indices,
 )
 from .judge_domain import grader, judge_domain
+from .outcome import SCORE_KEY, normalized_criteria, raw_measurements
 from .scorecard import KNOWN_NORMALIZE
-from .scorecard_domain import SCORE_KEY, scorecard_domain
+from .scorecard_domain import scorecard_domain
 from .text_candidate import extract_text
 from .prompt import repair_prompt, with_promise_request
 from .vendor.puct.program import extract_program, read_promise
@@ -319,7 +330,7 @@ class PuctEngine:
             guard_tree(tree, memory)
         store = CandidateStore(self._store_root)
         usage = _Usage()
-        reporter = _Reporter(spec, tree, domain, store, usage, emit)
+        reporter = _Reporter(spec, tree, domain, store, usage, emit, should_stop=should_stop)
 
         complete = self._model_call(spec, usage, reporter, should_stop, tree)
         if isinstance(direction, dict) and direction.get("editable"):
@@ -347,10 +358,10 @@ class PuctEngine:
                     aggregator.on_event, lambda level, message: reporter.emit(events.log(level, message)), memory,
                 )
             aggregator.seed()
-            baseline.update({
-                key: float(value) for key, value in tree.root().program.metrics.items()
-                if isinstance(value, (int, float)) and key != SCORE_KEY
-            })
+            # Raw measurements, not the aggregate: the reference a
+            # `relative_to_baseline` criterion divides by, including a criterion
+            # whose own id is `score`.
+            baseline.update(raw_measurements(tree.root().program.metrics))
             return aggregator
 
         common: Dict[str, Any] = {
@@ -474,12 +485,23 @@ class PuctEngine:
                 # candidate limit, `select_parent` returns None and the workers
                 # wind down. Reusing it means a stop looks like a finished
                 # budget rather than a special case.
+                #
+                # Recorded as a cancellation here, because this is the one path
+                # that produced a node without ever calling the model: nothing
+                # failed and nothing was measured, and the node's empty source
+                # would otherwise read as "the model returned nothing".
+                reporter.note_cancelled(iteration)
                 tree.candidate_limit = 0
                 return "", "", None
             reply = complete(
                 with_promise_request(prompt) if ask_promise else prompt,
                 lambda spent: usage.add(iteration, spent),
                 lambda reason: reporter.note_failure(iteration, reason),
+                # A separate sink from `on_failure`, because an abandoned call is
+                # not a call that failed: the next frame used to see one empty
+                # string for both and report the stop as a model with nothing to
+                # say.
+                lambda reason: reporter.note_cancelled(iteration, reason),
             )
             # A prompt or an abstract has no module docstring and may arrive
             # unfenced; reading it with the program parser would discard it.
@@ -507,6 +529,9 @@ class _Reporter:
     #: Class-level so an instance built without `__init__` — which several test
     #: harnesses here do — reads zero rather than raising from inside `swept`.
     discarded: int = 0
+    #: The run's stop predicate, when the engine supplied one. Class-level for
+    #: the same reason as `discarded`: `finish` and `_node` read it.
+    should_stop: Optional[Callable[[], bool]] = None
 
     def __init__(
         self,
@@ -516,6 +541,7 @@ class _Reporter:
         store: CandidateStore,
         usage: _Usage,
         emit: Emit,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> None:
         self.spec = spec
         self.tree = tree
@@ -523,6 +549,10 @@ class _Reporter:
         self.store = store
         self.usage = usage
         self.emit = emit
+        # Why the run is ending travels on the gate itself: the control plane is
+        # the only side that knows a token budget from a person pressing stop,
+        # and the two want opposite things from `finish`.
+        self.should_stop = should_stop
         # Empty until the framework returns. `finish` runs on paths where it
         # never does — a stop, a crash — and an absent reason has to be
         # distinguishable from a reason the framework declined to give.
@@ -538,6 +568,12 @@ class _Reporter:
         self._distinct_scores: set[float] = set()
         self.failures: List[str] = []
         self._empty: Dict[int, str] = {}
+        #: Iterations whose model call was abandoned by a stop, and the nodes they
+        #: produced. Kept out of `_empty` and out of `failures` on purpose: the
+        #: call produced nothing and nothing about it failed.
+        self._cancelled: Dict[int, str] = {}
+        self._cancelled_nodes: set[int] = set()
+        self._cancelled_reasons: Dict[int, str] = {}
         self._sweep: List[Tuple[Node, Dict[str, Any]]] = []
         self._lock = threading.Lock()
 
@@ -556,12 +592,32 @@ class _Reporter:
         with self._lock:
             self._empty[iteration] = f"this call returned nothing: {reason}"
 
+    def note_cancelled(self, iteration: int, reason: str = "") -> None:
+        """The call was abandoned because the run was stopped.
+
+        A third outcome, next to "the model answered" and "the call failed".
+        Nothing was returned and nothing failed: the request was dropped, and
+        the node it becomes will never be measured. Recorded here so `_node`
+        does not have to guess from an empty string, and so a stop is never
+        reported as a model that had nothing to say.
+        """
+        with self._lock:
+            self._cancelled.setdefault(
+                iteration, str(reason or "").strip() or self._cancellation_reason(),
+            )
+
     def note_empty(self, iteration: int) -> None:
         """Two failures wear the same empty reply and need opposite fixes."""
         spent = self.usage.of(iteration)
         with self._lock:
-            if iteration in self._empty:
-                # Already explained by the call that never came back.
+            if iteration in self._empty or iteration in self._cancelled:
+                # Already explained by the call that never came back, or by the
+                # stop that abandoned it. Neither is an empty model reply.
+                return
+            if self._is_stopped():
+                # The run is ending; this candidate will never be measured, so
+                # calling it an empty reply would blame the model for the stop.
+                self._cancelled[iteration] = self._cancellation_reason()
                 return
             if spent is not None and spent.capped:
                 self._empty[iteration] = (
@@ -572,6 +628,20 @@ class _Reporter:
                 )
             else:
                 self._empty[iteration] = "the model returned an empty reply"
+
+    def _cancellation_reason(self) -> str:
+        """Why the run is stopping, in words; a neutral sentence when the
+        predicate is a plain flag with no cause attached."""
+        return stop_reason_of(self.should_stop) or CAUSE_TEXT[""]
+
+    def _is_stopped(self) -> bool:
+        """The stop flag itself, ignoring the bounded relaxation `finish` uses
+        for one held-out evaluation: a relaxed evaluation must not make the run
+        look un-stopped to everything else."""
+        gate = self.should_stop
+        if gate is None:
+            return False
+        return bool(getattr(gate, "is_set", gate)())
 
     def on_event(self, kind: str, payload: Dict[str, Any]) -> None:
         if kind == "selected":
@@ -641,15 +711,29 @@ class _Reporter:
         code_hash = self.store.put(self.spec.search_id, code) if code.strip() else None
 
         with self._lock:
-            # Ours wins over the gate's. Both are true — the source *is* empty —
-            # but "the gate refused an empty program" is the symptom and "the
-            # model spent its whole budget thinking" is the cause, and only one
-            # of them tells the user which knob to turn.
+            # A stopped *model call* is known from its own sink; a stopped
+            # *evaluation* is known from the domain's marker. Both are recorded
+            # before this point, so no guessing from "the run is stopping" is
+            # needed — and that guess is exactly what used to relabel a genuine
+            # provider failure or a constraint violation as a cancellation.
+            cancelled = self._cancelled.pop(iteration, "")
             empty = self._empty.pop(iteration, "")
-            error = empty or node.program.error
-        if not valid:
+            if not cancelled and not empty and is_cancelled(metrics):
+                # The domain was stopped mid-evaluation and said so in the
+                # metrics, which is how this survives the identity of the
+                # domain being a closure.
+                cancelled = cancelled_reason(metrics) or self._cancellation_reason()
+            if empty:
+                # A recorded call failure keeps its own classification even if
+                # the run stops a moment later.
+                cancelled = ""
+            error = cancelled_text(cancelled) if cancelled else (empty or node.program.error)
+            if cancelled:
+                self._cancelled_nodes.add(node.index)
+                self._cancelled_reasons[node.index] = cancelled
+        if not valid and not cancelled:
             self.failures.append(error or "the candidate produced no score")
-        else:
+        elif valid:
             self.scored += 1
 
         self.emit(events.expanded(
@@ -664,32 +748,46 @@ class _Reporter:
             promise=node.promise,
         ))
         if valid:
-            criteria = {
-                key: float(value) for key, value in metrics.items()
-                if isinstance(value, (int, float)) and key not in (SCORE_KEY, "seconds")
-            }
-            # Both numbers are the held-out one under PUCT: a node is scored on
-            # the gate shards and ranked on that same score. Saying so with two
-            # equal fields beats inventing a rollout figure that is not measured.
+            # The event's `criteria` is the documented normalised half, so a
+            # criterion named `score` is published rather than filtered out;
+            # `rawCriteria` carries the measurement behind it into the audit
+            # record. Both numbers are the held-out one under PUCT: a node is
+            # scored on the gate shards and ranked on that same score. Saying so
+            # with two equal fields beats inventing a rollout figure that is not
+            # measured.
+            criteria = normalized_criteria(metrics)
             self.emit(events.evaluated(
                 node.index, float(metrics[SCORE_KEY]), criteria,
                 gate_score=float(metrics[SCORE_KEY]),
                 rollout_score=float(metrics[SCORE_KEY]),
+                raw_criteria=raw_measurements(metrics),
             ))
         self._sweep.append((node, metrics))
 
     def _swept(self, payload: Dict[str, Any]) -> None:
         best: Node = payload["best"]
         sweep, self._sweep = self._sweep, []
+        cancelled_nodes = getattr(self, "_cancelled_nodes", set())
+        cancelled_reasons = getattr(self, "_cancelled_reasons", {})
         for node, metrics in sweep:
             accepted = node.index == best.index and bool(payload.get("changed"))
             violated = metrics.get("violated")
+            cancellation = (cancelled_reasons.get(node.index)
+                            or (cancelled_reason(metrics) if is_cancelled(metrics) else ""))
             if node.program.valid:
                 reason = "became the best node" if accepted else "did not beat the best node"
                 category = None if accepted else "below-threshold"
             elif violated:
+                # A veto is a measured refusal, not a stop: it keeps its own
+                # classification even on a run that ended early.
                 reason = node.program.error or "tripped a veto"
                 category = "constraint-violated"
+            elif cancellation:
+                # Never measured, so never compared and never failed. Filing it
+                # under `candidate-failed` is what made a budget stop look like
+                # a search whose programs were all broken.
+                reason = cancelled_text(cancellation)
+                category = "cancelled"
             else:
                 # Never reached the point of being compared, which is a different
                 # problem from being compared and losing.
@@ -727,6 +825,12 @@ class _Reporter:
         retired = int(getattr(outcome, "retired_workers", 0) or 0)
         done = len(self.tree.nodes) - 1  # the seed is not an expansion
         self._stop_reason = reason
+        if self._is_stopped():
+            # The framework counts rollouts, so a run the control plane stopped
+            # on a token budget still calls its ending `max_iters`. That word is
+            # the one the terminal event used to carry, and it hid the only fact
+            # that mattered: which budget ran out. The gate knows.
+            self._stop_reason = self._cancellation_reason()
         self._planned = planned
 
         if error:
@@ -789,16 +893,15 @@ class _Reporter:
         test_score: Optional[float] = None
         gate_evidence: Optional[Dict[str, Any]] = None
         if status != "failed" and best.program.valid and self.domain.test_shards:
-            # The only number in the run the search never optimised against,
-            # which is the only reason a reported improvement means anything
-            # outside this process.
-            valid, metrics, error = self.domain.evaluate(
-                best.program.code, self.domain.test_shards)
-            if valid:
-                test_score = float(metrics[SCORE_KEY])
-                gate_evidence = self._paired_gate_evidence(metrics)
-            else:
-                self.emit(events.log("warn", f"the best candidate failed on the test shards: {error}"))
+            test_score, gate_evidence, stopped = self._final_held_out(best)
+            if stopped:
+                # A stop that landed while the held-out evaluation was running.
+                # The score may still be there (a budget stop's bounded retry
+                # can produce it), but the search did not complete: saying
+                # "succeeded" with the framework's own stop_reason would hide the
+                # one fact that explains both the retry and the missing score.
+                status = "stopped"
+                self._stop_reason = stopped
         elif status != "failed" and best.program.valid:
             # Said out loud rather than left to be inferred from a field that is
             # simply absent: a run that reserved no held-out cases cannot make a
@@ -820,6 +923,108 @@ class _Reporter:
         ))
         log.info("run %s finished: status=%s nodes=%d best=%d",
                  self.spec.search_id, status, len(self.tree.nodes), best.index)
+
+    def _final_held_out(
+        self, best: Node,
+    ) -> Tuple[Optional[float], Optional[Dict[str, Any]], str]:
+        """The winner's held-out score, or an honest absence and its reason.
+
+        Three things can happen here, and only one of them is a candidate
+        failure.
+
+        A **token or cost budget** that ran out has already paid for this
+        candidate. One bounded evaluation on the held-out shards spends wall
+        time and no tokens, and its result is the only number in the run the
+        search never optimised against — dropping it is how a search that spent
+        its budget ends up with no evidence about the programs it built. So it
+        runs, with the budget stop lifted for this thread only (workers abandoned
+        by the same stop must stay abandoned) and with the domain's own execution
+        timeout as the bound.
+
+        A stop that arrives **during** that evaluation — after the run's own
+        loop had already finished — cancels it. For a budget cause one bounded
+        retry inside the same lifted window is still allowed; for a user stop, a
+        wall-clock limit or an unknown cause there is no retry. Either way the
+        answer is "not evaluated", never "failed": nothing about the program was
+        established, and reporting it as a failure is what lost this run's
+        evidence in the first place.
+
+        Only an evaluation that actually ran and came back invalid is a
+        candidate failure, and only that path says so.
+        """
+        reason = self._cancellation_reason()
+        if self._is_stopped() and not stop_allows_finalization(self.should_stop):
+            # Stopped before the finalization could start at all.
+            self._note_not_evaluated(reason)
+            return None, None, reason
+
+        # A budget stop that has already fired still permits the one bounded
+        # evaluation; the lift is thread-local so nothing else resumes.
+        relaxed = self._is_stopped()
+        stopped = ""
+        for attempt in (1, 2):
+            context = relax_stop(self.should_stop) if relaxed else nullcontext()
+            try:
+                with context:
+                    valid, metrics, error = self.domain.evaluate(
+                        best.program.code, self.domain.test_shards)
+                    if valid:
+                        # Paired evidence reads the starting program on these
+                        # shards too, so it belongs in the same bounded window.
+                        return (float(metrics[SCORE_KEY]),
+                                self._paired_gate_evidence(metrics), stopped)
+            except Exception:  # noqa: BLE001 - split below: a stop is not a fault
+                # A stop that was already recorded still owns this outcome: the
+                # retry blew up, but the evaluation never happened either, and
+                # the run has to say so rather than settle "succeeded" with no
+                # score and the framework's own `rounds`.
+                recorded = stopped or (self._cancellation_reason() if self._is_stopped() else "")
+                if not recorded:
+                    # Nothing was stopped here, so an evaluation that cannot run
+                    # is a fault in the run — the previous behaviour, and the
+                    # one that surfaces it instead of hiding it behind a
+                    # successful status with no evidence.
+                    raise
+                self._note_not_evaluated(recorded)
+                return None, None, recorded
+
+            # The domain's own marker is the signal. A domain that reported a
+            # genuine invalid result — no marker — is a candidate failure even if
+            # the run stopped a moment earlier, and it is not retried: retrying
+            # would relabel a measured failure as "unevaluated".
+            marked = cancelled_reason(metrics) if is_cancelled(metrics) else ""
+            if not marked and self._is_stopped() and not str(error or "").strip():
+                # Stopped, and the domain said nothing at all about this
+                # candidate: there is no result to call a failure.
+                marked = self._cancellation_reason()
+            if not marked:
+                # An evaluation that really ran and did not pass. The only path
+                # on which this sentence is true.
+                self.emit(events.log(
+                    "warn", f"the best candidate failed on the test shards: {error}",
+                ))
+                return None, None, ""
+
+            if attempt == 1 and stop_allows_finalization(self.should_stop):
+                # The budget stop landed mid-evaluation: one bounded retry, with
+                # the stop lifted for this thread. Anything else is obeyed now.
+                stopped = marked
+                relaxed = True
+                continue
+            self._note_not_evaluated(marked)
+            return None, None, marked
+
+        reason = self._cancellation_reason()
+        self._note_not_evaluated(reason)
+        return None, None, reason
+
+    def _note_not_evaluated(self, reason: str) -> None:
+        """One sentence, used by every path that has no held-out score."""
+        self.emit(events.log(
+            "warn",
+            f"the best candidate was {cancelled_text(reason)}; no held-out score is "
+            "reported. This is an unevaluated candidate, not a candidate that failed",
+        ))
 
     def _paired_gate_evidence(
         self, candidate_metrics: Mapping[str, Any],

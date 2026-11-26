@@ -34,6 +34,7 @@ import uuid
 from typing import Any, Callable, Mapping, Optional, Tuple
 from urllib.parse import quote
 
+from .cancellation import CAUSE_TEXT, mark_cancelled, stop_reason_of
 from .vendor.puct.domain import Domain
 from .vendor.puct.program import Program
 
@@ -255,6 +256,12 @@ def npu_domain(
                 result = (False, with_search_score({"job_status": "fault"}), str(error))
             else:
                 valid, metrics, error = interpret_npu_job(job, artifact, metric_key=metric_key)
+                if not valid and str(job.get("status") or "") == "cancelled":
+                    # The stop cancelled this execution. It measured nothing, so
+                    # it is unevaluated rather than a fault in the candidate.
+                    reason = stop_reason_of(should_stop) or CAUSE_TEXT[""]
+                    metrics = mark_cancelled(dict(metrics), reason)
+                    error = reason
                 result = (valid, with_search_score(metrics), error)
             valid, metrics, error = result
             if valid or (attempt is not None and metrics.get("job_status") == "fault"):

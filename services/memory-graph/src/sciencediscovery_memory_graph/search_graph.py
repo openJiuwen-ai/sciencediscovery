@@ -189,7 +189,16 @@ def plan_writes(
             # Per-criterion scores are flattened: Neo4j properties are scalars
             # and arrays, with no nested maps, and a JSON blob would kill the
             # `WHERE n.crit_runtime > 300` queries this graph exists to answer.
-            for criterion_id, value in (event.get("criteria") or {}).items():
+            #
+            # The units are the evaluator's, not the scorecard's: `crit_runtime`
+            # is 180 seconds, never the normalised 0.0055. The sidecar publishes
+            # both halves, and older events carried only raw values in
+            # `criteria` — so raw wins when present and `criteria` is the
+            # fallback, never the other way round.
+            measurements = event.get("rawCriteria")
+            if not isinstance(measurements, dict):
+                measurements = event.get("criteria") or {}
+            for criterion_id, value in measurements.items():
                 node[f"crit_{criterion_id}"] = _finite(value)
 
         elif kind == "inserted":
