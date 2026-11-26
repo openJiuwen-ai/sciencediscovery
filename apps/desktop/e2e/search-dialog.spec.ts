@@ -221,3 +221,79 @@ test("a hit for an archived Session is not drawn, and the note does not count it
   // 9 answered, 2 dropped by the rule, 1 drawn: six remain — not eight.
   await expect(page.locator(".search-panel-note")).toHaveText(/还有 6 条结果/u);
 });
+
+test("Escape closes from the footer's kinds, and the magnifier takes the focus back", async ({ page }) => {
+  // The footer's kinds are buttons: the focus leaves the field the moment a
+  // reader picks one, so a key bound to the field would leave the dialog with no
+  // way out — and closing has to return the caret to what opened the dialog
+  // rather than dropping it on the page. Both are asserted because neither shows
+  // up in a static render: the effect never runs there.
+  await installMockApi(page, seed());
+  await page.goto("/");
+
+  const magnifier = page.locator(".side-head .side-head-button");
+  const dialog = page.locator(".search-panel");
+  await magnifier.click();
+  await page.locator(".search-panel-input").fill("晶");
+  await expect(page.locator(".search-hit")).toHaveCount(HITS.length);
+
+  const kind = page.locator(".search-kind", { hasText: "项目" });
+  await kind.click();
+  await expect(kind).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(magnifier).toBeFocused();
+
+  // And the same from the field: open, type, Escape, and the focus is back on
+  // the control that opened it.
+  await page.keyboard.press("Control+k");
+  await expect(dialog).toBeVisible();
+  await page.locator(".search-panel-input").press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(magnifier).toBeFocused();
+});
+
+test("an archived hit disappears when its listing lands after the answer", async ({ page }) => {
+  // The rule reads the archived ids, and those arrive with the listing rather
+  // than with the answer. Holding the listing proves the order a reader actually
+  // meets on a cold start: the route answers first, the hit is drawn, and the
+  // listing arriving later has to take it away again. A memo reading a ref would
+  // keep the archived hit on screen until the next query.
+  const archived = { ...makeSession({ id: "session-gone", title: "晶体旧会话" }), archivedAt: "2026-01-05T00:00:00.000Z" };
+  const mock = await installMockApi(page, {
+    hold: { method: "GET", path: /\/api\/projects\/[^/]+\/sessions$/ },
+    projects: [DEFAULT_PROJECT],
+    search: {
+      results: [
+        { detail: "", id: "session:session-1", kind: "session", label: "晶体结构分析", projectId: "project-1", sessionId: "session-1", updatedAt: "2026-01-03T00:00:00.000Z" },
+        { detail: "", id: "session:session-gone", kind: "session", label: "晶体旧会话", projectId: "project-1", sessionId: "session-gone", updatedAt: "2026-01-04T00:00:00.000Z" },
+      ],
+      total: 2,
+    },
+    sessions: [makeSession({ id: "session-1", title: "晶体结构分析" }), archived],
+  });
+  await page.goto("/");
+
+  await page.locator(".side-head .side-head-button").click();
+  await page.locator(".search-panel-input").fill("晶");
+  await expect(page.locator(".search-hit")).toHaveCount(2);
+
+  mock.release();
+
+  await expect(page.locator(".search-hit")).toHaveCount(1);
+  await expect(page.locator(".search-hit-label")).toHaveText("晶体结构分析");
+});
+
+test("a click on the overlay closes 搜索, and the page keeps its own focus", async ({ page }) => {
+  await installMockApi(page, seed());
+  await page.goto("/");
+
+  await page.locator(".side-head .side-head-button").click();
+  const dialog = page.locator(".search-panel");
+  await expect(dialog).toBeVisible();
+
+  // The overlay is the dialog's background, so a click outside the panel closes
+  // it — the gesture a mouse reader expects without hunting for the ×.
+  await page.mouse.click(8, 8);
+  await expect(dialog).toBeHidden();
+});
