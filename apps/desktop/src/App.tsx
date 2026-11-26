@@ -229,13 +229,15 @@ export function App({ initialToken }: Props) {
   // token change is rare enough that re-creating it is cheaper than threading
   // a mutable header through every call site.
   const client = useMemo(() => new ApiClient(token, onAuthRejected), [onAuthRejected, token]);
-  // A Git Skill import keeps running in the API across a reload, but switching
-  // its new packages on is the client's work. Pick the job back up as soon as
-  // there is a client to read it with, before the reader opens 设置 again.
-  useEffect(() => {
-    void resumeGitSkillImport(client);
-  }, [client]);
   const { actions, boot, state } = useWorkspace(client, onAuthRejected);
+  // A Git Skill import keeps running in the API across a reload, but switching
+  // its new packages on is the client's work. Pick the job back up once the
+  // backend has answered, before the reader opens 设置 again; an extra request
+  // during the auth checks could turn a stale id into a 401 for the whole app.
+  useEffect(() => {
+    if (boot !== "ready" && boot !== "setup") return;
+    void resumeGitSkillImport(client);
+  }, [boot, client]);
   // Signing out drops the account, not the machine's credential: a workspace
   // running on a custom model keeps working, and the user surface turns into a
   // signed-out page with the one way back in. It is a decision with a visible
