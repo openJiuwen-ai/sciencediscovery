@@ -445,6 +445,10 @@ export const ZH = {
     } as Record<string, string>,
     summaryPass: "未发现问题",
     summaryFindings: (count: number) => `${count} 个问题`,
+    /** A warning is not a revision request; its row and badge say 提醒. */
+    summaryWarnings: (count: number) => `${count} 个提醒`,
+    summaryFindingsAndWarnings: (critical: number, warnings: number) =>
+      `${critical} 个问题 · ${warnings} 个提醒`,
     summaryContradicted: "矛盾",
     summaryPartlySupported: "部分支持",
     summaryIncomplete: "交付不完整",
@@ -471,7 +475,7 @@ export const ZH = {
       citation: "引用：核对引文标识符能否识别、格式是否完整；不核实文献是否支持结论。",
       computation: "计算：把报告里的数值与证据、数据逐项比对，检查数字与统计口径是否一致。",
       completeness: "完整性：按本次任务声明的交付清单，检查应交付的文件是否都在、是否为空白。",
-      semantics: "语义：由来源服务读原文，判断结论是否有出处支撑；只有深度审查会做。",
+      semantics: "语义：深度审查读取引用的文献原文，判断结论是否有出处支撑；只有深度审查会做。",
       other: "通用发现：不属于某一类具体检查，是审查过程中记录的问题。",
       gaps: "未检查：这次审查没有做这一项，原因见下方；未检查不等于通过。",
       source: "来源核验：把一条结论与来源原文对照，给出支持、部分支持、矛盾或无结论。",
@@ -500,10 +504,13 @@ export const ZH = {
       citation_identity: "这次审查没有核对文献身份（作者、期刊、年份）。",
       computation: "这次审查没有核对数字与计算依据。",
     } as Record<string, string>,
+    /** The claim-support gap as a Deep review leaves it. Asking the reader to
+     *  run a Deep review again would contradict the level they just chose. */
+    deepGapBodies: {
+      inconclusive: "深度审查已经尝试核对结论与来源，但没能作出判断（可能缺少足够的原文，或读到的内容无法明确支持或否定结论），所以这一项仍算未检查。这不代表报告有问题。",
+      noComparison: "深度审查没有找到可与原文比对的结论，所以这一项仍算未检查。",
+    },
     gapBodyUnknown: "这次审查没有执行这一项。",
-    /** A source check that could not conclude is not a report defect. */
-    inconclusive: "来源核验没有得出结论",
-    inconclusiveBody: "来源服务未返回结论，这不代表报告有问题。",
     /** A citation-format-only Quick pass did not look at claim support. */
     citationOnlyNote: "本次只核对引用格式，未检查结论支撑。",
     /** Why a checkpoint produced nothing, by the server's reason code. */
@@ -544,9 +551,9 @@ export const ZH = {
     queued: (count: number) => `排队 ${count}`,
     /** A bounded passage in a locked source; "定位" and evidence levels are
      *  internal vocabulary, so the card says what was found instead. */
-    locators: (count: number) => `${count} 处原文`,
-    sourceInconclusiveWith: (count: number) => `找到 ${count} 处原文，但还不足以支撑这条结论。`,
-    sourceInconclusiveNone: "没有找到可用于支撑这条结论的原文。",
+    locators: (count: number) => `${count} 处来源材料`,
+    sourceInconclusiveWith: (count: number) => `找到 ${count} 处来源材料，但还不足以判断这条结论是否成立。`,
+    sourceInconclusiveNone: "没有找到可用于判断这条结论的来源材料。",
     failedDetail: "审查过程报告了错误。",
     empty: "这个检查点没有产生审查记录。",
     noReviews: "还没有审查记录。",
@@ -554,10 +561,10 @@ export const ZH = {
     levelName: (level: string): string => (level === "quick" ? "快速" : "深度"),
     levelPill: (level: string): string => (level === "quick" ? "快速" : "深度"),
     /** The pill only names the level; the tip carries what the name claims.
-     *  The two levels differ in whether a source service is consulted. */
+     *  The two levels differ in whether the cited source text is read. */
     levelTip: (level: string): string => (level !== "quick"
-      ? "深度审查：在快速检查之外，调用来源服务逐条核对结论与原文是否一致。"
-      : "快速审查：只在本机做确定性的结构、引用格式和交付完整性检查，不调用外部来源服务。"),
+      ? "深度审查：在快速检查之外，读取引用的文献原文和证据，逐条核对结论与来源是否一致。"
+      : "快速审查：只在本机做确定性的结构、引用格式和交付完整性检查，不读取文献原文。"),
   },
 
   /** The bottom-right banner while the JiuwenSwarm cluster is still starting

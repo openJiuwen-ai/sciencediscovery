@@ -453,6 +453,10 @@ export const EN: Text = {
     } as Record<string, string>,
     summaryPass: "No issues found",
     summaryFindings: (count: number) => `${count} ${count === 1 ? "issue" : "issues"}`,
+    /** A warning is not a revision request; its row and badge say Warning. */
+    summaryWarnings: (count: number) => `${count} ${count === 1 ? "warning" : "warnings"}`,
+    summaryFindingsAndWarnings: (critical: number, warnings: number) =>
+      `${critical} ${critical === 1 ? "issue" : "issues"} · ${warnings} ${warnings === 1 ? "warning" : "warnings"}`,
     summaryContradicted: "Contradicted",
     summaryPartlySupported: "Partly supported",
     summaryIncomplete: "Delivery incomplete",
@@ -480,7 +484,7 @@ export const EN: Text = {
       citation: "Citation: checks the citation identifiers can be recognised and are well formed. It does not check whether the cited work supports the claim.",
       computation: "Computation: compares the numbers in the report with the evidence, checking the figures and the statistics agree.",
       completeness: "Completeness: checks every declared deliverable is present and not empty.",
-      semantics: "Semantics: the source service reads the cited text and decides whether the claim is supported. Deep reviews only.",
+      semantics: "Semantics: Deep review reads the cited source text and decides whether the claim is supported. Deep reviews only.",
       other: "General finding: not tied to one check, recorded during the review.",
       gaps: "Not checked: this review did not run this check, and the reason is below. Not checked is not a pass.",
       source: "Source verification: compares one claim with the source text and answers supported, partly supported, contradicted or inconclusive.",
@@ -509,10 +513,13 @@ export const EN: Text = {
       citation_identity: "This review did not check the papers' identity (authors, journal, year).",
       computation: "This review did not check the numbers against the computation evidence.",
     } as Record<string, string>,
+    /** The claim-support gap as a Deep review leaves it. Asking the reader to
+     *  run a Deep review again would contradict the level they just chose. */
+    deepGapBodies: {
+      inconclusive: "Deep review did try to check the claims against their sources but could not reach a verdict (enough source text may have been unavailable, or the excerpt may not clearly support or contradict the claim), so this check still counts as not performed. That does not mean the report is wrong.",
+      noComparison: "Deep review found no claim it could compare with a source, so this check still counts as not performed.",
+    },
     gapBodyUnknown: "This review did not run this check.",
-    /** A source check that could not conclude is not a report defect. */
-    inconclusive: "Source verification reached no conclusion",
-    inconclusiveBody: "The source service returned no verdict; this is not a problem with the report.",
     /** A citation-format-only Quick pass did not look at claim support. */
     citationOnlyNote: "This review checked citation format only; claim support was not checked.",
     /** Why a checkpoint produced nothing, by the server's reason code. */
@@ -553,11 +560,11 @@ export const EN: Text = {
     queued: (count: number) => `${count} queued`,
     /** A bounded passage in a locked source; "locator" and evidence levels
      *  are internal vocabulary, so the card says what was found instead. */
-    locators: (count: number) => `${count} source passage${count === 1 ? "" : "s"}`,
+    locators: (count: number) => `${count} source excerpt${count === 1 ? "" : "s"}`,
     sourceInconclusiveWith: (count: number) => count === 1
-      ? "Found 1 source passage, but it is not enough to support this claim."
-      : `Found ${count} source passages, but they are not enough to support this claim.`,
-    sourceInconclusiveNone: "No source passage was found to support this claim.",
+      ? "Found 1 source excerpt, but it is not enough to decide whether this claim holds."
+      : `Found ${count} source excerpts, but not enough to decide whether this claim holds.`,
+    sourceInconclusiveNone: "No source excerpt was found to judge this claim.",
     failedDetail: "The review reported an error.",
     empty: "This checkpoint produced no review record.",
     noReviews: "No reviews yet.",
@@ -565,10 +572,10 @@ export const EN: Text = {
     levelName: (level: string): string => (level === "quick" ? "Quick" : "Deep"),
     levelPill: (level: string): string => (level === "quick" ? "Quick" : "Deep"),
     /** The pill only names the level; the tip carries what the name claims.
-     *  The two levels differ in whether a source service is consulted. */
+     *  The two levels differ in whether the cited source text is read. */
     levelTip: (level: string): string => (level !== "quick"
-      ? "Deep review: on top of the Quick checks, calls the source service to verify each claim against its source."
-      : "Quick review: deterministic structure, citation-format and delivery checks on this machine; no source service is called."),
+      ? "Deep review: on top of the Quick checks, reads the cited source text and evidence to verify each claim against its source."
+      : "Quick review: deterministic structure, citation-format and delivery checks on this machine; no source text is read."),
   },
 
   /** The bottom-right banner while the JiuwenSwarm cluster is still starting

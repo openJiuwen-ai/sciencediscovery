@@ -129,22 +129,24 @@ export function citationOnlyReview(review: ArtifactReviewRun): boolean {
 
 /** The verdict's colour, in one order of precedence.
  *
- *  Red means the artifact has a problem: any finding, a source assessment that
- *  contradicts the claim, or a delivery verdict of `incomplete`. Amber means
- *  the verdict itself cannot be taken at face value: the review failed, a
- *  source assessment supported only part of the claim, or the version it
- *  answered for is no longer current.
+ *  Red means the artifact has a problem: a critical finding, a source
+ *  assessment that contradicts the claim, or a delivery verdict of
+ *  `incomplete`. Amber means the verdict itself cannot be taken at face value:
+ *  a warning-only finding, the review failed, a source assessment supported
+ *  only part of the claim, or the version it answered for is no longer current.
  *  Grey means nothing was found wrong and nothing was claimed either: the
  *  checkpoint was skipped, or the review ran but never verified delivery or
  *  declared a check it did not perform. Green means this level ran its checks,
  *  raised nothing, and delivery was confirmed or never claimed — a statement
  *  about the checks, not about the conclusions.
  *
- *  An unverified delivery or an unperformed check is not a finding, so it does
- *  not paint the card amber: the rows below say what was not checked, in the
+ *  A warning is not a revision request. Its row is amber and its badge reads
+ *  提醒, so a red frame over it would claim a severity the finding itself does
+ *  not; the web client's `resultLabel` splits the two the same way. An
+ *  unverified delivery or an unperformed check is not a finding, so it does not
+ *  paint the card amber either: the rows below say what was not checked, in the
  *  same grey, and the summary says it in words (未验证交付 / 未发现问题，但有
- *  N 项未检查). Amber stays for "this verdict is about something else" — a
- *  failure, a partly supported claim, or history.
+ *  N 项未检查).
  *
  *  A failed review is amber rather than red on purpose: an error is not a
  *  verdict on the artifact. A stale review is amber even when it flagged
@@ -155,12 +157,15 @@ export function reviewTone(review: ArtifactReviewRun): ReviewTone {
   if (review.decision === "SKIPPED") return "neutral";
   if (review.stale === true) return "warn";
   if (review.completeness?.status === "incomplete") return "fail";
-  if (review.findings.length > 0) return "fail";
+  // A critical finding is a problem; a warning is not. The row below already
+  // draws the same distinction (`is-fail` vs `is-warn`).
+  if (review.findings.some((finding) => finding.severity === "critical")) return "fail";
   // A source verdict is a result about the claim even when no finding was
   // raised: a contradiction, or a passage that only partly supports what the
   // report says, must not sit under a header that says everything passed.
   const sourceVerdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
   if (sourceVerdicts.includes("CONTRADICTED")) return "fail";
+  if (review.findings.length > 0) return "warn";
   if (sourceVerdicts.includes("PARTIALLY_SUPPORTED")) return "warn";
   if (unverifiedDelivery(review)) return "neutral";
   // Nothing was found wrong, but part of the claim was never examined. That
@@ -174,8 +179,12 @@ export function reviewSummary(review: ArtifactReviewRun): string {
     if (review.status === "failed") return TEXT.reviewer.summaryFailed;
     if (review.decision === "SKIPPED") return TEXT.reviewer.summarySkipped;
     if (review.completeness?.status === "incomplete") return TEXT.reviewer.summaryIncomplete;
-    const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code)).length;
-    if (raised > 0) return TEXT.reviewer.summaryFindings(raised);
+    const raised = review.findings.filter((finding) => !DELIVERY_CODES.has(finding.code));
+    const critical = raised.filter((finding) => finding.severity === "critical").length;
+    const warnings = raised.length - critical;
+    if (critical > 0 && warnings > 0) return TEXT.reviewer.summaryFindingsAndWarnings(critical, warnings);
+    if (critical > 0) return TEXT.reviewer.summaryFindings(critical);
+    if (warnings > 0) return TEXT.reviewer.summaryWarnings(warnings);
     // The header uses the row's own word for a source verdict.
     const verdicts = (review.sourceAssessments ?? []).map((record) => record.assessment.assessment);
     if (verdicts.includes("CONTRADICTED")) return TEXT.reviewer.summaryContradicted;
@@ -195,6 +204,24 @@ function claimText(claim: ReviewClaim | undefined): string | undefined {
 
 /** Where a row sits in the card: problems, then results, then absences. */
 const ROW_RANK: Record<ReviewTone, number> = { fail: 0, warn: 1, pass: 2, pending: 2, neutral: 3 };
+
+/**
+ * What an unperformed check's row says, in the card's language.
+ *
+ * A Deep review can still leave the claim-support gap (the source service
+ * reached no conclusion, or nothing was there to compare). The Quick pass's
+ * sentence on that gap tells the reader to run a Deep review — which is the
+ * level they just ran, so it contradicts the pill on the same card. A Deep
+ * review says instead what its own attempt produced.
+ */
+function gapBody(review: ArtifactReviewRun, gap: NonNullable<ArtifactReviewRun["notChecked"]>[number]): string {
+  if (gap.check === "claim_support" && (review.reviewLevel === "deep" || review.reviewLevel === "smart")) {
+    return review.smartStatus === "inconclusive"
+      ? TEXT.reviewer.deepGapBodies.inconclusive
+      : TEXT.reviewer.deepGapBodies.noComparison;
+  }
+  return TEXT.reviewer.gapBodies[gap.check] ?? (gap.reason || TEXT.reviewer.gapBodyUnknown);
+}
 
 /**
  * The rows of one review, in reading order.
@@ -263,27 +290,18 @@ export function reviewRows(review: ArtifactReviewRun): ReviewRow[] {
       label: TEXT.reviewer.gaps,
       labelTip: labelTipFor("gaps"),
       title: TEXT.reviewer.gapChecks[gap.check] ?? gap.check,
-      body: TEXT.reviewer.gapBodies[gap.check] ?? (gap.reason || TEXT.reviewer.gapBodyUnknown),
+      body: gapBody(review, gap),
       badge: TEXT.reviewer.gaps,
     });
   }
 
-  if (review.smartStatus === "inconclusive" && review.smartDetail !== undefined) {
-    covered.add("semantics");
-    // The detail is the source service's own failure text (`Paper Reader
-    // timeout`). It is not a finding about the report, so it is not printed as
-    // one: the row says the source check reached no conclusion, and the raw
-    // message stays out of the card.
-    rows.push({
-      id: `${review.id}:smart`,
-      tone: "neutral",
-      label: TEXT.reviewer.deepSemantic,
-      labelTip: labelTipFor("semantics"),
-      title: TEXT.reviewer.inconclusive,
-      body: TEXT.reviewer.inconclusiveBody,
-      badge: TEXT.reviewer.badgeUnconfirmed,
-    });
-  }
+  // A Deep stage that ended inconclusive gets no row of its own. `smartStatus`
+  // is stage-level: one failed lookup makes it inconclusive even when other
+  // claims were verified, so a "semantics: no conclusion" row would contradict
+  // the per-claim source rows below and repeat the claim-support gap above.
+  // Those two already say what the stage could not do: the gap says the claim
+  // check is incomplete, and each source row says which claim reached no
+  // verdict. The raw detail (e.g. `Paper Reader timeout`) stays out of the card.
 
   for (const assessment of review.sourceAssessments ?? []) {
     const verdict = assessment.assessment.assessment;

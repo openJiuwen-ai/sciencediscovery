@@ -119,20 +119,31 @@ describe("a review's verdict", () => {
     assert.equal(reviewSummary(skipped), TEXT.reviewer.summarySkipped);
   });
 
-  it("turns red on any finding: the artifact itself needs a fix", () => {
-    const flagged = review({
-      decision: "REVISE_AND_RETRY",
-      findings: [{
-        code: "CITATION_FORMAT_INVALID",
-        evidenceRefs: [],
-        id: "finding-1",
-        message: "[3] is not listed",
-        severity: "warning",
-        status: "open",
-      }],
+  it("keeps a warning amber and reserves red for a critical finding", () => {
+    const finding = (severity: "warning" | "critical", id: string) => ({
+      code: "CITATION_FORMAT_INVALID",
+      evidenceRefs: [],
+      id,
+      message: "[3] is not listed",
+      severity,
+      status: "open" as const,
     });
-    assert.equal(reviewTone(flagged), "fail");
-    assert.equal(reviewSummary(flagged), TEXT.reviewer.summaryFindings(1));
+    // The row for a warning is amber and its badge says 提醒. A red frame and
+    // "1 个问题" over that row would claim more than the finding does.
+    const warning = review({ decision: "REVISE_AND_RETRY", findings: [finding("warning", "finding-warning")] });
+    assert.equal(reviewTone(warning), "warn");
+    assert.equal(reviewSummary(warning), TEXT.reviewer.summaryWarnings(1));
+
+    const critical = review({ decision: "REVISE_AND_RETRY", findings: [finding("critical", "finding-critical")] });
+    assert.equal(reviewTone(critical), "fail");
+    assert.equal(reviewSummary(critical), TEXT.reviewer.summaryFindings(1));
+
+    const mixed = review({
+      decision: "REVISE_AND_RETRY",
+      findings: [finding("critical", "finding-critical"), finding("warning", "finding-warning")],
+    });
+    assert.equal(reviewTone(mixed), "fail");
+    assert.equal(reviewSummary(mixed), TEXT.reviewer.summaryFindingsAndWarnings(1, 1));
   });
 
   it("does not call it a pass when the review itself says a check was not run", () => {
@@ -263,6 +274,86 @@ describe("a review's rows", () => {
     assert.equal(row.body, TEXT.reviewer.gapBodies.claim_support);
     // An absence is not a warning about the artifact, and it is not a pass.
     assert.equal(row.tone, "neutral");
+  });
+
+  it("does not tell a Deep review to run a Deep review", () => {
+    // The gap survives a Deep review that could not compare anything, but the
+    // Quick pass's sentence ("use Deep review") contradicts the level pill on
+    // the same card. The row says what the Deep attempt itself produced.
+    const inconclusive = review({
+      notChecked: [{ check: "claim_support", reason: "Quick review parses citation format only." }],
+      reviewLevel: "deep",
+      smartStatus: "inconclusive",
+    });
+    const inconclusiveRow = reviewRows(inconclusive).find((row) => row.id === "review-1:gap:0");
+    assert.ok(inconclusiveRow);
+    assert.equal(inconclusiveRow.body, TEXT.reviewer.deepGapBodies.inconclusive);
+    assert.notEqual(inconclusiveRow.body, TEXT.reviewer.gapBodies.claim_support);
+
+    const noComparison = review({
+      notChecked: [{ check: "claim_support", reason: "Quick review parses citation format only." }],
+      reviewLevel: "deep",
+      smartStatus: "completed",
+    });
+    const noComparisonRow = reviewRows(noComparison).find((row) => row.id === "review-1:gap:0");
+    assert.ok(noComparisonRow);
+    assert.equal(noComparisonRow.body, TEXT.reviewer.deepGapBodies.noComparison);
+
+    // Only the claim-support gap changes; a gap the Deep stage did not touch
+    // keeps the wording that says which check was skipped.
+    const computation = review({
+      notChecked: [{ check: "computation", reason: "The memory graph is disabled." }],
+      reviewLevel: "deep",
+      smartStatus: "inconclusive",
+    });
+    const computationRow = reviewRows(computation).find((row) => row.id === "review-1:gap:0");
+    assert.ok(computationRow);
+    assert.equal(computationRow.body, TEXT.reviewer.gapBodies.computation);
+  });
+
+  it("does not summarise a whole Deep stage as a row above the per-claim results", () => {
+    // `smartStatus` is stage-level: one failed lookup makes the stage
+    // inconclusive even when another claim was verified. A single
+    // "semantics: no conclusion" row would then sit above a source row that
+    // did conclude, and repeat the claim-support gap besides. The stage says
+    // what it could not do through the gap and through each claim's own row.
+    const stage = review({
+      notChecked: [{ check: "claim_support", reason: "One lookup timed out." }],
+      reviewLevel: "deep",
+      smartDetail: { code: "SMART_CITATION_INCONCLUSIVE", message: "Paper Reader timeout" },
+      smartStatus: "inconclusive",
+      sourceAssessments: [{
+        assessment: {
+          assessment: "SUPPORTED",
+          claimId: "claim-1",
+          locatorIds: ["locator-1"],
+          policyVersion: "1",
+          rationale: "The full text states the figure.",
+        },
+        claim: {
+          artifactVersionId: "version-2",
+          citationKeys: ["doi:10.1000/example"],
+          id: "claim-1",
+          kind: "citation",
+          requiredEvidenceLevel: "E2",
+          text: "代表工作 1",
+        },
+        locators: [{
+          excerpt: "the figure appears in section 3",
+          excerptHash: "abc",
+          id: "locator-1",
+          locator: { paragraph: 2 },
+          snapshotId: "snapshot-1",
+        }],
+        snapshots: [],
+      }],
+    });
+    const rows = reviewRows(stage);
+    assert.equal(rows.some((row) => row.id === "review-1:smart"), false);
+    assert.ok(rows.some((row) => row.id === "review-1:gap:0"));
+    assert.ok(rows.some((row) => row.id === "review-1:source:claim-1"));
+    // The stage's raw error text stays in the review record.
+    assert.equal(rows.some((row) => `${row.title}${row.body ?? ""}`.includes("timeout")), false);
   });
 
   it("draws an unconfirmed delivery in grey, not as a warning", () => {
@@ -417,8 +508,8 @@ describe("a checkpoint's card", () => {
       }],
       id: "review-2",
     });
-    assert.equal(checkpointTone([review(), flagged], "completed"), "fail");
-    assert.equal(checkpointSummary([review(), flagged], "completed"), TEXT.reviewer.summaryFindings(1));
+    assert.equal(checkpointTone([review(), flagged], "completed"), "warn");
+    assert.equal(checkpointSummary([review(), flagged], "completed"), TEXT.reviewer.summaryWarnings(1));
   });
 
   it("draws a one-line header that folds out into the items", () => {
