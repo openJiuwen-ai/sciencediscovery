@@ -664,6 +664,7 @@ test("the selector opens the two scope explanations and reports the choice", asy
   await act(async () => {
     view = create(
       <Composer
+        surfaceKey="s1"
         approvalMode="always_allow"
         attachments={[]}
         models={[{ id: "m1", name: "测试模型" } as never]}
@@ -730,6 +731,7 @@ test("a send that answers false keeps the draft, and the same send then goes out
   await act(async () => {
     view = create(
       <Composer
+        surfaceKey="s1"
         attachments={[]}
         models={[{ id: "m1", name: "测试模型" } as never]}
         onApprovalMode={() => {}}
@@ -787,6 +789,7 @@ test("the idea-tree row hands the composer draft to the parameters card", async 
   await act(async () => {
     mounted.push(create(
       <Composer
+        surfaceKey="s1"
         attachments={[]}
         models={[{ id: "m1", name: "测试模型" } as never]}
         onApprovalMode={() => {}}
