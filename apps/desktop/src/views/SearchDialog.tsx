@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import type { WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
 import { groupsFor, searchDetail } from "../app/session-search.js";
 import { TEXT } from "../text.js";
+import { useTopmostEscape } from "./use-dialog-escape.js";
 
 /** 全部 groups every hit by kind; a kind shows only that kind. */
 export type SearchKindFilter = "all" | "project" | "session" | "artifact";
@@ -63,6 +64,12 @@ export function SearchDialog({
     field.current?.focus();
   }, []);
 
+  // The footer's kinds are buttons: a reader who picked one has the focus there,
+  // not in the field, and Escape has to close the dialog wherever the focus sits.
+  // Tab is not trapped — the page behind stays reachable, which is the one limit
+  // this dialog keeps.
+  useTopmostEscape(onClose);
+
   const groups = groupsFor(results?.results ?? [], kind);
   const hits = groups.flatMap((group) => group.results);
 
@@ -90,11 +97,6 @@ export function SearchDialog({
               onQuery(event.target.value);
             }}
             onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                onClose();
-                return;
-              }
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 const delta = event.key === "ArrowDown" ? 1 : -1;
                 const count = hits.length;
