@@ -771,6 +771,13 @@ class IdeaTreeEngine:
             else:
                 s.update(status='interrupted', reason=str(error))
         finally:
+            # A settled run has folded its stop request into `status`, so the persisted
+            # mark must not outlive it: a later restart would otherwise read a stale
+            # `pendingStop` as a fresh user request (#1464). A run that did not settle -
+            # a cancelled task during graceful shutdown leaves `running`/`pausing` -
+            # keeps the mark on disk for the next boot's reconciliation to apply.
+            if s.get('status') not in ('running', 'pausing'):
+                s.pop('pendingStop', None)
             self.save()
 
     def graph(self):

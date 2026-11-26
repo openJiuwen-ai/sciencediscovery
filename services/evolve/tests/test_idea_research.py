@@ -746,6 +746,173 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ended['research']['status'], 'ended')
             self.assertNotIn(identifier, service._running)
 
+    async def test_a_research_ended_in_flight_comes_back_ended_after_a_restart(self):
+        # #1464: `end` during a live run only reached the engine's memory, so a
+        # restart before the in-flight stage returned folded the user's verdict into
+        # `interrupted` and `continue` was accepted again. The request is persisted
+        # while the run is still `pausing`, and the restart maps it to `ended`.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        from fastapi import HTTPException
+        entered = asyncio.Event()
+        async def ask(engine, role, payload, check=None):
+            entered.set()
+            await asyncio.Event().wait()  # the process dies before this call returns
+        with patch.object(service, '_store', self.store), patch.object(service, '_running', {}), \
+                patch.object(IdeaTreeEngine, 'ask', ask):
+            created = await service.command(service.Command(projectId='p', sessionId='s', operation='create', objective='Goal', llm=dict(url='http://localhost', token='local')))
+            identifier = created['research']['id']
+            await entered.wait()
+            # The stage records itself as running before it awaits the model call.
+            service._running[identifier][0].state.setdefault('activities', []).append(
+                dict(role='design', nodeId='ROOT', round=1, status='running', startedAt=now(), finishedAt=None, error=None))
+            ending = await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='end'))
+            # The runtime status is still `pausing`: the SSE stream keeps running and
+            # the engine settles the run normally.
+            self.assertEqual(ending['research']['status'], 'pausing')
+            # The stop intent itself is on disk while the run is still in flight.
+            in_flight = self.store.read('p', 's', identifier)
+            self.assertEqual(in_flight['status'], 'pausing')
+            self.assertEqual(in_flight['pendingStop'], 'end')
+            task = service._running[identifier][1]
+            # The process dies before the in-flight stage settles.
+            service._running.clear()
+            self.assertEqual(service.reconcile_orphaned_researches(), 1)
+            restarted = self.store.read('p', 's', identifier)
+            self.assertEqual(restarted['status'], 'ended')
+            self.assertEqual(restarted['reason'], 'Ended by user')
+            self.assertEqual([a['status'] for a in restarted['activities']], ['stopped'])
+            self.assertNotIn('pendingStop', restarted)
+            self.assertEqual(service.state_for('p', 's', identifier)['status'], 'ended')
+            with self.assertRaises(HTTPException) as conflict:
+                await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='continue', llm=dict(url='http://localhost', token='local')))
+            self.assertEqual(conflict.exception.status_code, 409)
+            self.assertIn('has ended', conflict.exception.detail)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+    async def test_a_graceful_shutdown_keeps_the_pending_end_for_the_next_boot(self):
+        # The settle mark must survive any exit that did not settle the run: a
+        # cancelled drive task (SIGINT/loop shutdown) leaves `pausing`, and clearing
+        # the mark there would fold the user's `end` into `interrupted` on the next
+        # boot again (#1464).
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        from fastapi import HTTPException
+        entered = asyncio.Event()
+        async def ask(engine, role, payload, check=None):
+            entered.set()
+            await asyncio.Event().wait()
+        with patch.object(service, '_store', self.store), patch.object(service, '_running', {}), \
+                patch.object(IdeaTreeEngine, 'ask', ask):
+            created = await service.command(service.Command(projectId='p', sessionId='s', operation='create', objective='Goal', llm=dict(url='http://localhost', token='local')))
+            identifier = created['research']['id']
+            await entered.wait()
+            service._running[identifier][0].state.setdefault('activities', []).append(
+                dict(role='design', nodeId='ROOT', round=1, status='running', startedAt=now(), finishedAt=None, error=None))
+            await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='end'))
+            task = service._running[identifier][1]
+            # Graceful shutdown: the drive task is cancelled before the in-flight call
+            # returns, so the run never reaches a settle branch.
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            persisted = self.store.read('p', 's', identifier)
+            self.assertEqual(persisted['status'], 'pausing')
+            self.assertEqual(persisted['pendingStop'], 'end')
+            self.assertEqual(service.reconcile_orphaned_researches(), 1)
+            restarted = self.store.read('p', 's', identifier)
+            self.assertEqual(restarted['status'], 'ended')
+            self.assertEqual(restarted['reason'], 'Ended by user')
+            self.assertEqual([a['status'] for a in restarted['activities']], ['stopped'])
+            self.assertNotIn('pendingStop', restarted)
+            with self.assertRaises(HTTPException) as conflict:
+                await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='continue', llm=dict(url='http://localhost', token='local')))
+            self.assertEqual(conflict.exception.status_code, 409)
+
+    async def test_a_live_end_still_settles_ended_and_drops_the_persisted_stop(self):
+        # #1464 keeps the existing invariants: `end` does not shortcut to `ended`
+        # while the run is live (so the stream, the model grant and the one research
+        # per Session guard stay as they were), the engine settles the same
+        # `ended` / `Ended by user`, and the persisted mark does not outlive it.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        from fastapi import HTTPException
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def ask(engine, role, payload, check=None):
+            entered.set()
+            await release.wait()
+            engine.check_stop()
+            return dict(candidates=[], reason='Done')
+        with patch.object(service, '_store', self.store), patch.object(service, '_running', {}), \
+                patch.object(IdeaTreeEngine, 'ask', ask):
+            created = await service.command(service.Command(projectId='p', sessionId='s', operation='create', objective='Goal', llm=dict(url='http://localhost', token='local')))
+            identifier = created['research']['id']
+            await entered.wait()
+            ending = await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='end'))
+            self.assertEqual(ending['research']['status'], 'pausing')
+            self.assertEqual(service.state_for('p', 's', identifier)['status'], 'pausing')
+            # No second research is admitted in this Session while the first settles.
+            with self.assertRaises(HTTPException) as conflict:
+                await service.command(service.Command(projectId='p', sessionId='s', operation='create', objective='Another goal', llm=dict(url='http://localhost', token='local')))
+            self.assertEqual(conflict.exception.status_code, 409)
+            task = service._running[identifier][1]
+            release.set()
+            await task
+            settled = self.store.read('p', 's', identifier)
+            self.assertEqual(settled['status'], 'ended')
+            self.assertEqual(settled['reason'], 'Ended by user')
+            self.assertNotIn('pendingStop', settled)
+            self.assertNotIn(identifier, service._running)
+
+    async def test_a_research_paused_in_flight_comes_back_paused_after_a_restart(self):
+        # The same restart window for `pause`: the user asked to keep the run
+        # resumable, so the recovered status is `paused`, not `interrupted`. A
+        # record written before the mark existed keeps the interrupted verdict.
+        from unittest.mock import patch
+        from sciencediscovery_evolve.vendor.idea_tree import research_service as service
+        entered = asyncio.Event()
+        async def ask(engine, role, payload, check=None):
+            entered.set()
+            await asyncio.Event().wait()
+        with patch.object(service, '_store', self.store), patch.object(service, '_running', {}), \
+                patch.object(IdeaTreeEngine, 'ask', ask):
+            created = await service.command(service.Command(projectId='p', sessionId='s', operation='create', objective='Goal', llm=dict(url='http://localhost', token='local')))
+            identifier = created['research']['id']
+            await entered.wait()
+            # The stage records itself as running before it awaits the model call.
+            service._running[identifier][0].state.setdefault('activities', []).append(
+                dict(role='design', nodeId='ROOT', round=1, status='running', startedAt=now(), finishedAt=None, error=None))
+            pausing = await service.command(service.Command(projectId='p', sessionId='s', researchId=identifier, operation='pause'))
+            self.assertEqual(pausing['research']['status'], 'pausing')
+            self.assertEqual(self.store.read('p', 's', identifier)['pendingStop'], 'pause')
+            task = service._running[identifier][1]
+            service._running.clear()
+            self.assertEqual(service.reconcile_orphaned_researches(), 1)
+            restarted = self.store.read('p', 's', identifier)
+            self.assertEqual(restarted['status'], 'paused')
+            self.assertEqual(restarted['reason'], 'Paused by user')
+            self.assertEqual([a['status'] for a in restarted['activities']], ['stopped'])
+            self.assertNotIn('pendingStop', restarted)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        # The dead run's own final save is not part of this simulation; drop it so the
+        # next reconciliation sees only the legacy record.
+        self.store.path('p', 's', identifier).unlink()
+        # A legacy pausing record has no mark: it keeps the restart verdict.
+        legacy = copy.deepcopy(self.state)
+        legacy.update(id='research-legacy', status='pausing', activities=[
+            dict(role='design', nodeId='ROOT', round=1, status='running', startedAt=now(), finishedAt=None, error=None)])
+        self.store.save(legacy)
+        with patch.object(service, '_store', self.store), patch.object(service, '_running', {}):
+            self.assertEqual(service.reconcile_orphaned_researches(), 1)
+        settled = self.store.read('p', 's', 'research-legacy')
+        self.assertEqual(settled['status'], 'interrupted')
+        self.assertEqual(settled['reason'], 'Service restarted; continue manually')
+        self.assertEqual(settled['activities'][0]['status'], 'stopped')
+
     async def test_reading_a_research_never_writes_it(self):
         # #1456: list/get/events are reads. A `running` record with no engine in
         # this process is a restart orphan, but only the startup reconciliation may
