@@ -34,6 +34,8 @@ import type {
   EvolveRunStatus,
 } from "@sciencediscovery/schema";
 
+import { TITLE_COLUMNS, truncateColumns } from "../text/columns.js";
+
 export interface EvolveCandidateView {
   accepted?: boolean;
   changeSummary?: string;
@@ -318,12 +320,6 @@ export function verdictOf(candidate: EvolveCandidateView): Verdict {
   return candidate.category === "constraint-violated" ? "violated" : "rejected";
 }
 
-/** Longest title, in columns: a CJK character is two columns wide. */
-const TITLE_COLUMNS = 64;
-
-const columnsOf = (char: string): number =>
-  (/[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹯＀-｠￠-￦]/.test(char) ? 2 : 1);
-
 /**
  * A one-line title for a run whose goal is the user's whole brief.
  *
@@ -339,14 +335,7 @@ export function evolveShortTitle(statement: string): string {
   const title = /[\p{L}\p{N}]/u.test(firstSentence)
     ? firstSentence
     : /[\p{L}\p{N}]/u.test(unlabelled) ? unlabelled : flat;
-  let width = 0;
-  let out = "";
-  for (const char of title) {
-    width += columnsOf(char);
-    if (width > TITLE_COLUMNS) return `${out.trimEnd()}…`;
-    out += char;
-  }
-  return out;
+  return truncateColumns(title, TITLE_COLUMNS);
 }
 
 /** Whether a goal predates the conversational designer. Runs written before

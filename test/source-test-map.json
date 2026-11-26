@@ -3448,6 +3448,18 @@
       ]
     },
     {
+      "source": "apps/desktop/src/text/columns.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/text-columns.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/settings/system/Sessions.tsx",
       "risk": "P1",
       "owner": "desktop",
