@@ -16,19 +16,29 @@ import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
 
 import {
   PANEL_DEFAULT_WIDTH,
   PANEL_MAX_WIDTH,
   PANEL_MIN_CHAT_WIDTH,
   PANEL_MIN_WIDTH,
+  PANEL_NUDGE_STRIDE,
   PANEL_RAIL_WIDTH,
   PANEL_SHELL_GUTTER,
   PANEL_SHELL_RESERVE,
   clampPanelWidth,
+  panelCeiling,
   panelWidthFromDrag,
   storedPanelWidth,
 } from "../src/app/panel-width.js";
+import { usePanelWidth, type PanelResize } from "../src/app/use-panel-width.js";
+import { PANEL_WIDTH_STORAGE_KEY } from "../src/state/storage.js";
+import { act, create } from "./support/dom-renderer.js";
+
+// `react-test-renderer` only flushes effects inside `act` when the environment
+// declares itself an act environment; the mounted tests here do.
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /** One of the shell's stylesheets, as the browser receives it. */
 function stylesheet(name: string): string {
@@ -255,4 +265,154 @@ test("a stored width is only trusted as far as its type", () => {
   assert.equal(storedPanelWidth(undefined), PANEL_DEFAULT_WIDTH);
   assert.equal(storedPanelWidth(null), PANEL_DEFAULT_WIDTH);
   assert.equal(storedPanelWidth(Number.NaN), PANEL_DEFAULT_WIDTH);
+});
+
+test("the ceiling counts both gutters and stops at the panel's own maximum", () => {
+  // #1296 recorded 924 / 864 / 704 as the Measured ceilings. Those were taken
+  // before the two 6px margins were counted (`.main-area` and
+  // `.workspace-panel` each keep `margin: 6px 0 6px 6px`), so every one of them
+  // is 12px too generous: 1500 - 76 - 512 = 912, and 1280 - 76 - 512 = 692.
+  assert.equal(panelCeiling(1500), 912);
+  assert.equal(panelCeiling(1280), 692);
+  // Wide enough, and the panel's own maximum is the ceiling instead.
+  assert.equal(panelCeiling(1800), PANEL_MAX_WIDTH);
+  assert.equal(clampPanelWidth(PANEL_MAX_WIDTH, 1500), 912);
+});
+
+/**
+ * The wrapper `App` is not: it mounts the width hook against a fake window, so
+ * the keyboard path can be pressed the way the splitter presses it. Only the
+ * width is read back; that is what the splitter's `aria-valuenow` shows.
+ */
+let latest: PanelResize | undefined;
+
+function Probe(): null {
+  latest = usePanelWidth();
+  return null;
+}
+
+interface FakeShell {
+  /** What is in `PANEL_WIDTH_STORAGE_KEY`, parsed the way the hook reads it. */
+  remembered(): unknown;
+  /** Lay the window out at a new viewport width, as a resize does. */
+  resizeTo(viewportWidth: number): Promise<void>;
+  restore(): void;
+}
+
+function installShell(viewportWidth: number, rememberedWidth: number): FakeShell {
+  const globals = globalThis as unknown as Record<string, unknown>;
+  const previous = new Map<string, PropertyDescriptor | undefined>();
+  const install = (key: string, value: unknown): void => {
+    if (!previous.has(key)) previous.set(key, Object.getOwnPropertyDescriptor(globals, key));
+    // Node 22 exposes some of these as getters, so a descriptor is the only way
+    // in and the only way back out.
+    Object.defineProperty(globals, key, { configurable: true, value, writable: true });
+  };
+  const values = new Map<string, string>([[PANEL_WIDTH_STORAGE_KEY, JSON.stringify(rememberedWidth)]]);
+  install("localStorage", {
+    getItem: (key: string) => values.get(key) ?? null,
+    removeItem: (key: string) => { values.delete(key); },
+    setItem: (key: string, value: string) => { values.set(key, String(value)); },
+  });
+  const listeners = new Set<() => void>();
+  const fakeWindow = {
+    innerWidth: viewportWidth,
+    addEventListener: (type: string, listener: () => void) => {
+      if (type === "resize") listeners.add(listener);
+    },
+    removeEventListener: (type: string, listener: () => void) => { listeners.delete(listener); },
+  };
+  install("window", fakeWindow);
+
+  return {
+    remembered: () => JSON.parse(values.get(PANEL_WIDTH_STORAGE_KEY) ?? "null"),
+    resizeTo: async (next: number) => {
+      fakeWindow.innerWidth = next;
+      await act(async () => { for (const listener of listeners) listener(); });
+    },
+    restore: () => {
+      for (const [key, descriptor] of previous) {
+        if (descriptor) Object.defineProperty(globals, key, descriptor);
+        else delete globals[key];
+      }
+    },
+  };
+}
+
+async function mount(): Promise<ReturnType<typeof create>> {
+  let renderer: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    renderer = create(createElement(Probe));
+  });
+  return renderer!;
+}
+
+test("a nudge the window cannot show leaves the remembered width alone", async () => {
+  // 1280 - 76 - 512 = 692, so the 720 the user chose cannot be laid out. One
+  // Shift+ArrowLeft used to write that capped 692 down in its place, and the
+  // remembered width was gone for good (#1296).
+  const shell = installShell(1280, 720);
+  try {
+    const renderer = await mount();
+    assert.equal(latest?.width, 692);
+    await act(async () => { latest?.nudge(PANEL_NUDGE_STRIDE); });
+    assert.equal(shell.remembered(), 720);
+    assert.equal(latest?.width, 692);
+    // Widening the window gives the user's width back, which a written-down
+    // ceiling would have made impossible.
+    await shell.resizeTo(1800);
+    assert.equal(latest?.width, 720);
+    // Unmounting inside `act` runs the hook's cleanup while the globals it
+    // touches are still installed.
+    await act(async () => { renderer.unmount(); });
+  } finally {
+    shell.restore();
+  }
+});
+
+test("a wider remembered width survives a press against the ceiling", async () => {
+  const shell = installShell(1500, PANEL_MAX_WIDTH);
+  try {
+    const renderer = await mount();
+    assert.equal(latest?.width, 912);
+    await act(async () => { latest?.nudge(PANEL_NUDGE_STRIDE); });
+    assert.equal(shell.remembered(), PANEL_MAX_WIDTH);
+    await shell.resizeTo(1800);
+    assert.equal(latest?.width, PANEL_MAX_WIDTH);
+    await act(async () => { renderer.unmount(); });
+  } finally {
+    shell.restore();
+  }
+});
+
+test("a nudge the window can lay out is still remembered", async () => {
+  // The fix is not "stop writing": a press with room to move is the user's
+  // choice and has to survive a reload.
+  const shell = installShell(1800, 720);
+  try {
+    const renderer = await mount();
+    assert.equal(latest?.width, 720);
+    await act(async () => { latest?.nudge(PANEL_NUDGE_STRIDE); });
+    assert.equal(latest?.width, 784);
+    assert.equal(shell.remembered(), 784);
+    await act(async () => { renderer.unmount(); });
+  } finally {
+    shell.restore();
+  }
+});
+
+test("a nudge that lands exactly on the ceiling is still stored", async () => {
+  // The guard is "past the ceiling", not "at it": a width the window can lay
+  // out is a width the user may keep.
+  const shell = installShell(1500, 848);
+  try {
+    const renderer = await mount();
+    assert.equal(latest?.width, 848);
+    await act(async () => { latest?.nudge(PANEL_NUDGE_STRIDE); });
+    assert.equal(latest?.width, 912);
+    assert.equal(shell.remembered(), 912);
+    await act(async () => { renderer.unmount(); });
+  } finally {
+    shell.restore();
+  }
 });

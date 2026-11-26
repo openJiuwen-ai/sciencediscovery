@@ -90,11 +90,26 @@ export function boundedPanelWidth(width: number): number {
 }
 
 /**
- * Fold a width into what the current window can actually show.
+ * The widest the panel can be laid out at, given the width of the window.
  *
  * The panel shares the row with the rail and the two gutters, and the middle
  * column keeps `PANEL_MIN_CHAT_WIDTH` for the conversation; whatever is left
  * over is the panel's ceiling.
+ *
+ * Exported because the keyboard nudge has to ask the same question before it
+ * writes a width down: a press past this ceiling is not a width the window can
+ * show, so it must not replace the width the user chose on a larger window (see
+ * `use-panel-width.ts`).
+ */
+export function panelCeiling(viewportWidth: number): number {
+  return Math.min(
+    PANEL_MAX_WIDTH,
+    viewportWidth - PANEL_SHELL_RESERVE - PANEL_MIN_CHAT_WIDTH,
+  );
+}
+
+/**
+ * Fold a width into what the current window can actually show.
  *
  * A window too narrow for the floor keeps the floor. The panel is not on
  * screen that narrow anyway: `shell.css` hides it at 1100px and below with
@@ -108,11 +123,7 @@ export function boundedPanelWidth(width: number): number {
  * been overwritten by the ceiling would not come back; see `use-panel-width.ts`.
  */
 export function clampPanelWidth(width: number, viewportWidth: number): number {
-  const ceiling = Math.min(
-    PANEL_MAX_WIDTH,
-    viewportWidth - PANEL_SHELL_RESERVE - PANEL_MIN_CHAT_WIDTH,
-  );
-  return Math.max(PANEL_MIN_WIDTH, Math.min(boundedPanelWidth(width), ceiling));
+  return Math.max(PANEL_MIN_WIDTH, Math.min(boundedPanelWidth(width), panelCeiling(viewportWidth)));
 }
 
 /**
