@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import type {
   ArtifactReviewFinding,
   MemoryGraphByEdgeResult,
+  MemoryGraphNode,
   MemoryGraphTraceResult,
   ScientificArtifactVersion,
 } from "@sciencediscovery/schema";
@@ -119,6 +120,10 @@ export interface EvidenceReferenceTraceResult {
     strength?: string;
   };
   evidenceFound: boolean;
+  /** The document the Evidence was extracted from. A literature Paper, an
+   *  uploaded PDF SourceFile, and a WebPage all extract Evidence; each fills
+   *  the fields it has. Kept under `paper` because the Deep review prompt and
+   *  the citation-review skill read it there. */
   paper?: {
     abstract?: string;
     authors?: string[];
@@ -129,7 +134,9 @@ export interface EvidenceReferenceTraceResult {
     title?: string;
     year?: string;
   };
-  paperLinked: boolean;
+  /** Whether the Evidence has an `extracts` edge from a source document,
+   *  whatever kind it is. A web/news Evidence is not a broken chain. */
+  sourceLinked: boolean;
   reason?: string;
   truncated?: boolean;
 }
@@ -504,10 +511,10 @@ export async function quickEvidenceReferenceReview(
         version.id,
         reference.id,
       ));
-    } else if (!trace.paperLinked) {
+    } else if (!trace.sourceLinked) {
       findings.push(evidenceFinding(
         "CITATION_EVIDENCE_CHAIN_BROKEN",
-        `Evidence marker [${alias}] does not have an extracts link from a Paper node.`,
+        `Evidence marker [${alias}] is not linked to the document it was extracted from (a Paper, an uploaded PDF, or a web page).`,
         version.id,
         reference.id,
       ));
@@ -528,35 +535,29 @@ export function createEvidenceReferenceTracer(
   return async ({ evidenceId }, signal) => {
     if (signal?.aborted) throw new DOMException("Review cancelled", "AbortError");
     if (!memoryGraphClient || !isEnabled()) {
-      return { evidenceFound: false, paperLinked: false, reason: "memory_graph_disabled" };
+      return { evidenceFound: false, sourceLinked: false, reason: "memory_graph_disabled" };
     }
     try {
       extractedFromQuery ??= memoryGraphClient.byEdgeType(["extracts"], sessionId);
       const graph = await extractedFromQuery;
       if (graph.reason) {
-        return { evidenceFound: false, paperLinked: false, reason: graph.reason, truncated: graph.truncated };
+        return { evidenceFound: false, sourceLinked: false, reason: graph.reason, truncated: graph.truncated };
       }
       // The Evidence node is one endpoint of the extracts edge, so it
       // appears in the by-edge-type result's nodes with its full `extra`
       // (the edge serializer returns both endpoints). No separate node fetch
-      // is needed — one request carries evidence + its source Paper.
+      // is needed — one request carries evidence + the document it came from.
       const evidence = graph.nodes.find((node) => node.id === evidenceId);
-      if (!evidence) return { evidenceFound: false, paperLinked: false };
-      // extracts runs Paper → Evidence (Paper is the source, Evidence the
-      // target), so the Paper this Evidence was extracted from is the edge's
-      // source — the inverse of the old extracted_from direction.
-      const linkedPaperId = graph.edges.find((edge) =>
-        edge.type === "extracts"
-        && edge.target === evidenceId
-        && graph.nodes.some((node) => node.label === "Paper" && node.id === edge.source))?.source;
-      const paper = linkedPaperId
-        ? graph.nodes.find((node) => node.label === "Paper" && node.id === linkedPaperId)
-        : undefined;
+      if (!evidence) return { evidenceFound: false, sourceLinked: false };
+      // extracts runs source → Evidence, so the document this Evidence was
+      // extracted from is the edge's source — the inverse of the old
+      // extracted_from direction. That source is a Paper for a literature
+      // result, a PDF SourceFile for an upload, and a WebPage for a web/news
+      // result: all three are a complete chain, so read the label instead of
+      // assuming a Paper.
+      const edge = graph.edges.find((candidate) => candidate.type === "extracts" && candidate.target === evidenceId);
+      const source = edge ? graph.nodes.find((node) => node.id === edge.source) : undefined;
       const evidenceExtra = evidence.extra ?? {};
-      const paperExtra = paper?.extra ?? {};
-      const authors = Array.isArray(paperExtra?.authors)
-        ? paperExtra.authors.filter((author): author is string => typeof author === "string")
-        : undefined;
       return {
         evidence: {
           ...(typeof evidenceExtra.content === "string" ? { content: evidenceExtra.content } : {}),
@@ -565,27 +566,57 @@ export function createEvidenceReferenceTracer(
           ...(typeof evidenceExtra.strength === "string" ? { strength: evidenceExtra.strength } : {}),
         },
         evidenceFound: true,
-        ...(paper ? {
-          paper: {
-            ...(typeof paperExtra.abstract === "string" ? { abstract: paperExtra.abstract } : {}),
-            ...(authors ? { authors } : {}),
-            ...(typeof paperExtra.identifier === "string" ? { identifier: paperExtra.identifier } : {}),
-            ...(typeof paperExtra.identifierType === "string"
-              ? { identifierType: paperExtra.identifierType }
-              : typeof paperExtra.identifier_type === "string" ? { identifierType: paperExtra.identifier_type } : {}),
-            ...(typeof paperExtra.link === "string" ? { link: paperExtra.link } : {}),
-            ...(typeof paperExtra.source === "string" ? { source: paperExtra.source } : {}),
-            ...(typeof paperExtra.title === "string" ? { title: paperExtra.title } : {}),
-            ...(typeof paperExtra.year === "string" || typeof paperExtra.year === "number"
-              ? { year: String(paperExtra.year) }
-              : {}),
-          },
-        } : {}),
-        paperLinked: Boolean(paper),
+        ...(source ? { paper: sourceDocumentMetadata(source) } : {}),
+        sourceLinked: source !== undefined,
         truncated: graph.truncated,
       };
     } catch {
-      return { evidenceFound: true, paperLinked: false, reason: "memory_graph_unreachable" };
+      return { evidenceFound: true, sourceLinked: false, reason: "memory_graph_unreachable" };
     }
+  };
+}
+
+/** The source document's metadata, in the shape the Deep review prompt reads
+ *  as `paper`. Only the fields the node carries are filled: a web page has no
+ *  authors or year, and an uploaded PDF has no abstract. */
+function sourceDocumentMetadata(node: MemoryGraphNode): NonNullable<EvidenceReferenceTraceResult["paper"]> {
+  const extra = node.extra ?? {};
+  if (node.label === "WebPage") {
+    // web_search carries a url only; llm-wiki carries the wiki path as an
+    // identifier. Either one is the page's stable key.
+    const link = typeof extra.url === "string" ? extra.url : undefined;
+    const identifier = typeof extra.identifier === "string" ? extra.identifier : link;
+    return {
+      ...(link ? { link } : {}),
+      ...(identifier ? { identifier } : {}),
+      ...(typeof extra.identifier_type === "string"
+        ? { identifierType: extra.identifier_type }
+        : link ? { identifierType: "url" } : {}),
+      ...(typeof extra.title === "string" ? { title: extra.title } : {}),
+    };
+  }
+  if (node.label === "SourceFile") {
+    return {
+      ...(typeof extra.name === "string" ? { title: extra.name } : {}),
+      ...(typeof extra.file_id === "string" ? { identifier: extra.file_id } : {}),
+      identifierType: "file",
+    };
+  }
+  const authors = Array.isArray(extra.authors)
+    ? extra.authors.filter((author): author is string => typeof author === "string")
+    : undefined;
+  return {
+    ...(typeof extra.abstract === "string" ? { abstract: extra.abstract } : {}),
+    ...(authors ? { authors } : {}),
+    ...(typeof extra.identifier === "string" ? { identifier: extra.identifier } : {}),
+    ...(typeof extra.identifierType === "string"
+      ? { identifierType: extra.identifierType }
+      : typeof extra.identifier_type === "string" ? { identifierType: extra.identifier_type } : {}),
+    ...(typeof extra.link === "string" ? { link: extra.link } : {}),
+    ...(typeof extra.source === "string" ? { source: extra.source } : {}),
+    ...(typeof extra.title === "string" ? { title: extra.title } : {}),
+    ...(typeof extra.year === "string" || typeof extra.year === "number"
+      ? { year: String(extra.year) }
+      : {}),
   };
 }

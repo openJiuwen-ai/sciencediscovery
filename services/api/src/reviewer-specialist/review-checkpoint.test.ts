@@ -717,7 +717,7 @@ test("Reviewer checkpoint ignores structured source Artifacts instead of treatin
     },
     traceEvidenceReference: async () => {
       evidenceTraces += 1;
-      return { evidenceFound: true, paperLinked: true };
+      return { evidenceFound: true, sourceLinked: true };
     },
   });
 
@@ -774,7 +774,7 @@ test("Deep review runs Computation for an Evidence-backed report without a bibli
     traceEvidenceReference: async () => ({
       evidence: { content: "TP53 mutation frequency was 39.7%." },
       evidenceFound: true,
-      paperLinked: true,
+      sourceLinked: true,
     }),
   });
 
@@ -987,7 +987,7 @@ test("Deep Citation timeout preserves completed local Computation findings", asy
     traceEvidenceReference: async () => ({
       evidenceFound: true,
       evidence: { content: "The observed concentration was 12.0 mg/L." },
-      paperLinked: true,
+      sourceLinked: true,
     }),
     traceArtifactProvenance: async () => ({
       broken: false,
