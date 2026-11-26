@@ -15,6 +15,7 @@
 import { useState, type ReactNode } from "react";
 
 import type { Subagent, SubagentStep } from "../api/types.js";
+import { subagentToolStepView } from "../app/subagent-tool-step.js";
 import { Markdown } from "../Markdown.js";
 import { finalSteps } from "../run-stream/subagent.js";
 import { TEXT } from "../text.js";
@@ -72,15 +73,21 @@ function stepStatusIcon(step: SubagentStep): string {
   return "✓";
 }
 
-function StepBody({ step }: { step: SubagentStep }) {
+/** The body of one tool step: its input, its output, and its audit record.
+ *
+ * Exported for the render test: the row's fold keeps this body out of the DOM
+ * until it is opened, so a static render of the whole panel cannot reach it. */
+export function StepBody({ step }: { step: SubagentStep }) {
   const input = step.args !== undefined
     ? pretty(step.args)
     : step.input !== undefined && step.input !== ""
       ? step.input
       : undefined;
-  const output = step.content.trim();
-  const progress = step.progress?.trim() ?? "";
-  const details = step.details === undefined ? undefined : pretty(step.details);
+  // The step's three records — result, captured progress, audit details — are
+  // projected apart instead of printed one after another. See
+  // `subagentToolStepView` for the rules (#1431).
+  const view = subagentToolStepView(step);
+  const hasOutput = view.summary !== undefined || view.actionable.length > 0 || view.output.length > 0;
   return (
     <>
       {input === undefined ? null : (
@@ -89,21 +96,59 @@ function StepBody({ step }: { step: SubagentStep }) {
           <pre className="tab-content-source subagent-pre">{input}</pre>
         </>
       )}
-      {output === "" && progress === "" && details === undefined ? null : (
+      {hasOutput ? (
         <>
           <div className="subagent-step-label">{TEXT.subagent.output}</div>
           <div className="subagent-tool-output">
-            {output === "" ? null : (
-              <pre className="tab-content-source subagent-pre">{output}</pre>
+            {view.summary === undefined ? null : (
+              <div className="subagent-output-summary">{view.summary}</div>
             )}
-            {progress === "" ? null : (
-              <pre className="tab-content-source subagent-pre">{progress}</pre>
-            )}
-            {details === undefined ? null : (
-              <pre className="tab-content-source subagent-pre">{details}</pre>
-            )}
+            {view.actionable.map((field) => (
+              <div className="subagent-output-section" key={field.id}>
+                <div className="subagent-output-label">{field.label}</div>
+                <pre className="tab-content-source subagent-pre">{field.content}</pre>
+              </div>
+            ))}
+            {view.output.map((section, index) => (
+              <div className="subagent-output-section" key={`${section.id}-${index}`}>
+                {/* A residual result carries no runner label of its own: the
+                    output heading above already names it. */}
+                {section.id === "result" ? null : (
+                  <div className="subagent-output-label">{section.label}</div>
+                )}
+                <pre className="tab-content-source subagent-pre">{section.content}</pre>
+              </div>
+            ))}
           </div>
         </>
+      ) : null}
+      {view.progress === undefined ? null : (
+        <>
+          {/* Progress has its own heading and block: after a `stderr:` section
+              it used to read as more stderr output. */}
+          <div className="subagent-step-label">{TEXT.subagent.progress}</div>
+          <pre className="tab-content-source subagent-pre">{view.progress}</pre>
+        </>
+      )}
+      {view.audit.length === 0 ? null : (
+        <Disclosure
+          className="subagent-step-audit"
+          summary={(
+            <>
+              <span className="subagent-step-audit-title">{TEXT.subagent.audit}</span>
+              <span aria-hidden="true" className="collapse-chev">›</span>
+            </>
+          )}
+        >
+          {/* The whole record, unchanged: audit identifiers and `[omitted]`
+              payload placeholders stay available here instead of in the output. */}
+          {view.audit.map((entry) => (
+            <div className="subagent-output-section" key={entry.id}>
+              <div className="subagent-output-label">{entry.label}</div>
+              <pre className="tab-content-source subagent-pre">{pretty(entry.value)}</pre>
+            </div>
+          ))}
+        </Disclosure>
       )}
     </>
   );

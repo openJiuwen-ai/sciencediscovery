@@ -5364,7 +5364,76 @@ body.is-resizing {
 .subagent-tool-output .subagent-pre {
   margin: 8px 0 0;
   padding: 0;
+  /* The box itself is the boundary; a border per section would draw the label
+     groups as separate cards and hide the reading order. */
+  border: 0;
+  border-radius: 0;
   background: transparent;
+}
+
+/* A result is read in parts — its status line, the fields a reader can act on,
+ *  then the command's own labelled streams — so each part keeps its own
+ *  heading instead of running into the one above it (#1431). */
+.subagent-output-summary {
+  color: #6b6b6b;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.subagent-output-label {
+  margin: 8px 0 2px;
+  color: #9a9a9a;
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+.subagent-tool-output > :first-child,
+.subagent-tool-output > :first-child > .subagent-output-label {
+  margin-top: 0;
+}
+
+.subagent-output-section .subagent-pre {
+  margin-top: 0;
+}
+
+/* The complete result record, folded away from the output a reader came for:
+ *  execution and runner identifiers, timestamps and `[omitted]` placeholders
+ *  are diagnostics, not command output. */
+.subagent-step-audit {
+  margin-top: 10px;
+}
+
+.subagent-step-audit > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  color: #9a9a9a;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.subagent-step-audit > summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-step-audit > summary:hover {
+  color: #6b6b6b;
+}
+
+.subagent-step-audit > summary .collapse-chev {
+  color: #b3b3b3;
+  font-size: 14px;
+  transition: transform 0.15s ease;
+}
+
+.subagent-step-audit[open] > summary .collapse-chev {
+  transform: rotate(90deg);
+}
+
+.subagent-step-audit .subagent-pre {
+  max-height: 240px;
 }
 
 /* The panel is read in three parts — what was asked, what was done, what came

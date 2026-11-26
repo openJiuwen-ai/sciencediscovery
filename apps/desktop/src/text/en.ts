@@ -745,6 +745,35 @@ export const EN: Text = {
     },
     detail: "Execution",
     output: "Output",
+    /** The captured intermediate output of one step, when it still says
+     *  something the finished result does not (#1431). */
+    progress: "Progress",
+    /** The complete result record — execution and runner identifiers,
+     *  timestamps, `[omitted]` payload placeholders — folded away by default. */
+    audit: "Audit trail",
+    auditResult: "Result metadata",
+    auditDetails: "Tool details",
+    /** Actionable fields lifted out of the audit record into the output. */
+    fieldInstruction: "Next step",
+    fieldNetworkDeniedHosts: "Blocked hosts",
+    fieldCreatedFiles: "Created files",
+    fieldRecovery: "Recovery",
+    /** The completion line's exit code, in the reader's language. */
+    exitCode: (code: number) => `exit ${code}`,
+    /** The wire states of a shell execution, named for a reader. */
+    executionState: {
+      queued: "Queued",
+      running: "Running",
+      completed: "Completed",
+      failed: "Failed",
+      cancelled: "Cancelled",
+      unknown: "Unknown",
+    },
+    /** A run whose result record is not fully committed yet. */
+    finalization: {
+      pending: "finalization pending",
+      failed: "finalization failed",
+    },
     task: "Task",
     inputFiles: "Input files",
     emptySteps: "This subagent has not recorded any execution to show yet.",

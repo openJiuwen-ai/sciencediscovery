@@ -764,6 +764,35 @@ export const ZH = {
     /** The right panel's subagent mode. */
     detail: "执行详情",
     output: "输出",
+    /** The captured intermediate output of one step, when it still says
+     *  something the finished result does not (#1431). */
+    progress: "进度",
+    /** The complete result record — execution and runner identifiers,
+     *  timestamps, `[omitted]` payload placeholders — folded away by default. */
+    audit: "审计信息",
+    auditResult: "结果元数据",
+    auditDetails: "工具详情",
+    /** Actionable fields lifted out of the audit record into the output. */
+    fieldInstruction: "处理建议",
+    fieldNetworkDeniedHosts: "被拦截的域名",
+    fieldCreatedFiles: "生成的文件",
+    fieldRecovery: "可恢复信息",
+    /** The completion line's exit code, in the reader's language. */
+    exitCode: (code: number) => `退出码 ${code}`,
+    /** The wire states of a shell execution, named for a reader. */
+    executionState: {
+      queued: "排队中",
+      running: "执行中",
+      completed: "已完成",
+      failed: "失败",
+      cancelled: "已取消",
+      unknown: "状态未知",
+    },
+    /** A run whose result record is not fully committed yet. */
+    finalization: {
+      pending: "收尾中",
+      failed: "收尾失败",
+    },
     task: "任务",
     inputFiles: "输入文件",
     emptySteps: "这个 subagent 还没有留下可展示的执行记录。",

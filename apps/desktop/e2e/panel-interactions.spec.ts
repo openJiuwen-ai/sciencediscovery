@@ -491,6 +491,78 @@ test.describe("子代理的运行记录", () => {
     await expect(outputs).toHaveCount(2);
   });
 
+  test("a finished shell step shows its output once and keeps audit metadata folded", async ({ page }) => {
+    // The issue's minimal reproduction: a completed `run_shell` whose captured
+    // progress repeats the streamed stdout, and whose audit details carry the
+    // execution/agent/runner/workspace identifiers. The panel used to draw all
+    // three consecutively in one output box.
+    const streamed = "batch1 written";
+    const shellStep = {
+      content: [
+        '{"executionId":"shell:1431","state":"completed","exitCode":0,"createdFiles":["outputs/literature_sources.json"],"modifiedFiles":[],"recovery":{"schemaVersion":1,"capability":"unknown","reason":"NOT_REPORTED"}}',
+        "stdout:",
+        streamed,
+        "stderr:",
+      ].join("\n"),
+      createdAt: CREATED_AT,
+      details: {
+        __detailsBoundary: { omittedPayloadFields: true, truncated: false },
+        agentId: "subagent:example",
+        executionId: "shell:1431",
+        finishedAt: CREATED_AT,
+        runnerId: "local",
+        startedAt: CREATED_AT,
+        state: "completed",
+        stderr: "[omitted]",
+        stdout: "[omitted]",
+        workspaceId: "ws_example",
+      },
+      id: "tool-shell",
+      kind: "tool",
+      progress: `${streamed}\n`,
+      status: "completed",
+      toolName: "run_shell",
+    };
+    const options = recorded();
+    const catalog = options.subagentsBySession![SESSION]![0]!;
+    options.subagentsBySession = {
+      [SESSION]: [{ ...catalog, steps: [shellStep] }],
+    };
+
+    await installMockApi(page, options);
+    await page.goto("/");
+    await page.locator(".run-fold summary").click();
+    await page.getByRole("button", { name: `Subagent ${DESCRIPTION}` }).click();
+
+    const panel = page.locator(".workspace-panel");
+    await expect(panel).toBeVisible();
+    await panel.locator("summary", { hasText: "执行详情" }).click();
+    await panel.locator(".subagent-step.is-tool summary").first().click();
+
+    const output = panel.locator(".subagent-tool-output").first();
+    await expect(output).toContainText(streamed);
+    const ordinary = await output.innerText();
+    // The command's line is stdout, and it is shown once: not again as progress.
+    expect(ordinary.split(streamed).length - 1).toBe(1);
+    expect(ordinary).toContain("stdout");
+    // The actionable subset stays; the default recovery does not.
+    expect(ordinary).toContain("outputs/literature_sources.json");
+    expect(ordinary).not.toContain("NOT_REPORTED");
+    // No audit metadata in the ordinary output.
+    for (const marker of ["executionId", "agentId", "runnerId", "workspaceId", "startedAt", "finishedAt", "[omitted]", "__detailsBoundary"]) {
+      expect(ordinary).not.toContain(marker);
+    }
+    // Progress is not repeated after the result, so it is not shown at all here.
+    await expect(panel.locator(".subagent-step-body").first()).not.toContainText("进度");
+
+    // The complete record is one click away and starts folded; nothing was dropped.
+    const audit = panel.locator(".subagent-step-audit").first();
+    expect(await audit.evaluate((node) => (node as HTMLDetailsElement).open)).toBe(false);
+    await audit.locator("summary").click();
+    await expect(audit).toContainText("agentId");
+    await expect(audit).toContainText("__detailsBoundary");
+  });
+
   test("a running child shows the steps the catalog has flushed, not only its own stream", async ({ page }) => {
     // The run that delegated this child is over; the child is not. A wake turn
     // continues it under a run of its own, and those steps are published on

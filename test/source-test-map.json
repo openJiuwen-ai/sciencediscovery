@@ -2063,6 +2063,23 @@
           "source": "apps/desktop/tests/subagent-detail.test.tsx",
           "layer": "ut",
           "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/tests/subagent-tool-step.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/app/subagent-tool-step.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/subagent-tool-step.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
         }
       ]
     },
