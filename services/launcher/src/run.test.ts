@@ -235,30 +235,54 @@ describe("run with --effort / --thinking", () => {
     assert.equal(serve.runs.length, 0);
   });
 
-  for (const status of ["running", "completed", "failed", "cancelled"] as const) {
-    test(`an SSE EOF without a terminal event reconciles a ${status} run`, async (t) => {
+  const disconnects = [
+    ["EOF", "running"], ["EOF", "completed"], ["EOF", "failed"], ["EOF", "cancelled"],
+    ["reset", "running"], ["reset", "completed"],
+  ] as const;
+  for (const [ending, status] of disconnects) {
+    test(`an SSE ${ending} without a terminal event reconciles a ${status} run`, async (t) => {
       const serve = mockServe(t, false);
       const cursors: number[] = [];
       t.mock.method(ControlPlaneClient.prototype, "getRun", async () => ({ status, error: "fixture failure" }));
       t.mock.method(globalThis, "fetch", async (input: string) => {
         const after = Number(new URL(input).searchParams.get("after"));
         cursors.push(after);
-        const frames = after === 0
-          ? 'id: 8\ndata: {"type":"run.started"}\n\ndata: {"type":"agent.registered"}\n\n'
-          : status === "completed" && after === 8
+        const headers = { "content-type": "text/event-stream" };
+        if (after === 0) {
+          const frames = 'id: 8\ndata: {"type":"run.started"}\n\ndata: {"type":"agent.registered"}\n\n';
+          if (ending === "EOF") return new Response(frames, { headers });
+          let delivered = false;
+          const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (delivered) throw new Error("fixture connection reset");
+              controller.enqueue(new TextEncoder().encode(frames));
+              delivered = true;
+            },
+          }, { highWaterMark: 0 });
+          return new Response(body, { headers });
+        }
+        const frames = status === "completed" && after === 8
           ? 'id: 9\ndata: {"type":"run.completed","message":{"content":"replayed answer"},"files":[{"path":"answer.txt"}]}\n\n'
           : "";
-        return new Response(frames, { headers: { "content-type": "text/event-stream" } });
+        return new Response(frames, { headers });
       });
       const result = await run({});
       assert.equal(result.exitCode, status === "completed" ? 0 : status === "cancelled" ? 130 : 1);
       assert.deepEqual(cursors, status === "failed" || status === "cancelled" ? [0] : [0, 8]);
-      const summary = serve.stdout.join("").trim().split("\n").map((line) => JSON.parse(line)).find((event) => event.type === "result");
+      const events = serve.stdout.join("").trim().split("\n").map((line) => JSON.parse(line));
+      const summary = events.find((event) => event.type === "result");
       assert.equal(summary.status, status === "running" ? "failed" : status);
-      if (status === "running") assert.match(summary.error, /without a final result.*running/);
+      if (status === "running" && ending === "EOF") assert.match(summary.error, /without a final result.*running/);
+      if (status === "running" && ending === "reset") {
+        assert.equal(summary.error, "fixture connection reset");
+        assert.deepEqual(events.find((event) => event.type === "error"), {
+          type: "error", code: "STREAM_ERROR", message: "fixture connection reset", runId: "run", sessionId: "session",
+        });
+      }
       if (status === "completed") {
         assert.equal(summary.content, "replayed answer");
         assert.deepEqual(summary.files, [{ path: "answer.txt" }]);
+        assert.equal(events.some((event) => event.type === "error"), false);
       }
     });
   }

@@ -465,30 +465,40 @@ export async function runCommand(context: RunContext, log: (message: string) => 
     }
   };
 
-  try {
-    const subscribe = (signal: AbortSignal) => client.subscribeRunEvents(sessionId, run.id, lastSequence, (event, sequence) => {
-      if (sequence !== undefined && sequence > lastSequence) lastSequence = sequence;
-      handleEvent(event);
-    }, signal);
-    await subscribe(abortController.signal);
-    if (!sawTerminal && !abortController.signal.aborted) {
-      // The status endpoint confirms failures/cancellations but does not carry
-      // the answer or files. Replay events to recover a completed result.
-      const recoverySignal = AbortSignal.any([abortController.signal, AbortSignal.timeout(5_000)]);
-      const persisted = await client.getRun(sessionId, run.id, recoverySignal);
-      if (persisted.status === "failed" || persisted.status === "interrupted") {
-        handleEvent({ type: "run.failed", error: persisted.error ?? `Run ${persisted.status}` });
-      } else if (persisted.status === "cancelled") {
-        handleEvent({ type: "run.cancelled" });
-      } else {
-        await subscribe(recoverySignal);
-        if (!sawTerminal && !abortController.signal.aborted) {
-          throw new Error(`Run ${run.id} event stream ended without a final result (last known status: ${persisted.status}).`);
-        }
+  const subscribe = (signal: AbortSignal) => client.subscribeRunEvents(sessionId, run.id, lastSequence, (event, sequence) => {
+    if (sequence !== undefined && sequence > lastSequence) lastSequence = sequence;
+    handleEvent(event);
+  }, signal);
+
+  const reconcile = async () => {
+    // The status endpoint confirms failures/cancellations but does not carry
+    // the answer or files. Replay events to recover a completed result.
+    const recoverySignal = AbortSignal.any([abortController.signal, AbortSignal.timeout(5_000)]);
+    const persisted = await client.getRun(sessionId, run.id, recoverySignal);
+    if (persisted.status === "failed" || persisted.status === "interrupted") {
+      handleEvent({ type: "run.failed", error: persisted.error ?? `Run ${persisted.status}` });
+    } else if (persisted.status === "cancelled") {
+      handleEvent({ type: "run.cancelled" });
+    } else {
+      await subscribe(recoverySignal);
+      if (!sawTerminal && !abortController.signal.aborted) {
+        throw new Error(`Run ${run.id} event stream ended without a final result (last known status: ${persisted.status}).`);
       }
     }
-  } catch (err) {
-    if (!abortController.signal.aborted) {
+  };
+
+  let streamFailure: { error: unknown } | undefined;
+  try {
+    try {
+      await subscribe(abortController.signal);
+    } catch (error) {
+      streamFailure = { error };
+    }
+    if (!sawTerminal && !abortController.signal.aborted) await reconcile();
+  } catch (recoveryError) {
+    if (!sawTerminal && !abortController.signal.aborted) {
+      // If recovery confirms no outcome, keep the error that cut off the stream.
+      const err = streamFailure ? streamFailure.error : recoveryError;
       const msg = err instanceof Error ? err.message : String(err);
       if (outputMode === "text") {
         process.stderr.write(`[error] ${msg}\n`);
