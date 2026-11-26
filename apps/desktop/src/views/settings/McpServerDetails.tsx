@@ -30,8 +30,8 @@ export function McpServerDetails({ server, source, status, selected, busy, autho
   const secrets = (map: Record<string, null>) => Object.keys(map).length
     ? Object.keys(map).map((key) => <span className="mcp-secret-name" key={key}><code>{key}</code><small>{t.storedValue}</small></span>) : "—";
   return <McpModal label={t.details} heading={<div className="mcp-details-heading"><h2>{t.details}</h2><McpActionMenu name={name} busy={busy} onTry={onTry} tryDisabled={tryDisabled} onEdit={server ? onEdit : undefined} onDelete={server ? onDelete : undefined} /></div>} closeDisabled={busy} onClose={onClose}  returnFocus={returnFocus} className="mcp-details-modal">
+    {failure ? <p className="mcp-inline-error" role="alert">{failure}</p> : null}
     <div className="mcp-detail-body">
-      {failure ? <p className="mcp-inline-error" role="alert">{failure}</p> : null}
       <div className="mcp-detail-hero">
         <span className={`mcp-source-mark${source ? " is-builtin" : ""}`} aria-hidden="true">{name.slice(0, 1).toUpperCase()}</span>
         <div className="mcp-detail-name"><h3>{name}</h3><Switch label={`${name} · ${source ? t.useByDefault : t.enableService}`} value={server?.enabled ?? selected} disabled={busy} onChange={onToggleEnabled} /></div>
