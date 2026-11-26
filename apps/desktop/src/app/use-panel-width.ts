@@ -19,6 +19,7 @@ import {
   PANEL_DEFAULT_WIDTH,
   boundedPanelWidth,
   clampPanelWidth,
+  panelCeiling,
   panelWidthFromDrag,
   storedPanelWidth,
 } from "./panel-width.js";
@@ -83,7 +84,15 @@ export function usePanelWidth(): PanelResize {
   }, []);
 
   const nudge = useCallback((delta: number) => {
-    const next = clampPanelWidth(current.current + delta, window.innerWidth);
+    const asked = current.current + delta;
+    // A press the window cannot show is not a smaller width the user asked
+    // for: nothing moves on screen, so writing the ceiling down here would
+    // replace the width the user chose on a larger window with the width this
+    // one can afford, and widening the window again would never give it back.
+    // Only a width the window can actually lay out is remembered, and only its
+    // own two bounds are folded into it.
+    if (asked > panelCeiling(window.innerWidth)) return;
+    const next = boundedPanelWidth(asked);
     setDesired(next);
     writeStoredJson(localStorage, PANEL_WIDTH_STORAGE_KEY, next);
   }, []);
