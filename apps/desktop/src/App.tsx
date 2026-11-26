@@ -365,10 +365,11 @@ export function App({ initialToken }: Props) {
   };
   /** A design command the dialog placed in the composer instead of sending.
    *  Held here because the composer has two mounts — the welcome page and the
-   *  conversation — and the dialog opens over either. Cleared when the composer
+   *  conversation — and the dialog opens over either. Each seed names the
+   *  surface it was collected for (#1434), and is cleared when the composer
    *  sends, when the reader removes the token, and when the session changes: a
-   *  token that outlived its session would turn the next ordinary message into
-   *  a long, costly search the reader never asked for. */
+   *  token kept across the switch would come back as a search in the session
+   *  that collected it the next time the reader returned there. */
   const [seededCommand, setSeededCommand] = useState<SeededCommand>();
 
   // An open panel belongs to one session's searches, like a selected
@@ -376,9 +377,10 @@ export function App({ initialToken }: Props) {
   // in whichever session is open when it sends, and the session the app is
   // opening as it boots is not a reason to close a dialog the user just opened.
   //
-  // The seeded command is not left alone: the dialog collected its goal for
-  // the session it was opened in, and the composer it would land in survives
-  // the switch.
+  // The seeded command is not left alone either. The composer ignores a seed
+  // another surface owns (#1434), but the seed itself belongs to the session
+  // it was collected in: keeping it would put the token back in that session's
+  // input on the next visit, where the reader never asked for it again.
   useEffect(() => {
     setEvolveRunId(undefined);
     // A research id is the previous session's, so it goes with the run id.
@@ -1344,7 +1346,7 @@ export function App({ initialToken }: Props) {
     setIdeaTreeStart(false);
     setIdeaTreeOpen(false);
     setIdeaTreeTask("");
-    setSeededCommand({ command, nonce: Date.now(), text: task });
+    setSeededCommand({ command, nonce: Date.now(), owner: landingKey(state), text: task });
   };
 
   const seedIdeaTree = () => seedIdeaCommand(IDEA_TREE_TEAM_COMMAND, ideaTreeTask);
@@ -1366,7 +1368,7 @@ export function App({ initialToken }: Props) {
     const pending = pendingIdeaSendRef.current;
     rememberPendingIdeaSend(undefined);
     setIdeaTreeOpen(false);
-    if (pending !== undefined) setSeededCommand({ nonce: Date.now(), text: pending });
+    if (pending !== undefined) setSeededCommand({ nonce: Date.now(), owner: landingKey(state), text: pending });
   };
 
   /**
@@ -1526,6 +1528,9 @@ export function App({ initialToken }: Props) {
     running: state.running,
     seededCommand,
     selectedModelId: state.selectedModelId,
+    // A seed is drawn only by the surface that created it (#1434): the
+    // page and the conversation are named the way `Landing` is keyed.
+    surfaceKey: landingKey(state),
     skillsEpoch,
     unavailableModel: creditsModelSignedOut
       || Boolean(state.detail?.settingsOverrides?.modelId && !state.models.some(model => model.id === state.detail?.settingsOverrides.modelId)),
@@ -1673,7 +1678,7 @@ export function App({ initialToken }: Props) {
             <p className="session-archived-banner" role="status">{TEXT.errors.archivedBanner}</p>
           ) : null}
           {isEvidenceSessionReadOnly(state.detail) ? null : (
-            <Composer {...composerProps} />
+            <Composer {...composerProps} key={landingKey(state)} />
           )}
             </>
           )}
@@ -1821,7 +1826,13 @@ export function App({ initialToken }: Props) {
             // when the dialog closes: the design usually needs a sentence of
             // its own added after the task.
             const draft = splitEvolveCommand(command);
-            setSeededCommand({ command: draft.command, direction, nonce: Date.now(), text: draft.goal });
+            setSeededCommand({
+              command: draft.command,
+              direction,
+              nonce: Date.now(),
+              owner: landingKey(state),
+              text: draft.goal,
+            });
           }}
           running={state.running}
           status={evolve.status}

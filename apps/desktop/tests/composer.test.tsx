@@ -39,7 +39,8 @@ function render(
     limit?: string;
     projectName?: string;
     projects?: { id: string; name: string }[];
-    seededCommand?: { command: string; nonce: number; text: string };
+    seededCommand?: { command: string; nonce: number; owner: string; text: string };
+    surfaceKey?: string;
     tag?: { kind: "research" | "experiment" | "analysis"; label: string };
     uploading?: boolean;
     modelName?: string;
@@ -72,6 +73,7 @@ function render(
       projects={(options.projects ?? []) as never}
       running={running}
       seededCommand={options.seededCommand}
+      surfaceKey={options.surfaceKey}
       selectedModelId={options.selectedModelId === null ? undefined : options.selectedModelId ?? "m1"}
       unavailableModel={options.unavailableModel}
       tag={options.tag === undefined ? undefined : { ...options.tag, onClear: () => {} }}
@@ -466,7 +468,8 @@ test("a row's mark comes from its provider, then from its name", () => {
 
 test("a design's command is a token in front of the sentence, not text", () => {
   const markup = render(false, {
-    seededCommand: { command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" },
+    seededCommand: { command: "/evolve-design --algorithm puct", nonce: 1, owner: "s1", text: "让压缩比更高" },
+    surfaceKey: "s1",
   });
   assert.match(markup, /class="composer-command"/u);
   assert.match(markup, /composer-command-text">\/evolve-design --algorithm puct</u);
@@ -504,7 +507,8 @@ test("sending a seeded design joins the token to the sentence once", async () =>
         onUpload={() => {}}
         projects={[]}
         running={false}
-        seededCommand={{ command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" }}
+        seededCommand={{ command: "/evolve-design --algorithm puct", nonce: 1, owner: "s1", text: "让压缩比更高" }}
+        surfaceKey="s1"
         selectedModelId="m1"
         uploading={false}
       />,
@@ -557,7 +561,8 @@ test("a seeded design carries the parameters the dialog collected", async () => 
         onUpload={() => {}}
         projects={[]}
         running={false}
-        seededCommand={{ command: "/evolve-design --algorithm puct", direction, nonce: 1, text: "让压缩比更高" }}
+        seededCommand={{ command: "/evolve-design --algorithm puct", direction, nonce: 1, owner: "s1", text: "让压缩比更高" }}
+        surfaceKey="s1"
         selectedModelId="m1"
         uploading={false}
       />,
@@ -576,7 +581,7 @@ test("a seeded design carries the parameters the dialog collected", async () => 
 
 test("a design's flags can be taken back without losing the sentence", async () => {
   const cleared: string[] = [];
-  const element = (seededCommand: { command: string; nonce: number; text: string } | undefined) => (
+  const element = (seededCommand: { command: string; nonce: number; owner: string; text: string } | undefined) => (
     <Composer
       attachments={[]}
       landing
@@ -597,10 +602,11 @@ test("a design's flags can be taken back without losing the sentence", async () 
       running={false}
       seededCommand={seededCommand}
       selectedModelId="m1"
+      surfaceKey="s1"
       uploading={false}
     />
   );
-  const seeded = { command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" };
+  const seeded = { command: "/evolve-design --algorithm puct", nonce: 1, owner: "s1", text: "让压缩比更高" };
   let view;
   await act(async () => { view = create(element(seeded)); });
   try {
@@ -852,7 +858,8 @@ test("a seeded idea-tree token sends the command with the task written under it"
         onUpload={() => {}}
         projects={[]}
         running={false}
-        seededCommand={{ command: "/idea-tree-team", nonce: 1, text: "研究钙钛矿带隙" }}
+        seededCommand={{ command: "/idea-tree-team", nonce: 1, owner: "s1", text: "研究钙钛矿带隙" }}
+        surfaceKey="s1"
         selectedModelId="m1"
         uploading={false}
       />,
@@ -899,7 +906,8 @@ test("an idea-tree token without a task cannot be sent, and asks for a research 
         onUpload={() => {}}
         projects={[]}
         running={false}
-        seededCommand={{ command: "/idea-tree-team", nonce: 1, text: "" }}
+        seededCommand={{ command: "/idea-tree-team", nonce: 1, owner: "s1", text: "" }}
+        surfaceKey="s1"
         selectedModelId="m1"
         uploading={false}
       />,
@@ -923,6 +931,58 @@ test("an idea-tree token without a task cannot be sent, and asks for a research 
     assert.equal(enabled.props.disabled, false, "writing the task enables the send");
   } finally {
     await act(async () => { view.unmount(); });
+    if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
+    else (globalThis as { document?: unknown }).document = originalDocument;
+  }
+});
+
+test("a seed belongs to the session that created it, not to the one opened next", async () => {
+  // #1434: the parameters card seeds the command instead of sending it, and the
+  // shell clears that seed in an effect — after the composer of the session
+  // being opened has already mounted. So the composer itself has to ignore a
+  // seed whose owner is another surface, in its initial state as well: a
+  // sentence typed in one session must not arrive in the other one's input.
+  const originalDocument = (globalThis as { document?: unknown }).document;
+  (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
+  const seed = { command: "/idea-tree-team", nonce: 1, owner: "session-b", text: "这是一个测试" };
+  const element = (surfaceKey: string) => (
+    <Composer
+      attachments={[]}
+      models={[{ id: "m1", name: "测试模型" } as never]}
+      onApprovalMode={() => {}}
+      onClearAttachments={() => {}}
+      onCreateProject={() => {}}
+      onOpenSettings={() => {}}
+      onRemoveAttachment={() => {}}
+      onRetryAttachment={() => {}}
+      onSelectModel={() => {}}
+      onSelectProject={() => {}}
+      onSend={() => true}
+      onStop={() => {}}
+      onUpload={() => {}}
+      projects={[]}
+      running={false}
+      seededCommand={seed}
+      selectedModelId="m1"
+      surfaceKey={surfaceKey}
+      uploading={false}
+    />
+  );
+  try {
+    for (const [surfaceKey, expected] of [["session-a", ""], ["session-b", "这是一个测试"]] as const) {
+      let view;
+      await act(async () => { view = create(element(surfaceKey)); });
+      try {
+        const area = view.root.findByProps({ id: "composer-textarea" });
+        assert.equal(area.props.value, expected,
+          `the composer of ${surfaceKey} shows ${expected === "" ? "nothing" : "the sentence"} for a seed owned by session-b`);
+        const drawn = view.root.findAllByType("span").some((node) => node.props.className === "composer-command");
+        assert.equal(drawn, expected !== "", "the token is drawn with the sentence it belongs to, and nowhere else");
+      } finally {
+        await act(async () => { view.unmount(); });
+      }
+    }
+  } finally {
     if (originalDocument === undefined) delete (globalThis as { document?: unknown }).document;
     else (globalThis as { document?: unknown }).document = originalDocument;
   }
