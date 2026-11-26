@@ -377,7 +377,7 @@ export const ZH = {
     sessionSettings: "会话设置",
     /** 会话设置最上面的一项：进入程序演进。 */
     evolveExperiment: "程序演进实验",
-    ideaTree: "idea-tree",
+    ideaTree: "研究思路树",
     experts: "专家",
     expertsNone: "无",
     expertsHint: "为此对话绑定一位个人专家。",
@@ -414,7 +414,7 @@ export const ZH = {
 
   ideaTreeOverride: {
     title: "idea-tree 参数",
-    hint: "确认后把这套参数用于当前会话，并在输入框放好 Idea Tree 命令；补全研究任务后发送即可。单次修改只用于当前会话，不影响全局默认；只有点「覆盖全局设置」才会改全局默认。",
+    hint: "确认后把这套参数用于当前会话，并在输入框放好研究思路树命令；补全研究任务后发送即可。单次修改只用于当前会话，不影响全局默认；只有点「覆盖全局设置」才会改全局默认。",
     template: "研究模板",
     templateGeneral: "通用科学假设",
     templateWater: "水处理材料",
@@ -1733,7 +1733,7 @@ export const ZH = {
         timeouts: { label: "超时", description: "墙钟限制与不限模式" },
         "session-management": { label: "会话管理", description: "已归档的会话，可恢复或彻底删除" },
         "export-history": { label: "导出记录", description: "本机保存过的研究包" },
-        "idea-tree": { label: "Idea Tree", description: "假设树的研究范围与阶段提示词" },
+        "idea-tree": { label: "研究思路树", description: "假设树的研究范围与阶段提示词" },
       },
       global: {
         modelHeading: "主模型",
@@ -1934,7 +1934,7 @@ export const ZH = {
         saving: "保存中…",
         saved: "已保存，对后续研究生效。",
         failed: "保存失败。",
-        unavailable: "Idea Tree 服务尚未就绪：请先启动 Evolve 服务，再回到这里重试。",
+        unavailable: "研究思路树服务尚未就绪：请先启动 Evolve 服务，再回到这里重试。",
       },
       specialists: {
         heading: "专家",
@@ -2577,9 +2577,9 @@ export const ZH = {
   },
 
   ideaTree: {
-    heading: "Idea Tree 研究",
-    empty: "这个会话还没有 Idea Tree 研究。",
-    unavailable: "Idea Tree 服务尚未就绪：请先启动 Evolve 服务，再回来查看。",
+    heading: "研究思路树",
+    empty: "这个会话还没有研究思路树。",
+    unavailable: "研究思路树服务尚未就绪：请先启动 Evolve 服务，再回来查看。",
     objective: "研究目标",
     legacyCard: "旧版假设树",
     legacyHint: "这条会话的树来自旧版本，只提供查看，不能在桌面端继续推进。",
@@ -2617,7 +2617,7 @@ export const ZH = {
     end: "结束",
     open: "打开任务面板",
     create: {
-      title: "启动 Idea Tree 研究",
+      title: "启动研究思路树",
       hint: "研究在后台自行推进；卡出现后点开即可看树、节点与控制。",
       taskLabel: "研究任务",
       taskPlaceholder: "一句话说明课题与验收边界",
@@ -2627,7 +2627,7 @@ export const ZH = {
       starting: "正在启动…",
       cancel: "取消",
       failed: "启动失败。",
-      unavailable: "Idea Tree 服务尚未就绪：请先启动 Evolve 服务，再回来重试。",
+      unavailable: "研究思路树服务尚未就绪：请先启动 Evolve 服务，再回来重试。",
     },
     detail: {
       title: "节点详情",
