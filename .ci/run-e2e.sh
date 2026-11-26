@@ -88,6 +88,15 @@ swarm_offline_fixture=0
 case "$fixture" in research|literature) swarm_offline_fixture=1 ;; esac
 if [[ "$fixture" != standard && "$group" != mocked ]]; then echo 'Offline fixtures must never reach real E2E' >&2; exit 2; fi
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+swarm_lock_fd=""
+
+release_swarm_lock() {
+  if [[ -n "${swarm_lock_fd:-}" ]]; then
+    flock -u "$swarm_lock_fd" 2>/dev/null || true
+    exec 8>&- 2>/dev/null || true
+    swarm_lock_fd=""
+  fi
+}
 
 mkdir -p "$results_root" "$runtime_root"
 : > "$stack_log"
@@ -97,6 +106,7 @@ finish() {
   local status=$?
   local result_status="failed"
   trap - EXIT INT TERM
+  release_swarm_lock
   if [[ -n "$fixture_pid" ]]; then kill -TERM "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true; fi
   if [[ -n "$stack_pid" ]]; then
     # start-stack runs several children and keeps the API in the foreground.
@@ -184,8 +194,11 @@ else
 fi
 # The upstream postinstall uses $PWD and therefore creates a container-absolute
 # link. Normalize it so the bind-mounted checkout — or an unpacked payload —
-# remains usable wherever it landed.
-ln -sfn ../.e2e/node_modules "$repository_root/test/node_modules"
+# remains usable wherever it landed. Skip the rewrite when already normalized
+# so concurrent local stacks do not race on the symlink.
+if [[ "$(readlink "$repository_root/test/node_modules" 2>/dev/null || true)" != "../.e2e/node_modules" ]]; then
+  ln -sfn ../.e2e/node_modules "$repository_root/test/node_modules"
+fi
 
 if [[ "$prepare_only" -eq 1 ]]; then
   printf 'E2E preparation complete; the stack is deliberately not started here.\n' | tee -a "$test_log"
@@ -263,26 +276,36 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
   export JIUWENSWARM_HOME="$(absolute_from_repository "${JIUWENSWARM_HOME:-$runtime_root/jiuwenswarm}")"
   export JIUWENSWARM_INSTANCE="${JIUWENSWARM_INSTANCE:-sd-e2e}"
   export SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1
+  # Serialize JiuwenSwarm startup across concurrent local stacks so each
+  # instance finishes binding its auto-allocated ports before the next probes.
+  # Close fd 8 (`8>&-`) on child commands so daemonized JiuwenSwarm processes
+  # never inherit the lock descriptor.
+  if [[ -n "${CI_E2E_SWARM_START_LOCK:-}" ]] && command -v flock >/dev/null 2>&1; then
+    mkdir -p "$(dirname -- "$CI_E2E_SWARM_START_LOCK")"
+    exec 8>"$CI_E2E_SWARM_START_LOCK"
+    flock 8
+    swarm_lock_fd=8
+  fi
   # Install the pinned release when missing and create this layer's instance. A
   # prepared workspace is one whose host installed the Node dependencies and the
   # pinned Chromium — the shared runner does that before it freezes the plan —
   # not JiuwenSwarm or its instance, so this runs either way; with the install
   # already present it only makes sure the instance exists.
-  "$repository_root/scripts/jiuwenswarm.sh" setup >> "$test_log" 2>&1 || {
+  "$repository_root/scripts/jiuwenswarm.sh" setup 8>&- >> "$test_log" 2>&1 || {
     printf 'BLOCKED: JiuwenSwarm could not be installed (scripts/jiuwenswarm.sh setup); see %s.\n' "$test_log" | tee -a "$test_log" >&2
     exit 2
   }
-  eval "$("$repository_root/scripts/jiuwenswarm.sh" env)" || {
+  eval "$("$repository_root/scripts/jiuwenswarm.sh" env 8>&-)" || {
     printf 'BLOCKED: the JiuwenSwarm instance %s is not set up.\n' "$JIUWENSWARM_INSTANCE" | tee -a "$test_log" >&2
     exit 2
   }
   jiuwenswarm_gateway_port="${JIUWENSWARM_GATEWAY_URL##*:}"; jiuwenswarm_gateway_port="${jiuwenswarm_gateway_port%%/*}"
   if [[ "$swarm_offline_fixture" == 1 ]]; then
-    if "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
+    if "$repository_root/scripts/jiuwenswarm.sh" status 8>&- >/dev/null 2>&1; then
       echo 'BLOCKED: research fixture refuses to modify a running Swarm instance' >&2; exit 2
     fi
     swarm_python="${JIUWENSWARM_SRC:-${JIUWENSWARM_ROOT:-$repository_root/.sciencediscovery-data/jiuwenswarm}/src}/.venv/bin/python"
-    "$swarm_python" .ci/prepare-research-fixture.py >> "$test_log" 2>&1 || exit 2
+    "$swarm_python" .ci/prepare-research-fixture.py 8>&- >> "$test_log" 2>&1 || exit 2
     export E2E_SWARM_EXCLUSIVE=1 E2E_SWARM_COMPACTION=1 E2E_MCP_FAULT_PROXY=1
     export E2E_MCP_PROXY_PORT="$((SCIENCE_AGENT_PORT + 5))"
     export E2E_MCP_PROXY_TARGET="http://127.0.0.1:${SCIENCE_AGENT_PORT}"
@@ -293,7 +316,7 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
     fi
     # Keep fixture startup diagnostics separate: start-stack redirects stack_log
     # with `>`, which otherwise erases any early proxy bind failure.
-    node test/fixtures/swarm-mcp-fault-proxy.mjs > "$results_root/mcp-proxy.log" 2>&1 &
+    node test/fixtures/swarm-mcp-fault-proxy.mjs 8>&- > "$results_root/mcp-proxy.log" 2>&1 &
     fixture_pid=$!
     proxy_ready=0
     for _ in $(seq 1 50); do
@@ -313,17 +336,18 @@ if [[ "$backend" == "jiuwenswarm" ]]; then
       export SCIENCE_AGENT_API_ENTRYPOINT="$repository_root/test/fixtures/literature-api.mjs"
     fi
   fi
-  if ! "$repository_root/scripts/jiuwenswarm.sh" status >/dev/null 2>&1; then
+  if ! "$repository_root/scripts/jiuwenswarm.sh" status 8>&- >/dev/null 2>&1; then
     jiuwenswarm_started=1
-    "$repository_root/scripts/jiuwenswarm.sh" start >> "$stack_log" 2>&1 || {
+    "$repository_root/scripts/jiuwenswarm.sh" start 8>&- >> "$stack_log" 2>&1 || {
       printf 'BLOCKED: JiuwenSwarm did not start; see %s.\n' "$stack_log" | tee -a "$test_log" >&2
       exit 2
     }
   fi
   # Startup can reallocate occupied ports. Re-read this root's actual endpoints
   # instead of connecting to the sibling that held the originally planned port.
-  eval "$("$repository_root/scripts/jiuwenswarm.sh" env)" || exit 2
+  eval "$("$repository_root/scripts/jiuwenswarm.sh" env 8>&-)" || exit 2
   export JIUWENSWARM_GATEWAY_URL JIUWENSWARM_MGMT_URL
+  release_swarm_lock
 fi
 
 if [[ "$fixture" == governed ]]; then

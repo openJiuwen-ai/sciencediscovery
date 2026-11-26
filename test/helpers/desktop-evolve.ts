@@ -42,8 +42,12 @@ export const TOKEN_STORAGE_KEY = "sciencediscovery-token";
 export const GUIDE_STORAGE_KEY = "sciencediscovery-desktop:guide";
 
 /** A port of its own: 4174 is `vite preview`, 4175 the mocked suite, 4176 the
- *  desktop real suite. Two entries can then be running on one workstation. */
-export const DESKTOP_PORT = 4178;
+ *  desktop real suite. Two entries can then be running on one workstation.
+ *  `E2E_DESKTOP_PORT` lets concurrent local E2E lanes bind disjoint ports. */
+const configuredDesktopPort = Number(process.env.E2E_DESKTOP_PORT);
+export const DESKTOP_PORT = Number.isInteger(configuredDesktopPort) && configuredDesktopPort > 0
+  ? configuredDesktopPort
+  : 4178;
 export const DESKTOP_ORIGIN = `http://127.0.0.1:${DESKTOP_PORT}`;
 
 /** The stack under test, defaulted the way the rest of the shared suite does. */

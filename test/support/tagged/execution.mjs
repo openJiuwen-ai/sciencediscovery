@@ -36,6 +36,128 @@ export function realShards(plan) {
 }
 
 export const swarmChecks = ['history', 'history-names', 'run-shell', 'host-tools', 'approvals', 'skills', 'skill-switch', 'trajectory', 'language'];
+export const PARALLEL_MOCKED_SHARDS = Object.freeze(new Set(['standard-config', 'standard-journeys']));
+export const MAX_MOCKED_LOCAL_CONCURRENCY = 2;
+
+export function mockedLocalConcurrency(value = '1') {
+  const text = String(value ?? '1').trim() || '1';
+  if (!/^[1-9][0-9]*$/.test(text) || Number(text) > MAX_MOCKED_LOCAL_CONCURRENCY) {
+    throw new Error(`CI_E2E_LOCAL_CONCURRENCY must be an integer from 1 to ${MAX_MOCKED_LOCAL_CONCURRENCY}`);
+  }
+  return Number(text);
+}
+
+/**
+ * Partition plan entries across `lanes` buckets without ever splitting a spec
+ * file. Uses greedy longest-file-first balancing seeded by `initialWeights` so
+ * a lane carrying extra work (such as fresh-stack setup or JiuwenSwarm checks)
+ * receives proportionally fewer spec entries.
+ */
+export function splitEntriesByFile(entries, lanes, initialWeights = []) {
+  const byFile = new Map();
+  const order = new Map();
+  entries.forEach((entry, index) => {
+    order.set(entry.key, index);
+    const list = byFile.get(entry.source) ?? [];
+    list.push(entry);
+    byFile.set(entry.source, list);
+  });
+  const count = Math.min(lanes, byFile.size);
+  if (count <= 1) return entries.length ? [entries] : [];
+  const buckets = Array.from({ length: count }, (_, index) => ({
+    weight: Number(initialWeights[index] ?? 0),
+    entries: [],
+  }));
+  const groups = [...byFile.entries()]
+    .map(([source, items]) => ({ source, items }))
+    .sort((a, b) => b.items.length - a.items.length || a.source.localeCompare(b.source));
+  for (let idx = 0; idx < groups.length; idx++) {
+    const group = groups[idx];
+    const remaining = groups.length - idx;
+    const empty = buckets.filter(bucket => bucket.entries.length === 0);
+    const candidates = empty.length === remaining ? empty : buckets;
+    let target = candidates[0];
+    for (let i = 1; i < candidates.length; i++) {
+      if (candidates[i].weight < target.weight) target = candidates[i];
+    }
+    target.entries.push(...group.items);
+    target.weight += group.items.length;
+  }
+  return buckets
+    .map(bucket => bucket.entries.sort((a, b) => order.get(a.key) - order.get(b.key)))
+    .filter(bucket => bucket.length > 0);
+}
+
+/**
+ * Group mocked batches into concurrent local execution lanes. Each lane owns
+ * one disjoint port block and runs its batches sequentially, so every stack
+ * retains full service isolation and Playwright `workers: 1`.
+ */
+export function mockedExecutionLanes(plan, concurrency = 1) {
+  const limit = mockedLocalConcurrency(concurrency);
+  const batches = mockedBatches(plan);
+  if (limit <= 1 || !batches.length) return batches.length ? [batches] : [];
+
+  const shardNames = [...new Set(batches.map(batch => batch.shard))];
+  if (shardNames.length === 1) {
+    const shard = shardNames[0];
+    if (!PARALLEL_MOCKED_SHARDS.has(shard)) return [batches];
+    if (shard === 'standard-config') {
+      const fresh = batches.find(batch => batch.key === 'mocked-standard-config-fresh');
+      const global = batches.find(batch => batch.key === 'mocked-standard-config-global');
+      if (!global) return [batches];
+      const parts = splitEntriesByFile(global.entries, limit, [
+        global.checks.length,
+        fresh?.entries.length ?? 0,
+      ]);
+      if (parts.length <= 1) return fresh ? [[global], [fresh]] : [[global]];
+      const lanes = [
+        [{ ...global, key: 'mocked-standard-config-global', entries: parts[0], checks: global.checks }],
+        [
+          ...(fresh ? [fresh] : []),
+          { ...global, key: 'mocked-standard-config-global-2', entries: parts[1], checks: [] },
+        ],
+      ];
+      return lanes.filter(lane => lane.length > 0);
+    }
+    const batch = batches[0];
+    const parts = splitEntriesByFile(batch.entries, limit);
+    if (parts.length <= 1) return [[batch]];
+    return parts.map((entries, index) => [{
+      ...batch,
+      key: index === 0 ? batch.key : `${batch.key}-${index + 1}`,
+      entries,
+      checks: index === 0 ? batch.checks : [],
+    }]);
+  }
+
+  // Unsharded local run with explicit concurrency > 1: spread existing batches
+  // across `limit` lanes without splitting individual batches further.
+  const lanes = Array.from({ length: Math.min(limit, batches.length) }, () => ({ weight: 0, items: [] }));
+  for (const batch of batches) {
+    let target = lanes[0];
+    for (let i = 1; i < lanes.length; i++) {
+      if (lanes[i].weight < target.weight) target = lanes[i];
+    }
+    target.items.push(batch);
+    target.weight += batch.entries.length + batch.checks.length;
+  }
+  return lanes.map(lane => lane.items).filter(lane => lane.length > 0);
+}
+
+/** Disjoint loopback port block and lock/cache env for concurrent local stacks. */
+export function mockedSlotEnvironment(slot, { swarmStartLock, viteCacheDir } = {}) {
+  const offset = slot * 10;
+  return {
+    SCIENCE_AGENT_PORT: String(4410 + offset),
+    SCIENCE_AGENT_LEGACY_PORT: String(4510 + offset),
+    SCIENCE_AGENT_RUNNER_PORT: String(4411 + offset),
+    SCIENCE_AGENT_MEMORY_GRAPH_PORT: String(17774 + offset),
+    E2E_DESKTOP_PORT: String(4178 + slot),
+    ...(swarmStartLock ? { CI_E2E_SWARM_START_LOCK: swarmStartLock } : {}),
+    ...(viteCacheDir ? { E2E_DESKTOP_VITE_CACHE_DIR: viteCacheDir } : {}),
+  };
+}
 
 // Tags describe isolation requirements, not a second list of CI test names.
 // Keep each file together: file/suite hooks and ordered journeys share a worker.

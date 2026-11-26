@@ -3,7 +3,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { validatePlan } from '../test/support/tagged/plan.mjs';
-import { mockedShards } from '../test/support/tagged/execution.mjs';
+import { mockedShards, PARALLEL_MOCKED_SHARDS } from '../test/support/tagged/execution.mjs';
 import { SELF_HOSTED_RUNNER } from './tier-policy.mjs';
 
 export const HEAVY_MOCKED_SHARDS = Object.freeze(new Set([
@@ -19,6 +19,7 @@ export function buildMockedMatrix(plan, { selfHostedMergeQueue = false } = {}) {
       shard: name,
       runner: selfHosted ? [...SELF_HOSTED_RUNNER] : 'ubuntu-latest',
       self_hosted: selfHosted,
+      local_concurrency: PARALLEL_MOCKED_SHARDS.has(name) ? 2 : 1,
     };
   });
   // One worker per isolated mocked stack. The ceiling guards against a plan that
