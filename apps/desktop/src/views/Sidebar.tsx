@@ -770,7 +770,7 @@ export function Sidebar({
                       narrow column each time the row's actions appear. */}
                   {foldedPage ? <div className="side-project-rule">{TEXT.sidebar.pageRule(PAGE_SIZE)}</div> : null}
                   {sessions.length === 0
-                    ? <div className="side-empty">{narrowed ? TEXT.sidebar.noMatch : TEXT.sidebar.noTasks}</div>
+                    ? <div className="side-empty">{narrowingActive ? TEXT.sidebar.noMatch : TEXT.sidebar.noTasks}</div>
                     : sessionList(project.id, sessions)}
                 </>
               ) : null}
