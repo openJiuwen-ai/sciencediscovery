@@ -113,6 +113,7 @@ test("imports, edits, calls and deletes a custom MCP server in desktop settings"
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await settings.getByRole("button", { name: "MCP 服务器", exact: true }).click();
       await settings.getByRole("button", { name: "添加服务器", exact: true }).click();
+      await settings.getByRole("menuitem", { name: "手动填写", exact: true }).click();
       await expect(form.getByRole("checkbox", { name: "启用服务" })).not.toBeChecked();
       await expect(form.getByLabel("传输方式")).toHaveValue("http");
       await expect(form.getByRole("spinbutton", { name: "超时（秒）" })).toHaveValue("60");
@@ -121,9 +122,10 @@ test("imports, edits, calls and deletes a custom MCP server in desktop settings"
     await journey.step("Import a local STDIO server from a JSON file", "The file fills its preview without saving; confirmation creates a disabled STDIO server.", async () => {
       const args = [fileURLToPath(new URL("../../../test/fixtures/mcp-echo.mjs", import.meta.url)), "argument with spaces"];
       const config = { mcpServers: { [name]: { command: process.execPath, args, enabled: true, timeoutSeconds: 60 } } };
-      await settings.getByRole("button", { name: "导入", exact: true }).click();
+      await settings.getByRole("button", { name: "添加服务器", exact: true }).click();
+      await settings.getByRole("menuitem", { name: "导入 JSON", exact: true }).click();
       const chooser = page.waitForEvent("filechooser");
-      await settings.getByRole("menuitem", { name: "上传 JSON 文件", exact: true }).click();
+      await settings.getByRole("button", { name: "上传 JSON 文件", exact: true }).click();
       await (await chooser).setFiles({ name: "mcp-servers.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(config)) });
       const importer = page.getByRole("dialog", { name: "导入 MCP 服务器", exact: true });
       await expect(importer.getByRole("list", { name: "预览", exact: true })).toContainText(name);
@@ -137,14 +139,16 @@ test("imports, edits, calls and deletes a custom MCP server in desktop settings"
       serverId = server!.id;
     });
     await journey.step("Test the saved connection", "The connection test finds two tools while the server remains disabled.", async () => {
-      await card.getByRole("button", { name: "测试", exact: true }).click();
+      await card.locator(".skill-row-menu-trigger").click();
+      await card.getByRole("menuitem", { name: "测试", exact: true }).click();
       await expect(card.getByText("2 个工具", { exact: true })).toBeVisible();
       expect((await getServers()).find((server) => server.id === serverId)).toMatchObject({ enabled: false });
     });
     await journey.step("Enable and select the validated server", "The Echo source can be selected by default independently of enabling the service.", async () => {
-      const defaults = card.getByRole("switch", { name: `${name} · 默认使用` });
+      const defaults = card.getByRole("checkbox", { name: `${name} · 默认使用` });
       await expect(defaults).not.toBeChecked();
-      await card.getByRole("button", { name: "编辑", exact: true }).click();
+      await card.locator(".skill-row-menu-trigger").click();
+      await card.getByRole("menuitem", { name: "编辑", exact: true }).click();
       const editor = page.getByRole("dialog", { name: "编辑服务器", exact: true });
       await editor.getByRole("checkbox", { name: "启用服务" }).check();
       await editor.getByRole("button", { name: "保存", exact: true }).click();
@@ -164,7 +168,8 @@ test("imports, edits, calls and deletes a custom MCP server in desktop settings"
       selectTool.arguments.query = `select:${useEcho.tool}`;
     });
     await journey.step("Edit the server and reload its saved configuration", "The edited description persists after reloading, and the service remains enabled.", async () => {
-      await card.getByRole("button", { name: "编辑", exact: true }).click();
+      await card.locator(".skill-row-menu-trigger").click();
+      await card.getByRole("menuitem", { name: "编辑", exact: true }).click();
       const editor = page.getByRole("dialog", { name: "编辑服务器", exact: true });
       await editor.locator(".settings-row").filter({ hasText: "说明" }).locator("input").fill("Edited local Echo server");
       await editor.getByRole("button", { name: "保存", exact: true }).click();
@@ -202,12 +207,14 @@ test("imports, edits, calls and deletes a custom MCP server in desktop settings"
     await journey.step("Cancel deletion, then delete and reload", "Cancelling keeps the server; confirming removes it from the saved list and its default-source references.", async () => {
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await settings.getByRole("button", { name: "MCP 服务器", exact: true }).click();
-      await card.getByRole("button", { name: "删除", exact: true }).click();
+      await card.locator(".skill-row-menu-trigger").click();
+      await card.getByRole("menuitem", { name: "删除", exact: true }).click();
       const confirmation = page.getByRole("dialog", { name: `删除服务器「${name}」？`, exact: true });
       await confirmation.locator(".modal-footer").getByRole("button", { name: "取消", exact: true }).press("Enter");
       await expect(card).toBeVisible();
       expect((await getServers()).some((server) => server.id === serverId)).toBe(true);
-      await card.getByRole("button", { name: "删除", exact: true }).click();
+      await card.locator(".skill-row-menu-trigger").click();
+      await card.getByRole("menuitem", { name: "删除", exact: true }).click();
       await confirmation.getByRole("button", { name: "删除", exact: true }).press("Enter");
       await expect(card).toHaveCount(0);
       expect((await getServers()).some((server) => server.id === serverId)).toBe(false);

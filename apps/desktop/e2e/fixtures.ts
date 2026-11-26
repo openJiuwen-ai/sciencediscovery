@@ -772,7 +772,13 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         const index = state.mcpServers.findIndex((entry) => entry.id === mcpServer[1]);
         if (index === -1) return json(route, 404, { error: "mcp server not found" });
         if (method === "PUT") {
-          state.mcpServers[index] = { ...state.mcpServers[index], ...JSON.parse(body ?? "{}") };
+          const patch = JSON.parse(body ?? "{}");
+          const updated = { ...state.mcpServers[index], ...patch };
+          // The product derives readiness from enablement and its latest check.
+          if (typeof patch.enabled === "boolean") {
+            updated.status = !updated.enabled ? "disabled" : updated.error ? "error" : updated.checkedAt ? "ready" : "untested";
+          }
+          state.mcpServers[index] = updated;
           return json(route, 200, state.mcpServers[index]);
         }
         if (method === "DELETE") {

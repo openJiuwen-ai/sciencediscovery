@@ -31,6 +31,7 @@ test("desktop discovers tools while preserving the open editor and its unsaved d
   let view!: ReactTestRenderer;
   await act(async () => { view = create(<McpServers client={client} onConfirm={() => {}} onToast={() => {}} />); });
   try {
+    await act(async () => view.root.findAllByType("button").find((node) => node.props.className === "skill-row-menu-trigger")!.props.onClick());
     await act(async () => view.root.findAllByType("button").find((node) => node.children.includes(TEXT.settings.edit))!.props.onClick());
     const name = () => view.root.findAllByType("input").find((node) => node.props.value === "Local tools" || node.props.value === "Unsaved draft")!;
     await act(async () => name().props.onChange({ target: { value: "Unsaved draft" } }));
