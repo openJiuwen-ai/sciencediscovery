@@ -2499,6 +2499,36 @@
           "source": "apps/desktop/e2e/settings-interactions.spec.ts",
           "layer": "ui-st",
           "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/tests/mcp-servers-create.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-controls.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e-stack/custom-mcp.spec.ts",
+          "layer": "e2e",
+          "complexity": "C4"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-catalog.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-import.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/e2e/mcp-layout.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C2"
         }
       ]
     },
@@ -2562,6 +2592,11 @@
           "source": "apps/desktop/tests/settings-pages.test.tsx",
           "layer": "ut",
           "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/tests/timeout-ordering.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
         },
         {
           "source": "apps/desktop/e2e/settings-interactions.spec.ts",
@@ -4007,35 +4042,6 @@
           "complexity": "C3",
           "layer": "st",
           "source": "apps/desktop/e2e/search-dialog.spec.ts"
-        }
-      ]
-    },
-    {
-      "source": "apps/desktop/src/app/search-narrowing.ts",
-      "risk": "P1",
-      "owner": "desktop",
-      "tests": [
-        {
-          "source": "apps/desktop/tests/search-narrowing.test.ts",
-          "layer": "ut",
-          "complexity": "C3"
-        },
-        {
-          "source": "apps/desktop/tests/search-narrowing-preference.test.ts",
-          "layer": "ut",
-          "complexity": "C3"
-        }
-      ]
-    },
-    {
-      "source": "apps/desktop/src/app/search-narrowing-preference.ts",
-      "risk": "P1",
-      "owner": "desktop",
-      "tests": [
-        {
-          "source": "apps/desktop/tests/search-narrowing-preference.test.ts",
-          "layer": "ut",
-          "complexity": "C2"
         }
       ]
     }

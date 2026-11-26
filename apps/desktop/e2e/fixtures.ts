@@ -111,6 +111,11 @@ export interface MockOptions {
   overrides?: Record<string, unknown>;
   projects?: ProjectRecord[];
   sessions?: SessionRecord[];
+  /** The hits `GET /api/search` holds, already in the shape the route answers.
+   *  The mock matches them the way the service does — a hit whose `label`
+   *  contains the query — so a spec can type a word and watch the list narrow,
+   *  and a query nothing matches answers an empty list. */
+  search?: { hasMore?: boolean; results: JsonRecord[]; total?: number };
   artifacts?: unknown[];
   /** One Session's outputs, for the cases where the panel has to draw more
    *  than one group. Takes precedence over `artifacts` for that Session. */
@@ -815,6 +820,26 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (path === "/api/sandbox-network-settings" && method === "PUT") {
         state.sandboxNetwork = JSON.parse(body ?? "{}") as MockState["sandboxNetwork"];
         return json(route, 200, state.sandboxNetwork);
+      }
+
+      if (path === "/api/search" && method === "GET") {
+        // The route matches names and titles, never message text, and the
+        // service leaves an archived Session — and its artifacts — out before
+        // it answers, so the fixture holds only what the dialog receives.
+        const term = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+        const hits = options.search?.results ?? [];
+        const results = term === ""
+          ? hits
+          : hits.filter((hit) => String(hit.label ?? "").toLowerCase().includes(term));
+        const limit = Number(url.searchParams.get("limit") ?? 20);
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        return json(route, 200, {
+          hasMore: options.search?.hasMore ?? false,
+          limit,
+          offset,
+          results: results.slice(offset, offset + limit),
+          total: options.search?.total ?? results.length,
+        });
       }
 
       if (path === "/api/projects" && method === "GET") {
