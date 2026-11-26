@@ -202,6 +202,8 @@ export const ZH = {
     verifying: "正在确认登录状态…",
     errorTitle: "登录未完成",
     errorBody: "华为账号返回了错误，或账号服务未能验证这次登录。请重试。",
+    accountServiceMissing:
+      "本次构建未配置账号服务地址，华为账号登录暂不可用。请联系构建方设置 VITE_ACCOUNTS_API 后重新构建。",
     localTokenMissing: "登录已完成，但本机访问凭据未能签发。请确认本地服务已启动后重试，或退出登录。",
     retry: "重试",
     accountTab: "华为账号登录",

@@ -146,10 +146,22 @@ Signing in with a HUAWEI ID is optional: a local access token or a custom model 
 default configuration points at the public account service. Distributables that CI builds — the Docker image, the
 binary release and the Windows/macOS installers — carry that value already, so installing one needs no extra setup.
 
-A bare `pnpm build` is different: Vite inlines `VITE_ACCOUNTS_API` at build time, so unless the variable is exported
-(or a per-app `.env.local` is present) the bundles resolve the accounts base URL to an empty string and the sign-in
-request goes to the local API instead of the account service. Export it, or copy `apps/web/.env.example` and
-`apps/desktop/.env.example` to `.env.local`, before building for distribution.
+The desktop app applies that address as its own build default in `apps/desktop/vite.config.ts`, so a bare
+`pnpm --filter @sciencediscovery/desktop build` already talks to the account service. This is not Windows-specific:
+the same default applies to a Linux or macOS build, because Vite inlines `VITE_ACCOUNTS_API` at build time. A
+`.env.local` file or an exported `VITE_ACCOUNTS_API` still wins, so use either one to build against another account
+service. `apps/web` has no built-in default: its dev server proxies `/v1` to a local account service, and shipped web
+bundles receive the value from the Docker build argument or the release job environment.
+
+`vite dev` and `vite preview` in `apps/desktop` read the same default, so a developer who clicks HUAWEI ID while
+running the desktop dev server reaches the production account service — unlike `apps/web`, whose dev server proxies
+`/v1` to a local one. Point the desktop dev server elsewhere with `apps/desktop/.env.local` or an exported
+`VITE_ACCOUNTS_API`; an explicit empty value there shows the "not configured" notice locally.
+
+Setting `VITE_ACCOUNTS_API` to an empty value explicitly keeps the same-origin base URL. The desktop app is served by
+the local API, which has no `/v1` account routes, so a desktop build with an empty value then reports the missing
+service: both sign-in entries show an "account service address is not configured" notice instead of navigating, and
+the credits model is skipped, rather than reloading the workspace with no explanation.
 
 | Variable | Read by | Default | Purpose |
 | --- | --- | --- | --- |
@@ -162,7 +174,7 @@ point both at it; for Docker, `SCIENCE_AGENT_ACCOUNTS_URL` is forwarded by `dock
 `VITE_ACCOUNTS_API` is a build argument (`docker compose build --build-arg VITE_ACCOUNTS_API=...`). At runtime the
 packaged desktop app forwards its environment to the API it starts and falls back to the same public URL when the
 variable is unset, so the local API needs no setup either; the bundled UI keeps whatever was compiled in at build
-time.
+time (the `apps/desktop/vite.config.ts` default unless a `.env.local` or an exported value overrides it).
 
 ## Troubleshooting
 

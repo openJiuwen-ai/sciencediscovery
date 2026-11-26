@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const scenarios = ["empty-catalog", "credits-sign-in", "last-model", "new-session", "new-project", "sidebar-collapsed"];
+const scenarios = ["empty-catalog", "sign-in-unconfigured", "last-model", "new-session", "new-project", "sidebar-collapsed"];
 
 for (const language of ["zh-CN", "en"]) {
   for (const scenario of scenarios) {

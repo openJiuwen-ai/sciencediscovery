@@ -37,6 +37,19 @@ export function accountsBaseUrl(): string {
   return buildEnv("VITE_ACCOUNTS_API").trim().replace(/\/+$/u, "");
 }
 
+/**
+ * True when this build names an account service.
+ *
+ * An empty base is the documented "same origin" opt-out, but this app is
+ * served by the local API, which has no `/v1` account routes: the sign-in
+ * navigation would be answered with `index.html` and the app would reload
+ * silently. The entry points read this instead of navigating, so the
+ * configuration gap is visible rather than a bounce back to the workspace.
+ */
+export function accountsConfigured(): boolean {
+  return accountsBaseUrl() !== "";
+}
+
 function options(): AccountClientOptions {
   return { baseUrl: accountsBaseUrl() };
 }

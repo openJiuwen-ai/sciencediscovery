@@ -82,11 +82,7 @@ if (scenario === "empty-catalog") {
   data.projects.push({ ...inbox, id: "history-project", name: "Existing history", kind: undefined });
   newSession("history-project");
 }
-if (scenario === "credits-sign-in") data.models = [];
-
-/** The credits-backed provider `ensureCreditsModel` writes; kept so a repeated
- *  sign-in finds it instead of creating a second one. */
-const providers: Array<Record<string, unknown>> = [];
+if (scenario === "sign-in-unconfigured") data.models = [];
 
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input), "http://render.example.test");
@@ -98,28 +94,11 @@ globalThis.fetch = async (input, init = {}) => {
   else if (path === "/api/health") result = { status: "ok" };
   else if (path === "/api/models") result = data.models;
   else if (path === "/api/specialists" || path === "/api/skills") result = [];
-  // The account gateway `ensureCreditsModel` reads before it registers the
-  // credits provider; the empty `VITE_ACCOUNTS_API` in the render makes it a
-  // same-origin `/v1/models`.
-  else if (method === "GET" && path === "/v1/models") result = { data: [{ id: first.id }] };
-  else if (path === "/api/providers" && method === "POST") {
-    const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-    const provider = {
-      id: "credits-provider", name: body.name, apiProtocol: body.apiProtocol,
-      baseUrl: body.baseUrl, createdAt: now, updatedAt: now,
-    };
-    providers.push(provider);
-    result = provider;
-  } else if (method === "POST" && /^\/api\/providers\/[^/]+\/models$/u.test(path)) {
-    data.models = [first];
-    result = first;
-  } else if (method === "PUT" && /^\/api\/providers\/[^/]+$/u.test(path)) {
-    // The signed-in effect rotates the stored token on every launch, so the
-    // sign-in path also writes the provider once.
-    const body = init.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
-    const existing = providers[0] ?? {};
-    result = { ...existing, ...body, updatedAt: now };
-  } else if (path === "/api/providers") result = { providers, presets: [] };
+  // No credits-gateway branch here: this render has no account-service base
+  // (`node:test` has no `import.meta.env`), and a build without one must never
+  // reach `/v1/models` or register the credits provider. Leaving those routes
+  // unhandled turns a regression into an "Unexpected request" failure.
+  else if (path === "/api/providers") result = { providers: [], presets: [] };
   else if (path === "/api/settings") result = { ...settings(), overrides: globalModel ? { modelId: globalModel } : {} };
   else if (path === "/api/evolve/status") result = { state: "ready", canInitialize: false };
   else if (path === "/api/evolve/runs") result = [];
@@ -211,9 +190,10 @@ async function click(node: ReactTestInstance) {
 }
 try {
   await act(async () => { renderer = create(React.createElement(App, { initialToken })); });
-  if (scenario === "credits-sign-in") {
-    // The machine token is already in place (localToken === token), so signing
-    // in takes the path that used to leave the setup wizard on screen.
+  if (scenario === "sign-in-unconfigured") {
+    // The machine token is already in place (localToken === token). This build
+    // has no account-service base, so signing in must not reach the credits
+    // gateway: the custom-model wizard is the only way into the workspace.
     assertSetup();
     const authenticated = root().findByType(LoginPage).props.onAuthenticated;
     assert.ok(typeof authenticated === "function");
@@ -224,9 +204,12 @@ try {
       balanceCredits: 100, createdAt: now,
     };
     await act(async () => { await authenticated(session, initialToken); });
-    assert.ok(calls.includes("POST /api/providers"), "the credits provider must be registered");
-    assert.ok(calls.includes("GET /api/projects"), "the bootstrap must re-run after sign-in");
-    assertModel();
+    assert.ok(!calls.some(call => call.endsWith("/v1/models")), "an unconfigured build must not call the account gateway");
+    assert.ok(!calls.includes("POST /api/providers"), "no credits provider without an account service");
+    // The credits model never arrives, so the model wizard — not a silent
+    // workspace — is what the signed-in user sees next.
+    assert.equal(root().findAllByProps({ className: "wizard-progress" }).length, 1);
+    assert.equal(root().findAllByProps({ className: "composer-model-pill" }).length, 0);
   } else if (scenario === "empty-catalog") {
     assertSetup();
     assert.ok(!calls.includes("GET /api/projects"), "existing history must not bypass the rendered setup gate");

@@ -82,6 +82,16 @@
 
 .account-signin { min-width: 260px; }
 
+/* An empty account-service base leaves nothing to sign in to; the panel shows
+   the reason where the button would be instead of navigating. */
+.account-signin-notice {
+  max-width: 420px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
 /* The callback is being exchanged; the spinner sits where the button will be. */
 .account-signin-pending {
   display: flex;

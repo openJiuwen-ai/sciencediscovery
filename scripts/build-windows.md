@@ -39,6 +39,11 @@ pnpm typecheck
 | `pnpm typecheck` | 0 | ~2 min | 含 `tsconfig.tests.json` 的测试文件检查 |
 | `pnpm architecture:check` | 0 | ~5 s | 组件边界守卫（CI 强制），Windows 下需 ≥ 本修复版本 |
 
+桌面端的华为账号地址由 `apps/desktop/vite.config.ts` 作为构建默认值提供，按上面三命令构建出来的桌面端
+无需创建 `.env.local` 就能连上账号服务；这与操作系统无关，Linux/macOS 的裸 `pnpm build` 同样适用。
+需要指向其他账号服务时，用 `apps/desktop/.env.local`（gitignored，后于 `.env` 生效）或导出的
+`VITE_ACCOUNTS_API` 覆盖；显式留空仍是“同源”退出机制，此时桌面端会提示账号服务未配置而不是静默跳回主页面。
+
 ## 3. 国内网络加速
 
 仓库的 `SCIENCE_AGENT_NPM_REGISTRY` 只作用于 `start-stack.sh` 内部的
