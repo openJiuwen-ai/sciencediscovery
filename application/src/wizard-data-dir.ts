@@ -220,7 +220,19 @@ export function installRootCollision(dataDir: string, installRoot: string | null
  * Walks up like freeBytesForPath, because a probe of a half-typed path
  * must find SOME real dir to touch without creating any of the missing
  * middle segments (the mkdir-free probe discipline). Returns null only
- * for a fully-qualified path whose root does not exist (unmounted drive). */
+ * for a fully-qualified path whose root does not exist (unmounted drive).
+ *
+ * The win32 dialect's dirname is used EXPLICITLY, matching the dialect
+ * pinned by isFullyQualifiedPath: what this function answers is "where
+ * does this WINDOWS path bottom out", and that answer must not depend on
+ * which machine asked. With the host dialect a POSIX runner walks
+ * `Q:\no\such\root` to `.` (host dirname of a non-POSIX path), stats the
+ * process CWD successfully, and returns the CWD instead of null — both
+ * failing the dead-root case and pointing probeWritableWithoutMkdir's
+ * write at the CWD for a path that host cannot even resolve. win32.dirname
+ * bottoms out at the drive root on every host (`Q:\` → `Q:\` → null)
+ * while still walking POSIX shapes correctly (`/tmp/x` → `/tmp` → `/`),
+ * because win32.dirname treats `/`-rooted paths as absolute too. */
 export function nearestExistingDir(path: string): string | null {
   let current = path;
   while (true) {
@@ -232,7 +244,7 @@ export function nearestExistingDir(path: string): string | null {
       // with a truthful "not writable" instead of a silent wrong verdict.
       return current;
     } catch {
-      const parent = dirname(current);
+      const parent = win32.dirname(current);
       if (parent === current) return null;
       current = parent;
     }
@@ -248,6 +260,11 @@ export function nearestExistingDir(path: string): string | null {
  * changed their mind mid-typing — the same litter class as problems W8,
  * which guarded the CWD, but on the user's own drives).
  *
+ * The probe name carries the pid: the anchor is an arbitrary pre-existing
+ * folder (the nearest existing ancestor, possibly a user folder), so a
+ * fixed name could overwrite and delete a user file that happened to be
+ * called the same thing (review note on the first cut of this helper).
+ *
  * Weakening vs ensureWritableDir, accepted deliberately: "the target itself
  * is occupied by a file" is not discovered until confirm time — where
  * ensureWritableDir mkdirs and fails with a truthful error. The check-page
@@ -257,7 +274,7 @@ export function probeWritableWithoutMkdir(path: string): boolean {
   if (!isFullyQualifiedPath(path)) return false;
   const anchor = nearestExistingDir(path);
   if (anchor === null) return false;
-  const probe = join(anchor, ".sd-wizard-probe");
+  const probe = join(anchor, `.sd-wizard-probe-${process.pid}`);
   try {
     writeFileSync(probe, "ok");
     rmSync(probe);
@@ -279,7 +296,10 @@ export function ensureWritableDir(path: string): boolean {
   if (!isFullyQualifiedPath(path)) return false;
   try {
     mkdirSync(path, { recursive: true });
-    const probe = join(path, ".sd-wizard-probe");
+    // Pid-suffixed for the same reason as probeWritableWithoutMkdir's: the
+    // dir may pre-exist as a user folder, and the probe must not clobber a
+    // user file that happens to carry the fixed name.
+    const probe = join(path, `.sd-wizard-probe-${process.pid}`);
     writeFileSync(probe, "ok");
     rmSync(probe);
     return true;

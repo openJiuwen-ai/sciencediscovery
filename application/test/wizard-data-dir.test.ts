@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -340,7 +340,11 @@ test("probeDataDir: probing a half-typed path leaves no directories behind", () 
     assert.equal(existsSync(join(ud, "ai")), false);
     assert.equal(existsSync(join(ud, "ai", "sd")), false);
     // …and the anchor dir itself carries no probe leftovers.
-    assert.equal(existsSync(join(ud, ".sd-wizard-probe")), false);
+    assert.equal(existsSync(join(ud, `.sd-wizard-probe-${process.pid}`)), false);
+    // The probe name is pid-suffixed: the anchor is an arbitrary user folder,
+    // so a fixed name could clobber a user file that happens to carry it.
+    assert.equal(existsSync(join(ud, ".sd-wizard-probe")), false,
+      "no FIXED-name probe either — a user file with that name must be untouchable");
   } finally {
     rmSync(ud, { recursive: true, force: true });
   }
@@ -351,8 +355,16 @@ test("probeDataDir: probing an EXISTING dir stays idempotent (no probe file left
   try {
     const res = probeDataDir(ud);
     assert.equal(res.writable, true);
-    assert.equal(existsSync(join(ud, ".sd-wizard-probe")), false,
+    assert.equal(existsSync(join(ud, `.sd-wizard-probe-${process.pid}`)), false,
       "probe file must be cleaned up in the probed dir");
+    // Pre-existing user content named like the OLD fixed probe survives: the
+    // pid suffix means the probe never writes over it (review follow-up).
+    const userFile = join(ud, ".sd-wizard-probe");
+    writeFileSync(userFile, "user data", "utf8");
+    const second = probeDataDir(ud);
+    assert.equal(second.writable, true);
+    assert.equal(readFileSync(userFile, "utf8"), "user data",
+      "a user file with the fixed probe name must not be clobbered or deleted");
   } finally {
     rmSync(ud, { recursive: true, force: true });
   }
@@ -391,13 +403,31 @@ test("nearestExistingDir: walks up to the first existing dir; null at a dead roo
     const f = join(ud, "f");
     writeFileSync(f, "x", "utf8");
     assert.equal(nearestExistingDir(join(f, "sub")), f);
-    // Drive roots that do not exist: the walk ends at the root itself, which
-    // stats ENOENT on every host, so null — spelled with win32 semantics per
-    // the file-top note (isFullyQualifiedPath accepts it, the walk cannot).
+    // Drive roots that do not exist: with win32.dirname the walk bottoms out
+    // AT the root (Q:\ → Q:\) instead of collapsing to "." via the host
+    // dialect — a POSIX host has no drive Q:, so statSync("Q:\") fails and
+    // the walk returns null there too (review follow-up: the host-dialect
+    // walk statSync(".")'d the CWD and returned it on Linux/macOS).
     assert.equal(nearestExistingDir("Q:\\no\\such\\root"), null);
   } finally {
     rmSync(ud, { recursive: true, force: true });
   }
+});
+
+// Review follow-up (second pair of eyes): the walk pins win32.dirname to
+// match the dialect isFullyQualifiedPath pins — so POSIX-shaped paths must
+// still walk correctly under it. win32.dirname treats /-rooted paths as
+// absolute on every host; a single Windows-shaped dead-root assertion is
+// what let the host-dialect bug pass unnoticed in the first cut.
+test("nearestExistingDir: POSIX shapes stay walkable under the win32 dialect", () => {
+  // A /-rooted path whose segments do not exist bottoms out at "/" — never
+  // at "." (the CWD). On a POSIX host "/" is the real root; on win32 Node
+  // resolves "/" to the current drive root, which also stats as a dir.
+  assert.equal(nearestExistingDir("/sd-probe-no-such-root-xyz/child"), "/",
+    "POSIX shape bottoms out at /, not the CWD");
+  // And the ancestor walk lands on the real tmpdir whatever shape the host
+  // spells it in (/tmp/... on POSIX, C:\...\Temp on Windows).
+  assert.equal(nearestExistingDir(join(tmpdir(), "sd-no-such-ancestor", "deeper")), tmpdir());
 });
 
 test("probeWritableWithoutMkdir: guards and probe placement", () => {
