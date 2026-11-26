@@ -121,32 +121,6 @@ export function stamp(
 
 const PAGE_SIZE = 6;
 
-/** The `YYYY-MM-DD` a date input shows, read in the reader's own zone: a picked
- *  day is a calendar day, not midnight UTC. */
-function localDay(at: number): string {
-  const date = new Date(at);
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-/** The first millisecond of a picked day, local. */
-function startOfLocalDay(value: string): number | undefined {
-  const [year, month, day] = value.split("-").map(Number);
-  if (year === undefined || month === undefined || day === undefined) return undefined;
-  const at = new Date(year, month - 1, day).getTime();
-  return Number.isNaN(at) ? undefined : at;
-}
-
-/** The last millisecond of a picked day, local. */
-function endOfLocalDay(value: string): number | undefined {
-  const start = startOfLocalDay(value);
-  if (start === undefined) return undefined;
-  const date = new Date(start);
-  date.setDate(date.getDate() + 1);
-  return date.getTime() - 1;
-}
-
 /**
  * The rows a folded list shows: its first page, plus the open Session when
  * that one sits deeper in the list.
@@ -219,6 +193,18 @@ export function Sidebar({
   const [searchOpen, setSearchOpen] = useState(false);
   /** 全部 groups every hit by kind; a kind shows only that kind. */
   const [searchKind, setSearchKind] = useState<SearchKindFilter>("all");
+  /** The magnifier that opened the dialog, so closing it returns the focus. */
+  const magnifier = useRef<HTMLButtonElement>(null);
+
+  /** Closing is one gesture wherever it starts — ×, the overlay, Escape: the
+   *  query clears and the focus goes back to what opened the dialog. Picking a
+   *  hit is not closing, because the app is about to move the reader somewhere. */
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchKind("all");
+    onSearch?.("");
+    magnifier.current?.focus();
+  };
 
   useEffect(() => {
     // The shortcut is bound to the window, and a renderer that has none (the
@@ -407,6 +393,7 @@ export function Sidebar({
             aria-label={TEXT.sidebar.searchLabel}
             className="side-head-button"
             onClick={() => setSearchOpen(true)}
+            ref={magnifier}
             title={TEXT.sidebar.searchLabel}
             type="button"
           >
@@ -605,14 +592,11 @@ export function Sidebar({
         <SearchDialog
           error={searchError}
           kind={searchKind}
-          onClose={() => {
-            setSearchOpen(false);
-            setSearchKind("all");
-            onSearch("");
-          }}
+          onClose={closeSearch}
           onKind={setSearchKind}
           onPick={(result) => {
             setSearchOpen(false);
+            setSearchKind("all");
             onSearchOpen?.(result);
           }}
           onQuery={(query) => {
