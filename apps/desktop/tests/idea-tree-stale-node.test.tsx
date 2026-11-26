@@ -8,7 +8,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ApiClient } from "../src/api/client.js";
 import { IdeaResearchPanel } from "../src/views/idea/IdeaResearchPanel.js";
 
-function view(hypothesis: string, status = "running") {
+function view(hypothesis: string, status = "running", revision = 1) {
   return {
     research: {
       id: "research-1", objective: "目标", status, phase: "building_tree", round: 1, batch: [],
@@ -16,7 +16,7 @@ function view(hypothesis: string, status = "running") {
       settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2 },
     },
     graph: {
-      edges: [], objective: "目标", revision: 1, treeId: "t", updatedAt: "2026-11-18T00:00:00Z",
+      edges: [], objective: "目标", revision: revision, treeId: "t", updatedAt: "2026-11-18T00:00:00Z",
       nodes: [{
         activeExecutionId: null, artifactRefs: [], attemptCount: 1, childrenIds: [], completedResultHandle: null,
         createdAt: "2026-11-18T00:00:00Z", depth: 0, hypothesis, id: "n1", insight: null, lastExecutionId: null,
@@ -52,7 +52,10 @@ test("a stream frame replaces the selected node's detail instead of leaving a st
 
   // The same node id arrives with new content: the detail must follow the view, not the
   // object captured when it was clicked.
-  await act(async () => { push?.(`data: ${JSON.stringify(view("第二版假设"))}\n\n`); await flush(); });
+  // The first frame of a stream is the whole tree, so it replaces what is on screen
+  // at a newer revision instead of arriving as a delta.
+  const frame = view("第二版假设", "running", 2);
+  await act(async () => { push?.(`data: ${JSON.stringify({ ...frame, graph: { ...frame.graph, full: true, removed: [] } })}\n\n`); await flush(); });
   // Read the detail section itself: the hypothesis also appears in the tree row, so
   // asserting on the whole panel would pass even when the detail went stale.
   const detail = panel.root.findAll((node) => node.props?.className === "idea-node-detail")[0];

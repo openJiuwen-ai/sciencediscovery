@@ -164,9 +164,15 @@ def reconcile_orphaned_researches():
     return settled
 
 
+def research_view(s):
+    """The research's own state, without the tree (and without the tree's revision)."""
+    return {k: copy.deepcopy(v) for k, v in s.items() if k not in ['nodes', 'materials', 'revision']}
+
+
 def view(s):
+    """A command's answer: the research and the whole tree, heavy fields included."""
     engine = IdeaTreeEngine(s, store(), {})
-    return dict(research={k: copy.deepcopy(v) for k, v in s.items() if k not in ['nodes', 'materials']}, graph=engine.graph())
+    return dict(research=research_view(s), graph=engine.graph())
 
 
 def start(s, llm):
@@ -270,11 +276,20 @@ async def events(c: Command):
     listeners.add(queue)
 
     async def stream():
+        # Per-stream cursor: a listener that attaches mid-research starts from the
+        # whole (compact) tree, and every later frame carries only what changed since
+        # the frame before it. Two listeners therefore keep independent cursors.
+        cursor = None
         try:
             while True:
                 s = state_for(c.projectId, c.sessionId, c.researchId)
-                yield 'data: ' + json.dumps(view(s), ensure_ascii=False) + '\n\n'
-                if s['status'] not in ['running', 'pausing']:
+                research = research_view(s)
+                graph, cursor = IdeaTreeEngine(s, store(), {}).graph_frame(cursor)
+                yield 'data: ' + json.dumps(dict(research=research, graph=graph), ensure_ascii=False) + '\n\n'
+                # The frame just sent decides whether this stream is done: the engine
+                # mutates its state in place, so re-reading `s` here could see a status
+                # the client has not been told about and close on a running frame.
+                if research['status'] not in ['running', 'pausing']:
                     return
                 try:
                     await asyncio.wait_for(queue.get(), timeout=15)

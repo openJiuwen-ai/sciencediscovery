@@ -15,11 +15,11 @@
 /**
  * The Idea Tree task panel: progress, the tree, one node's detail, and the controls.
  *
- * Live updates come from the research's SSE stream, whose every frame is a whole view;
- * the stream closes once the research stops, so a reconnect refetches rather than
- * replaying. A stream that fails is not the end of the panel: it refetches and
- * reconnects with a backoff, because the only other thing an error leaves behind is a
- * stale frame. Nothing here starts a research: reopening a session must show the
+ * Live updates come from the research's SSE stream, whose deltas are folded into the
+ * view the client holds; the stream closes once the research stops, so a reconnect
+ * refetches rather than replaying. A stream that fails is not the end of the panel: it
+ * refetches and reconnects with a backoff, because the only other thing an error leaves
+ * behind is a stale frame. Nothing here starts a research: reopening a session must show the
  * persisted state without beginning anything, which is why the only actions are the
  * ones the research's own status allows.
  */
@@ -70,8 +70,9 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose, onRe
   /** Bumped when the reader asks for another attempt after the reconnects ran out;
    *  it re-runs the stream effect. */
   const [resubscribe, setResubscribe] = useState(0);
-  /** The selected node by id, not by value: a stream frame replaces the whole view, so
-   *  holding the old object would show a node that no longer matches the tree. */
+  /** The selected node by id, not by value: a stream frame replaces the nodes it
+   *  carries, so holding the old object would show a node that no longer matches the
+   *  tree. */
   const [selectedId, setSelectedId] = useState<string>();
   const live = useRef<AbortController | undefined>(undefined);
   /** Held in a ref so reporting a view cannot change the identity of the reads
@@ -112,8 +113,8 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose, onRe
   useEffect(() => { void load(); }, [load]);
 
   // Follow the research only while the engine says it is live. A dropped stream
-  // refetches and reconnects with a backoff: frames are whole views, so the refetch
-  // is not a replay but the current state.
+  // refetches and reconnects with a backoff: the subscription merges deltas into a
+  // tree it builds itself, so the refetch is not a replay but the current state.
   const status = view?.research.status;
   useEffect(() => {
     if (!status || !LIVE.includes(status)) return undefined;

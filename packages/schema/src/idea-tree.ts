@@ -121,7 +121,10 @@ export interface IdeaTreeNode {
   parentId: string | null;
   priority: number;
   pruneReason: string | null;
-  result: string | null;
+  /** A serialisation of `stages`, for direct node inspection. A live frame omits
+   *  it (see `IdeaTreeFrameNode`), so a view built from a stream has none until an
+   *  explicit `get` answer replaces it. */
+  result?: string | null;
   score: number | null;
   searchStatus: IdeaTreeSearchStatus;
   status: IdeaTreeNodeStatus;
@@ -322,3 +325,135 @@ export interface IdeaResearchState {
   template?: IdeaResearchTemplate;
 }
 export interface IdeaResearchView { research: IdeaResearchState; graph: IdeaTreeGraph }
+
+/**
+ * The graph part of one live frame of a research's SSE stream.
+ *
+ * A frame is not a whole view. `nodes` and `edges` are the changes since the
+ * revision the frame was computed from (`since`), and `full` marks the frames
+ * that carry the whole tree: the first frame of a stream, which is what a fresh
+ * connection and a reconnect both start from. `since` is absent on a full frame.
+ *
+ * The nodes are also lean: `result` (a serialisation of `stages`) and
+ * `insightRecords` (the engine's learning log) are left out because the tree
+ * view never draws them. They are the two fields that grow with the research
+ * rather than with what changed, and they stay available on an explicit `get`.
+ */
+/**
+ * A node as a live frame carries it: the full node without `result`.
+ *
+ * The tree the panel draws needs the hypothesis, the status, the score and the
+ * stages; `result` duplicates the stages as JSON and is the field that grows with
+ * the research, so it is only on an explicit `get` answer.
+ */
+export type IdeaTreeFrameNode = Omit<IdeaTreeNode, "result">
+
+export interface IdeaTreeGraphFrame {
+  edges: IdeaTreeGraphEdge[];
+  full: boolean;
+  nodes: IdeaTreeFrameNode[];
+  objective: string;
+  /** Ids the tree no longer holds, so a merged view can drop them. */
+  removed: string[];
+  revision: number;
+  since?: number;
+  treeId: string;
+  updatedAt: string;
+}
+
+/** One SSE frame of a live research: the whole state, and only the graph changes. */
+export interface IdeaResearchFrame {
+  research: IdeaResearchState;
+  graph: IdeaTreeGraphFrame;
+}
+
+function edgeKey(edge: IdeaTreeGraphEdge): string {
+  return `${edge.source}->${edge.target}`;
+}
+
+/**
+ * Fold one frame into the view a consumer already holds.
+ *
+ * Returns `undefined` when the frame cannot be applied: a delta whose `since`
+ * is newer than the held revision means frames were lost (a dropped or torn
+ * frame), and the only honest recovery is a whole view. A consumer that gets
+ * `undefined` refetches the research with `get` and keeps merging the same
+ * stream: the frames that follow carry whole nodes, not patches, so a base at
+ * a revision at least as new as `since` is enough.
+ *
+ * A frame older than what the caller already holds is ignored rather than
+ * applied: a whole read (see `reconcileIdeaResearchFrame`) and a reconnect can
+ * leave the held view ahead of frames still queued behind the gap, and one of
+ * those must not roll a finished research back to `running` or re-apply its old
+ * nodes. `previous` is returned unchanged, not `undefined`, because refetching
+ * would only fetch the same newer state again.
+ *
+ * `result` and `insightRecords` do not come back through a frame; a node a
+ * frame replaces loses them, which is why they are only read from an explicit
+ * `get` response.
+ */
+export function applyIdeaResearchFrame(
+  previous: IdeaResearchView | undefined,
+  frame: IdeaResearchFrame,
+): IdeaResearchView | undefined {
+  const graph = frame.graph;
+  const base = previous !== undefined && previous.graph.treeId === graph.treeId ? previous.graph : undefined;
+  // A frame from before the held revision describes a state the caller has
+  // already moved past. Full frames are no exception: an older stream's whole
+  // tree is just as stale as an older delta.
+  if (base !== undefined && graph.revision < base.revision) return previous;
+  if (!graph.full) {
+    if (base === undefined) return undefined;
+    if (graph.since !== undefined && base.revision < graph.since) return undefined;
+  }
+  const nodes = new Map<string, IdeaTreeNode>();
+  const edges = new Map<string, IdeaTreeGraphEdge>();
+  if (!graph.full && base !== undefined) {
+    for (const node of base.nodes) nodes.set(node.id, node);
+    for (const edge of base.edges) edges.set(edgeKey(edge), edge);
+  }
+  // A frame's node replaces the whole node, so the `result` a previous `get`
+  // answer carried goes with it: frames are what the panel renders from, and a
+  // half-merged node would claim a `result` that no longer matches its stages.
+  for (const node of graph.nodes) nodes.set(node.id, node);
+  // An engine older than this frame shape answers with whole views and no
+  // `removed`: merging them is still correct, because such a frame's nodes are the
+  // whole tree and an engine that never removes a node has nothing to drop.
+  for (const id of graph.removed ?? []) nodes.delete(id);
+  for (const edge of graph.edges) edges.set(edgeKey(edge), edge);
+  // An edge to a node the merged tree does not hold describes nothing.
+  for (const edge of [...edges.values()]) if (!nodes.has(edge.target) || !nodes.has(edge.source)) edges.delete(edgeKey(edge));
+  return {
+    research: frame.research,
+    graph: {
+      edges: [...edges.values()],
+      nodes: [...nodes.values()],
+      objective: graph.objective,
+      revision: graph.revision,
+      treeId: graph.treeId,
+      updatedAt: graph.updatedAt,
+    },
+  };
+}
+
+/**
+ * The view to keep after a whole read was made to fill a lost-frame gap.
+ *
+ * Refetching answers the gap, but the frame that exposed it is older than the
+ * answer: a research that paused at revision 7 while that frame still says
+ * `running` at revision 5 must not be shown as running again, and its nodes must
+ * not overwrite the newer ones the read just returned. So a read at least as new
+ * as the frame wins outright; only a read older than the frame is merged with it.
+ * The returned revision is never older than the read, so the frames that follow
+ * are still applied rather than refetching on every one.
+ *
+ * `undefined` means neither could be used: different trees, or a frame from the
+ * future. The caller steps over that frame.
+ */
+export function reconcileIdeaResearchFrame(
+  restored: IdeaResearchView,
+  frame: IdeaResearchFrame,
+): IdeaResearchView | undefined {
+  if (restored.graph.treeId === frame.graph.treeId && restored.graph.revision >= frame.graph.revision) return restored;
+  return applyIdeaResearchFrame(restored, frame);
+}
