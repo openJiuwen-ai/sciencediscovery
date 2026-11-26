@@ -6,6 +6,8 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import type { IdeaResearchView } from "@sciencediscovery/schema";
+import { evolveShortTitle } from "../src/evolve/model.js";
+import { TITLE_COLUMNS, columnsOf } from "../src/text/columns.js";
 import { IdeaResearchCard, IdeaResearchCards, ideaCardTitle } from "../src/views/idea/IdeaResearchCard.js";
 import { TEXT } from "../src/text.js";
 
@@ -80,6 +82,33 @@ test("a live research shows the working state, a finished one its own status", a
 
 test("the title is the objective folded to one short line", () => {
   assert.equal(ideaCardTitle("  提升   水处理膜的膜通量 "), "提升 水处理膜的膜通量");
-  assert.ok(Array.from(ideaCardTitle("研究".repeat(40))).length <= 28);
+  assert.equal(ideaCardTitle("第一行\n第二行\t结尾"), "第一行 第二行 结尾", "newlines and runs of whitespace fold to one line");
   assert.equal(ideaCardTitle("   "), t.heading);
+  assert.equal(ideaCardTitle("提升膜通量"), "提升膜通量");
+  assert.equal(ideaCardTitle("提升膜通量").includes("…"), false, "a title that fits carries no cut mark");
+});
+
+test("a long objective is cut by printed width and the cut is marked", () => {
+  const objective = "评估不同预处理工艺对水处理膜通量衰减的影响并给出最优参数组合与运行条件";
+  const title = ideaCardTitle(objective);
+  assert.equal(title.endsWith("…"), true, "the marker tells the reader the objective continues");
+  const shown = title.slice(0, -1);
+  assert.equal(objective.startsWith(shown), true);
+  assert.equal(shown.length, TITLE_COLUMNS / 2, "32 CJK characters: 64 columns, not 64 code points");
+  assert.equal(Array.from(shown).every((char) => columnsOf(char) === 2), true);
+  assert.equal(title, evolveShortTitle(objective), "the search card beside it follows the same rule");
+});
+
+test("the card shortens its visible label but its tooltip keeps the whole objective", async () => {
+  const objective = "评估不同预处理工艺对水处理膜通量衰减的影响并给出最优参数组合与运行条件";
+  let card!: ReactTestRenderer;
+  await act(async () => { card = create(React.createElement(IdeaResearchCard, { onOpen: () => undefined, view: view({ objective }) })); });
+  const button = card.root.findAll((node) => node.type === "button")[0]!;
+  assert.equal(String(button.props.title).includes(objective), true, "the tooltip still carries the objective in full");
+  const labels = card.root.findAll((node) => node.type === "span" && node.props.className === "evolve-run-title");
+  assert.equal(labels.length, 1);
+  const rendered = String(labels[0]!.children.join(""));
+  assert.equal(rendered, ideaCardTitle(objective));
+  assert.equal(rendered.endsWith("…"), true, "what the reader sees is marked at the cut");
+  card.unmount();
 });

@@ -12,20 +12,30 @@ import { TEXT } from "../src/text.js";
 
 const t = TEXT.ideaTree;
 
-function view(status = "running", researchPatch: Partial<IdeaResearchView["research"]> = {}) {
+function view(
+  status = "running",
+  objective = "提升膜通量",
+  researchPatch: Partial<IdeaResearchView["research"]> = {},
+) {
   return {
     research: {
-      id: "research-1", objective: "提升膜通量", status, phase: "building_tree", round: 1,
+      id: "research-1", objective, status, phase: "building_tree", round: 1,
       batch: [], batchCompleted: 0, tokens: 0, usageKnown: false, reason: null, modelId: "m",
       currentNodeId: null,
       settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2, maxTokens: null },
       ...researchPatch,
     },
-    graph: { edges: [], nodes: [], objective: "提升膜通量", revision: 1, treeId: "tree-1", updatedAt: "2026-11-18T00:00:00Z" },
+    graph: { edges: [], nodes: [], objective, revision: 1, treeId: "tree-1", updatedAt: "2026-11-18T00:00:00Z" },
   };
 }
 
-function fakeClient(options: { unavailable?: boolean; streamBody?: string; status?: string; researchPatch?: Partial<IdeaResearchView["research"]> } = {}) {
+function fakeClient(options: {
+  unavailable?: boolean;
+  streamBody?: string;
+  objective?: string;
+  status?: string;
+  researchPatch?: Partial<IdeaResearchView["research"]>;
+} = {}) {
   const calls: Array<{ path: string; method: string; body?: unknown }> = [];
   const stub = {
     calls,
@@ -33,8 +43,8 @@ function fakeClient(options: { unavailable?: boolean; streamBody?: string; statu
       const body = init?.body ? JSON.parse(init.body) as { operation: string } : undefined;
       calls.push({ path, method: init?.method ?? "GET", body });
       if (options.unavailable) throw new ApiRequestError("Evolve is not initialized or unavailable", 503);
-      if (body?.operation === "pause") return view("paused");
-      return view(options.status ?? "running", options.researchPatch);
+      if (body?.operation === "pause") return view("paused", options.objective);
+      return view(options.status ?? "running", options.objective, options.researchPatch);
     },
     fetchStream: async () => new Response(options.streamBody ?? "", { status: 200, headers: { "content-type": "text/event-stream" } }),
   };
@@ -54,6 +64,17 @@ test("the panel renders the persisted research it was opened on", async () => {
   assert.match(text, /提升膜通量/);
   assert.match(text, /构建假设树/);
   assert.match(text, /token 用量未上报/);
+  panel.unmount();
+});
+
+test("the panel header shows the whole objective the transcript card shortened", async () => {
+  const objective = "评估不同预处理工艺对水处理膜通量衰减的影响并给出最优参数组合与运行条件";
+  const api = fakeClient({ objective });
+  let panel!: ReactTestRenderer;
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  const headings = panel.root.findAll((node) => node.type === "h2");
+  assert.equal(String(headings[0]!.children.join("")), objective);
   panel.unmount();
 });
 

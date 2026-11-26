@@ -26,16 +26,19 @@
  */
 
 import type { IdeaResearchState, IdeaResearchView } from "@sciencediscovery/schema";
+import { TITLE_COLUMNS, truncateColumns } from "../../text/columns.js";
 import { TEXT } from "../../text.js";
 import { EvolveTreeGlyph } from "../evolve/glyphs.js";
 
 const t = TEXT.ideaTree;
 
-/** Title of the card: the objective's first line, folded to one short sentence. */
+/** Title of the card: the objective's first line, folded to one short sentence.
+ *  The cut follows the search card's rule, so a mixed list cuts and marks at the
+ *  same width; the whole objective stays in the button's tooltip. */
 export function ideaCardTitle(objective: string): string {
   const line = objective.replace(/\s+/g, " ").trim();
   if (!line) return t.heading;
-  return Array.from(line).slice(0, 28).join("");
+  return truncateColumns(line, TITLE_COLUMNS);
 }
 
 /** The engine's phase names are a closed set; an unknown one is shown verbatim. */
