@@ -1260,6 +1260,8 @@ export const EN: Text = {
       importBusy: "Importing…",
       backgroundImportDone: (count: number) => `Imported ${count} skills.`,
       backgroundImportPartial: (imported: number, failed: number) => `Imported ${imported}; ${failed} failed.`,
+      backgroundImportEnableFailed: (imported: number, failed: number) =>
+        `Imported ${imported}; ${failed} could not be enabled.`,
       backgroundImportFailed: "The background import failed.",
       backgroundImportFailures: (names: string, count: number) =>
         count > 3 ? `Failed: ${names} and ${count - 3} more` : `Failed: ${names}`,
@@ -1267,6 +1269,7 @@ export const EN: Text = {
       importSucceeded: (name: string) => `Imported "${name}".`,
       /** The 技能 page's own notices (design 1-4). */
       toastUploadDone: (name: string) => `"${name}" uploaded.`,
+      toastUploadNotEnabled: (name: string) => `"${name}" was imported but could not be enabled.`,
       toastGitDone: "GitHub import done.",
       toastGitFailed: "GitHub import failed.",
       toastProgress: (done: number, total: number) => `Importing (${done}/${total})`,

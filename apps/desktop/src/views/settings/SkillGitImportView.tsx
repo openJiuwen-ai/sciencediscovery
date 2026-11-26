@@ -104,8 +104,14 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [failure, setFailure] = useState<string>();
   const inspectionRequest = useRef<AbortController | undefined>(undefined);
+  /** Which inspection the screen is showing. A response that started before
+   *  the address changed belongs to an inspection the reader has left behind;
+   *  landing it would show one repository's rows under another one's name and
+   *  make the next import target the repository that is no longer in the box. */
+  const inspectionGeneration = useRef(0);
 
   const reset = () => {
+    inspectionGeneration.current += 1;
     setInspection(undefined);
     setSelected(new Set());
     setFailure(undefined);
@@ -118,6 +124,7 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
       return;
     }
     const controller = new AbortController();
+    const generation = ++inspectionGeneration.current;
     inspectionRequest.current = controller;
     setInspecting(true);
     setInspection(undefined);
@@ -129,6 +136,7 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
         ...(ref.trim() ? { ref: ref.trim() } : {}),
         ...(subdirectory.trim() ? { subdirectory: subdirectory.trim() } : {}),
       }, controller.signal);
+      if (generation !== inspectionGeneration.current) return;
       setInspection(found);
       // Everything that can be written is ticked: the usual import is "all of
       // it", and the user unticks rather than ticks.
@@ -137,10 +145,12 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
         .map((candidate) => candidate.subdirectory)));
     } catch (reason) {
       // A cancelled inspection is not a failure: the user said stop.
-      if (!isAbortError(reason)) setFailure(messageOf(reason));
+      if (generation === inspectionGeneration.current && !isAbortError(reason)) {
+        setFailure(messageOf(reason));
+      }
     } finally {
       if (inspectionRequest.current === controller) inspectionRequest.current = undefined;
-      setInspecting(false);
+      if (generation === inspectionGeneration.current) setInspecting(false);
     }
   };
 
@@ -176,6 +186,7 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
    *  everything selected: loading more must not re-tick what they unticked. */
   const loadMore = async () => {
     if (!inspection?.nextCursor || loadingMore) return;
+    const generation = inspectionGeneration.current;
     const keepSelecting = selectable.length > 0 && selected.size === selectable.length;
     setLoadingMore(true);
     setFailure(undefined);
@@ -189,6 +200,9 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
         repositoryUrl: url.trim(),
         ...(subdirectory.trim() ? { subdirectory: subdirectory.trim() } : {}),
       });
+      // The address changed while this page was being read: the rows are from
+      // a repository the reader has already replaced, so they must not land.
+      if (generation !== inspectionGeneration.current) return;
       setInspection((current) => current
         ? { ...more, candidates: [...current.candidates, ...more.candidates] }
         : more);
@@ -204,7 +218,7 @@ export function SkillGitImportView({ client, job, onCancel, onStart }: Props) {
         });
       }
     } catch (reason) {
-      setFailure(messageOf(reason));
+      if (generation === inspectionGeneration.current) setFailure(messageOf(reason));
     } finally {
       setLoadingMore(false);
     }

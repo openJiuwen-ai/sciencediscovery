@@ -38,8 +38,12 @@ import type { ConfirmRequest } from "../../app/use-workspace.js";
 import {
   dismissGitSkillImportJob,
   enableCreatedSkills,
+  resumeGitSkillImport,
+  retryEnableCreatedSkills,
   startGitSkillImportInBackground,
+  subscribeGitSkillImportEnableFailure,
   subscribeGitSkillImportJob,
+  type GitSkillImportEnableFailure,
 } from "../../app/git-skill-import-job.js";
 import { saveSkillPackage } from "../../app/skill-export.js";
 import { skillMark } from "../../app/slash.js";
@@ -248,7 +252,13 @@ export function SkillsSettings({ client, onConfirm }: Props) {
     message: string;
   }>();
   const [backgroundImport, setBackgroundImport] = useState<GitSkillImportJob>();
-  const [uploadToast, setUploadToast] = useState<{ id: number; message: string }>();
+  const [enableFailure, setEnableFailure] = useState<GitSkillImportEnableFailure>();
+  const [uploadToast, setUploadToast] = useState<{
+    detail?: string;
+    id: number;
+    kind: "error" | "success";
+    message: string;
+  }>();
   /** A running job's progress toast can be hidden without cancelling the job;
    *  its result still arrives when the job ends. */
   const [dismissedProgress, setDismissedProgress] = useState<string>();
@@ -270,6 +280,14 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   // this pane only watches it. Once it ends, new packages are switched on in
   // JiuwenSwarm (as a foreground import did) and the catalog is re-read once.
   useEffect(() => subscribeGitSkillImportJob(setBackgroundImport), []);
+  // The switch-on step belongs to the import, not to this pane: when it could
+  // not finish, the notice says so here even if the pane was closed then.
+  useEffect(() => subscribeGitSkillImportEnableFailure(setEnableFailure), []);
+  // The app tries to pick a reloaded import back up at startup; if the API was
+  // not reachable yet, opening 设置 is the next chance to finish that work.
+  useEffect(() => {
+    void resumeGitSkillImport(client);
+  }, [client]);
   const [view, setView] = useState<SkillView>({ kind: "list" });
   // A message belongs to the page that produced it. Moving on starts clean,
   // so a refusal from one page does not follow the reader into the next; the
@@ -493,24 +511,31 @@ export function SkillsSettings({ client, onConfirm }: Props) {
    * An *update* of a skill that was already installed is left alone: the user
    * may have switched it off on purpose, and re-enabling it would undo that
    * while replacing its files, which is not what they asked for.
+   *
+   * Returns why the package could not be enabled, so the caller that reports a
+   * passing install can say this instead of claiming it is ready to use.
    */
-  const afterInstall = async (skill: SkillDetail) => {
+  const afterInstall = async (skill: SkillDetail): Promise<string | undefined> => {
     setBusy(true);
     setFailure(undefined);
+    let problem: string | undefined;
     try {
       const page = loaded.value;
       const wasInstalled = page?.skills.some((entry) => entry.id === skill.id) ?? false;
       if (page?.switchesAvailable) {
         if (!wasInstalled) await setJiuwenSwarmSkillEnabledById(client, skill.id, true);
       } else if (!page?.native && !wasInstalled) {
-        setFailure(page?.switchError ?? TEXT.settings.saveFailed);
+        problem = page?.switchError ?? TEXT.settings.saveFailed;
+        setFailure(problem);
       }
     } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
+      problem = reason instanceof Error ? reason.message : TEXT.settings.saveFailed;
+      setFailure(problem);
     } finally {
       setBusy(false);
       loaded.reload();
     }
+    return problem;
   };
 
   /** Enable a new skill when JiuwenSwarm is available; native creation needs no import. */
@@ -522,9 +547,10 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   };
 
   // A passing upload is news about a dialog that just closed, so it leaves by
-  // itself; a failed Git import stays until it is dismissed or retried.
+  // itself; a failed Git import stays until it is dismissed or retried. An
+  // upload that arrived but stayed switched off is a failure, too.
   useEffect(() => {
-    if (!uploadToast) return;
+    if (!uploadToast || uploadToast.kind === "error") return;
     const timer = setTimeout(() => setUploadToast(undefined), 4_000);
     return () => clearTimeout(timer);
   }, [uploadToast]);
@@ -533,8 +559,9 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   if (uploadToast) {
     toasts.push({
       id: `upload-${uploadToast.id}`,
-      kind: "success",
+      kind: uploadToast.kind,
       message: uploadToast.message,
+      ...(uploadToast.detail ? { detail: uploadToast.detail } : {}),
       onClose: () => setUploadToast(undefined),
     });
   }
@@ -542,6 +569,10 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   // closed, which is how a background import stays visible on the list.
   if (backgroundImport && dialog !== "git") {
     const job = backgroundImport;
+    const enableProblem = enableFailure?.jobId === job.id ? enableFailure : undefined;
+    const enableNote = enableProblem === undefined
+      ? undefined
+      : TEXT.settings.skills.backgroundImportEnableFailed(job.imported.length, enableProblem.count);
     if (job.status === "queued" || job.status === "running") {
       if (dismissedProgress !== job.id) {
         toasts.push({
@@ -558,14 +589,15 @@ export function SkillsSettings({ client, onConfirm }: Props) {
         message: job.status === "failed"
           ? TEXT.settings.skills.toastGitFailed
           : TEXT.settings.skills.backgroundImportPartial(job.imported.length, job.failures.length),
-        ...(job.failures.length
-          ? {
-            detail: TEXT.settings.skills.backgroundImportFailures(
+        detail: [
+          job.failures.length
+            ? TEXT.settings.skills.backgroundImportFailures(
               job.failures.slice(0, 3).map((failure) => failure.subdirectory).join("、"),
               job.failures.length,
-            ),
-          }
-          : {}),
+            )
+            : undefined,
+          enableNote,
+        ].filter((part): part is string => part !== undefined).join(" ") || undefined,
         onClose: () => dismissGitSkillImportJob(),
         ...(lastGitRequest
           ? {
@@ -576,6 +608,20 @@ export function SkillsSettings({ client, onConfirm }: Props) {
             },
           }
           : {}),
+      });
+    } else if (enableProblem !== undefined) {
+      // The packages are installed, but a new one that stays switched off is
+      // not the success the reader asked for; say what is still off and let
+      // the switch-on step run again.
+      toasts.push({
+        id: `git-result-${job.id}`,
+        kind: "error",
+        message: TEXT.settings.skills.backgroundImportEnableFailed(job.imported.length, enableProblem.count),
+        detail: enableProblem.message,
+        onClose: () => dismissGitSkillImportJob(),
+        onRetry: () => {
+          void retryEnableCreatedSkills(client, job).then(() => loaded.reload());
+        },
       });
     } else {
       toasts.push({
@@ -896,11 +942,22 @@ export function SkillsSettings({ client, onConfirm }: Props) {
             onCancel={() => setDialog(undefined)}
             onImported={async (skill) => {
               setDialog(undefined);
-              setUploadToast({
-                id: Date.now(),
-                message: TEXT.settings.skills.toastUploadDone(skill.name),
-              });
-              await afterInstall(skill);
+              // Say what actually happened: a package that arrived but could
+              // not be switched on is not "uploaded" in the sense the reader
+              // needs, and the success notice would talk them out of looking.
+              const problem = await afterInstall(skill);
+              setUploadToast(problem === undefined
+                ? {
+                  id: Date.now(),
+                  kind: "success",
+                  message: TEXT.settings.skills.toastUploadDone(skill.name),
+                }
+                : {
+                  id: Date.now(),
+                  kind: "error",
+                  message: TEXT.settings.skills.toastUploadNotEnabled(skill.name),
+                  detail: problem,
+                });
             }}
           />
         </SkillDialog>

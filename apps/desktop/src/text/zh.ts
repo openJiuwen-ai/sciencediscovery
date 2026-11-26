@@ -1285,6 +1285,8 @@ export const ZH = {
       importBusy: "正在导入…",
       backgroundImportDone: (count: number) => `已导入 ${count} 个技能。`,
       backgroundImportPartial: (imported: number, failed: number) => `已导入 ${imported} 个，${failed} 个失败。`,
+      backgroundImportEnableFailed: (imported: number, failed: number) =>
+        `已导入 ${imported} 个技能，但 ${failed} 个未能启用。`,
       backgroundImportFailed: "后台导入失败。",
       backgroundImportFailures: (names: string, count: number) =>
         count > 3 ? `失败：${names} 等 ${count} 个` : `失败：${names}`,
@@ -1292,6 +1294,7 @@ export const ZH = {
       importSucceeded: (name: string) => `已导入「${name}」。`,
       /** The 技能 page's own notices (design 1-4). */
       toastUploadDone: (name: string) => `「${name}」上传成功！`,
+      toastUploadNotEnabled: (name: string) => `「${name}」已导入，但未能启用。`,
       toastGitDone: "GitHub 技能导入成功！",
       toastGitFailed: "GitHub 技能导入失败",
       toastProgress: (done: number, total: number) => `正在导入(${done}/${total})`,
