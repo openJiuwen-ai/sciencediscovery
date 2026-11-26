@@ -623,6 +623,9 @@ export interface EvolveRunFailure {
 export interface EvolveRun {
   algorithm: EvolveAlgorithm;
   bestNodeIndex?: number;
+  /** Expansions dispatched, failed and duplicate attempts included — the same
+   *  population `search_finished.attempts` names. Not archive size: the seed
+   *  is not an attempt, and a call that never returned still is. */
   candidates: number;
   costCents: number;
   createdAt: string;
@@ -745,8 +748,28 @@ export type EvolveEvent =
   | {
     bestNodeIndex: number | null;
     bestTestScore?: number;
+    /** Archive entries at the end of the run, the baseline included. This is
+     *  the count this field has always carried; consumers that subtract one
+     *  for the seed mean "generated candidates" and should prefer `generated`
+     *  below, which is correct even when an attempt failed or a model
+     *  regenerated identical code. */
     candidates: number;
-    /** What the run planned, next to the `candidates` it actually produced. */
+    /** How many expansions were attempted: every selection that spent a round
+     *  of the budget, including a model call that never returned and a
+     *  candidate whose code duplicated an earlier program. This — not archive
+     *  growth — is what `expansionsPlanned` is measured against. Absent on
+     *  events written before the field existed; readers fall back to
+     *  `candidates - 1`. */
+    attempts?: number;
+    /** Distinct new programs the attempts produced, the baseline excluded. */
+    generated?: number;
+    /** Attempts that produced a valid, scored candidate. */
+    evaluated?: number;
+    /** Every node the archive held, the baseline included. Equal to
+     *  `candidates` when a current sidecar wrote the event; named separately
+     *  so the populations cannot be confused again. */
+    archiveNodes?: number;
+    /** What the run planned, next to the `attempts` it actually made. */
     expansionsPlanned?: number;
     /** The winner against the starting program on the same held-out cases,
      *  paired and tested — so a reader can tell "improved" from "scored higher

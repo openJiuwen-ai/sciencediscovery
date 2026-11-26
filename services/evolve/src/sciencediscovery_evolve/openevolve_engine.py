@@ -406,6 +406,11 @@ class _Reporter:
         self.failures: List[str] = []
         self._empty: Dict[int, str] = {}
         self._inspiration_by_iteration: Dict[int, Optional[int]] = {}
+        # The selected parent of each attempt, kept so a failed or empty call can
+        # still report where in the tree it would have sat. Not the iteration:
+        # that is the attempt ordinal, which OpenEvolve's archive does not order
+        # by parentage.
+        self._parent_id_by_iteration: Dict[int, Optional[str]] = {}
         # Recorded from the framework's outcome and carried on `search_finished`,
         # as the PUCT reporter does: a run that stopped at 1 of 8 expansions
         # because it reached the scorecard's threshold and one that stopped
@@ -429,7 +434,7 @@ class _Reporter:
                 return
             self._empty[iteration] = f"this call did not return: {reason}"
         self.emit(events.expanded(
-            iteration, None, iteration, None, False,
+            iteration, None, self._attempt_depth(iteration), None, False,
             error=f"model call failed: {reason}",
             iteration=iteration,
         ))
@@ -452,15 +457,15 @@ class _Reporter:
                 else:
                     self._empty[iteration] = "the model returned an empty reply"
         self.emit(events.expanded(
-            iteration, None, iteration, None, False,
+            iteration, None, self._attempt_depth(iteration), None, False,
             error=self._empty[iteration],
             iteration=iteration,
         ))
 
     def on_event(self, kind: str, payload: Dict[str, Any]) -> None:
         if kind == "selected":
-            self.attempted += 1
             iteration = payload["iteration"]
+            parent_id = payload.get("parent_id")
             inspiration_id = payload.get("inspiration_id")
             inspiration_iteration: Optional[int] = None
             if inspiration_id and self.archive is not None:
@@ -468,7 +473,9 @@ class _Reporter:
                 if inspiration_program is not None:
                     inspiration_iteration = inspiration_program.iteration
             with self._lock:
+                self.attempted += 1
                 self._inspiration_by_iteration[iteration] = inspiration_iteration
+                self._parent_id_by_iteration[iteration] = parent_id
             self.emit(events.selected(iteration, []))
         elif kind == "seeded":
             metrics = payload.get("metrics", {})
@@ -516,6 +523,7 @@ class _Reporter:
         with self._lock:
             empty = self._empty.pop(program.iteration, "")
             inspiration_iteration = self._inspiration_by_iteration.pop(program.iteration, None)
+            self._parent_id_by_iteration.pop(program.iteration, None)
         error = empty or program.error
         if not valid:
             self.failures.append(error or "the candidate produced no score")
@@ -523,7 +531,7 @@ class _Reporter:
             self.scored += 1
 
         self.emit(events.expanded(
-            program.iteration, parent_index, program.iteration,
+            program.iteration, parent_index, self._depth_of(program),
             raw_score if valid else None, valid,
             change_summary=program.change_summary or None,
             code_hash=code_hash, code_chars=len(code) or None,
@@ -539,9 +547,15 @@ class _Reporter:
                 and key not in (SCORE_KEY, "seconds")
             }
             reward = float(self.domain.reward(metrics))
+            # Only the gate score is measured here: the archive's held-out
+            # evaluation produces it, and no per-node rollout aggregate survives
+            # the framework's rollout. Publishing the gate number again as
+            # `rollout_score` drew one measurement twice (#1457) and looked like
+            # a second, independent reading. Absent, not zero-filled: the UIs
+            # fall back to `score`.
             self.emit(events.evaluated(
                 program.iteration, reward, criteria,
-                gate_score=float(raw_score), rollout_score=float(raw_score),
+                gate_score=float(raw_score),
             ))
 
     def _best(self, payload: Dict[str, Any]) -> None:
@@ -559,7 +573,10 @@ class _Reporter:
         reason = str(getattr(outcome, "stop_reason", "") or "")
         error = str(getattr(outcome, "error", "") or "")
         retired = int(getattr(outcome, "retired_workers", 0) or 0)
-        done = (len(self.archive.history) - 1) if self.archive is not None else 0
+        # Attempts, not archive growth: a call that never returned spent one of
+        # the round budget's rounds and emitted its own failed `expanded`, so
+        # ``len(history) - 1`` reported a healthy six-round run as five (#1457).
+        done = self.attempted
         # Carried to `search_finished` unconditionally, ordinary reasons included:
         # the summary says "made 1 of 8", and without this field the account of
         # why is unrecoverable.
@@ -574,7 +591,10 @@ class _Reporter:
                 f"{retired} workers retired — model calls failed repeatedly "
                 "enough that the framework stopped trying.",
             ))
-        if 0 <= done < planned and reason and reason not in ("max_iters", "max_calls"):
+        # Only the counts decide this. OpenEvolve's normal ending is
+        # `rounds`/`max_iters`, so silencing ordinary reasons (as PUCT does)
+        # would also silence a genuine shortfall.
+        if 0 <= done < planned and reason:
             self.emit(events.log(
                 "info",
                 f"planned {planned} expansions, ran {done}, stopped because {reason}.",
@@ -617,11 +637,13 @@ class _Reporter:
         best_index: Optional[int] = None
         if self.archive is not None and self.archive.best_id is not None:
             best_index = self.archive.best().iteration
-        nodes = len(self.archive.history) if self.archive is not None else 0
+        attempts, generated, evaluated, nodes = self._counts()
         self.emit(events.search_finished(
             status, best_index, nodes, best_test_score=best_test_score,
             stop_reason=self._stop_reason,
             expansions_planned=self._planned,
+            attempts=attempts, generated=generated, evaluated=evaluated,
+            archive_nodes=nodes,
         ))
 
         log.info(
@@ -629,6 +651,60 @@ class _Reporter:
             self.spec.search_id, status, nodes,
             self.archive.migrations if self.archive is not None else 0,
         )
+
+    def _depth_of(self, program: Any) -> int:
+        """Generations between the root and ``program``, read off its parent chain.
+
+        The archive lets any entry parent a new program, so ancestry is not
+        iteration order: 3 -> 2 -> 0 has depth 2. The root is depth 0, and a
+        parent the archive no longer holds (or a cycle, which a corrupt ledger
+        could carry) ends the walk rather than inventing generations.
+        """
+        parent_id = program.parent_id
+        depth = 0
+        seen: set = set()
+        while parent_id and parent_id not in seen:
+            seen.add(parent_id)
+            parent = self.archive.programs.get(parent_id) if self.archive is not None else None
+            if parent is None:
+                break
+            depth += 1
+            parent_id = parent.parent_id
+        return depth
+
+    def _attempt_depth(self, iteration: int) -> int:
+        """Where a failed or empty attempt would have sat, from its selection.
+
+        Such an attempt produced no archive entry, but the ``selected`` event
+        recorded the parent it was going to rewrite. No recorded or resolvable
+        parent means 0 — never the attempt's iteration ordinal.
+        """
+        with self._lock:
+            parent_id = self._parent_id_by_iteration.get(iteration)
+        if not parent_id or self.archive is None:
+            return 0
+        parent = self.archive.programs.get(parent_id)
+        return 0 if parent is None else self._depth_of(parent) + 1
+
+    def _counts(self) -> Tuple[int, int, int, int]:
+        """The four populations, named once, for ``search_finished``.
+
+        ``attempts`` is what the expansion budget measures: every selection,
+        including a call that never returned and a candidate whose code was a
+        duplicate. ``generated`` counts distinct new programs, the seed
+        excluded — ``OpenEvolveArchive.add_program`` refuses a ``program_id``
+        it already holds, so regenerating identical code is one program.
+        ``evaluated`` counts generated candidates that reached a score.
+        ``archive`` is every stored node, the baseline included; that is what
+        ``candidates`` has always meant on this event.
+        """
+        history = list(self.archive.history) if self.archive is not None else []
+        baseline_id = getattr(self.archive, "baseline_id", None) if self.archive is not None else None
+        if isinstance(baseline_id, str):
+            generated = sum(1 for program in history if program.program_id != baseline_id)
+        else:
+            generated = sum(1 for program in history if program.iteration != 0)
+        return self.attempted, generated, self.scored, len(history)
 
 
 # --- Refusals and wiring helpers ---------------------------------------------

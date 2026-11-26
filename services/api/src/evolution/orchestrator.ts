@@ -841,6 +841,14 @@ export class EvolveOrchestrator {
       case "search_finished": {
         const entry = this.inFlight.get(runId);
         const gate = entry?.budgetGate;
+        // The run record has always counted expansions dispatched, and the
+        // sidecar now names that same population explicitly as `attempts`.
+        // Prefer it at the terminal event: a resumed or replayed stream can
+        // have started past some `expanded` records, and a stored run must not
+        // keep a count that depends on where this process began folding.
+        if (typeof event.attempts === "number") {
+          await this.store.patchRun(runId, { candidates: event.attempts });
+        }
         const reported = event.status === "running" || event.status === "pending" ? "failed" : event.status;
         // A budget-tripped run reaches the sidecar as an ordinary stop; the
         // control plane is the only side that knows why it was asked to stop.

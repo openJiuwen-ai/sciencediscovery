@@ -88,6 +88,11 @@ export interface EvolveRunView {
   costCents: number;
   /** How many expansions have been dispatched — including the failed ones. */
   expansions: number;
+  /** The terminal event's own attempt count, when the sidecar reported one.
+   *  `expansions` counts `expanded` records this fold happened to see; a
+   *  resumed or partial stream can start past some of them, so the budget
+   *  shortfall is judged on this number when it is present. */
+  attempts?: number;
   /** The highest sequence folded in; where a resumed subscription starts. */
   lastSequence: number;
   logLines: Array<{ level: "error" | "info" | "warn"; message: string }>;
@@ -239,6 +244,7 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
         ...(event.bestTestScore === undefined ? {} : { bestTestScore: event.bestTestScore }),
         ...(event.stopReason === undefined ? {} : { stopReason: event.stopReason }),
         ...(event.expansionsPlanned === undefined ? {} : { expansionsPlanned: event.expansionsPlanned }),
+        ...(event.attempts === undefined ? {} : { attempts: event.attempts }),
         status: event.status,
       };
 

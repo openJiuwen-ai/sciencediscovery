@@ -220,6 +220,15 @@ def evaluated(
     gate_score: float | None = None,
     rollout_score: float | None = None,
 ) -> dict[str, Any]:
+    """A candidate reached a score.
+
+    ``gate_score`` and ``rollout_score`` are different measurements on different
+    shards, and either may be absent: absent means "not measured", never zero.
+    The OpenEvolve port publishes only the gate score, because no per-node
+    rollout aggregate survives its rollout (#1457); readers fall back from an
+    absent ``rolloutScore`` to the gate/score line. Events persisted before that
+    correction may still carry the duplicate, so a reader must tolerate both.
+    """
     event: dict[str, Any] = {
         "criteria": {key: round(value, 6) for key, value in criteria.items()},
         "nodeIndex": node_index,
@@ -299,7 +308,21 @@ def search_finished(
     gate_evidence: Mapping[str, Any] | None = None,
     stop_reason: str = "",
     expansions_planned: int | None = None,
+    attempts: int | None = None,
+    generated: int | None = None,
+    evaluated: int | None = None,
+    archive_nodes: int | None = None,
 ) -> dict[str, Any]:
+    """The terminal event, with each count named for the population it counts.
+
+    ``candidates`` has always been archive entries, the baseline included. It is
+    kept because existing readers subtract one to mean "expansions made", which
+    is only true while a failed call and a duplicate program happen not to
+    differ. ``attempts`` is the honest population for the expansion budget;
+    ``generated`` counts distinct new programs (the seed excluded) and
+    ``evaluated`` those that reached a score. Events written before these fields
+    existed simply omit them, so readers fall back rather than see a zero.
+    """
     event: dict[str, Any] = {
         "bestNodeIndex": best_node_index,
         "candidates": candidates,
@@ -323,6 +346,14 @@ def search_finished(
         event["stopReason"] = stop_reason
     if expansions_planned is not None:
         event["expansionsPlanned"] = expansions_planned
+    if attempts is not None:
+        event["attempts"] = attempts
+    if generated is not None:
+        event["generated"] = generated
+    if evaluated is not None:
+        event["evaluated"] = evaluated
+    if archive_nodes is not None:
+        event["archiveNodes"] = archive_nodes
     return event
 
 

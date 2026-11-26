@@ -24,7 +24,7 @@ test). What they cover is the glue that is ours: the ``events.*`` constructors,
 the ``reduceEvolveRecord`` reducer, and the ``SearchCellGrid`` data model.
 
 Mirrors ``test_puct_engine.py``'s structure, adapted for OpenEvolve's
-archive model (iteration as node_index, island as depth, inserted/migrated
+archive model (iteration as node_index, ancestry as depth, inserted/migrated
 events).
 """
 
