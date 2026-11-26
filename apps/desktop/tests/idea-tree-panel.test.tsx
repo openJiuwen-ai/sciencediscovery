@@ -101,6 +101,68 @@ test("pause sends one control call and shows the returned state", async () => {
   panel.unmount();
 });
 
+test("继续 reports the resumed view, so the card at the transcript's foot can follow it", async () => {
+  const api = recordingClient({ readView: () => view("interrupted") });
+  const seen: IdeaResearchView[] = [];
+  let panel!: ReactTestRenderer;
+  await act(async () => {
+    panel = create(React.createElement(IdeaResearchPanel, {
+      client: api,
+      onResearchChanged: (next: IdeaResearchView) => { seen.push(next); },
+      researchId: "research-1",
+      sessionId: "s1",
+    }));
+  });
+  await act(async () => { await flush(); });
+  assert.equal(seen.at(-1)?.research.status, "interrupted", "the panel's own read is reported as well");
+
+  await act(async () => { buttonWith(panel, t.resume).props.onClick(); });
+  await act(async () => { await flush(); });
+
+  assert.equal(api.calls.filter((call) => call.operation === "continue").length, 1, "继续 is one control call");
+  assert.equal(seen.at(-1)?.research.status, "running", "the state the engine returned after 继续 is handed back");
+  panel.unmount();
+});
+
+test("继续 followed by closing the panel still reports the answer", async () => {
+  let releaseContinue!: () => void;
+  const held = new Promise<void>((resolve) => { releaseContinue = resolve; });
+  const api = {
+    request: async (_path: string, init?: { method?: string; body?: string }) => {
+      const body = init?.body ? JSON.parse(init.body) as { operation?: string } : {};
+      if (body.operation === "continue") {
+        await held;
+        return view("running");
+      }
+      return view("interrupted");
+    },
+    fetchStream: async () => new Response("", { status: 200, headers: { "content-type": "text/event-stream" } }),
+  } as unknown as ApiClient;
+  const seen: Array<{ status: string; sessionId: string }> = [];
+  let panel!: ReactTestRenderer;
+  await act(async () => {
+    panel = create(React.createElement(IdeaResearchPanel, {
+      client: api,
+      onResearchChanged: (next: IdeaResearchView, fromSession: string) => { seen.push({ status: next.research.status, sessionId: fromSession }); },
+      researchId: "research-1",
+      sessionId: "s1",
+    }));
+  });
+  await act(async () => { await flush(); });
+  const before = seen.length;
+
+  await act(async () => { buttonWith(panel, t.resume).props.onClick(); });
+  // The reader presses 继续 and then closes the panel while the request is in
+  // flight: the shortest path to the reported bug, and the answer must still land
+  // in the session list.
+  await act(async () => { panel.unmount(); });
+  await act(async () => { releaseContinue(); await flush(); });
+
+  assert.ok(seen.length > before, "the answer is reported after the panel is gone");
+  assert.equal(seen.at(-1)?.status, "running");
+  assert.equal(seen.at(-1)?.sessionId, "s1", "it says which session it belongs to");
+});
+
 test("a live stream frame replaces the view without refetching", async () => {
   const stopped = { ...view("completed"), research: { ...view("running").research, status: "completed", usageKnown: true, tokens: 900 } };
   const api = fakeClient({ streamBody: `data: ${JSON.stringify(stopped)}\n\n` });
