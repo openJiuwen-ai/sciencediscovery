@@ -21,8 +21,7 @@ import { byRecency, untitled } from "../app/session-order.js";
 import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.js";
 import { openFeedback } from "../feedback/open.js";
 import type { Project, Session, WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
-import { flatResults, groupSearchResults, moveHit, searchDetail } from "../app/session-search.js";
-import { DEFAULT_SEARCH_NARROWING, hasActiveNarrowing, type SearchNarrowing } from "../app/search-narrowing.js";
+import { SearchDialog, type SearchKindFilter } from "./SearchDialog.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
@@ -59,8 +58,6 @@ interface Props {
   recent: Session[];
   /** Whether the open Session is running a task, which its row shows. */
   running?: boolean;
-  /** How the search results are narrowed: projects, running, artifacts, window. */
-  narrowing?: SearchNarrowing;
   /** What `GET /api/search` answered for the current query, if anything. */
   searchResults?: WorkbenchSearchResponse;
   /** Why the last search failed, when it did. */
@@ -198,7 +195,6 @@ export function Sidebar({
   projects,
   recent,
   running,
-  narrowing = DEFAULT_SEARCH_NARROWING,
   searchError,
   searchQuery = "",
   searchResults,
@@ -209,9 +205,6 @@ export function Sidebar({
   const [menu, setMenu] = useState<MenuState>();
   const [renaming, setRenaming] = useState<Renaming>();
   const [creating, setCreating] = useState(false);
-  /** Which search result the arrow keys are on; -1 is "none". */
-  const [activeHit, setActiveHit] = useState(-1);
-  const searchField = useRef<HTMLInputElement>(null);
   /** Folded-up Projects, by id. Empty means every fold is open — the state a
    *  column of two or three Projects should start in — and a Project created
    *  later inherits it without being added anywhere. */
@@ -221,48 +214,26 @@ export function Sidebar({
    *  others. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const stars = useGithubStars();
-  /** Whether anything is narrowed at all. An empty result list under a narrowing
-   *  is that narrowing's answer, not an empty workspace. */
-  const narrowed = hasActiveNarrowing(narrowing);
-  /** A narrowing with no query filters the column itself, so an empty fold
-   *  there is that narrowing's answer rather than an empty workspace. */
-  const narrowingActive = narrowed && searchQuery.trim() === "";
-  /** Whether the field is open: the entry is a row until it is asked for, and a
-   *  restored query opens it with that query already in place. */
-  const [searching, setSearching] = useState(() => searchQuery.trim() !== "");
-  const [pickingProjects, setPickingProjects] = useState(false);
-  const [narrowMenu, setNarrowMenu] = useState(false);
+  /** Whether the dialog is open. The column spends no row on search any more:
+   *  the magnifier in the title row opens it over the page. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  /** 全部 groups every hit by kind; a kind shows only that kind. */
+  const [searchKind, setSearchKind] = useState<SearchKindFilter>("all");
 
   useEffect(() => {
     // The shortcut is bound to the window, and a renderer that has none (the
     // component tests render on react-test-renderer) has nothing to bind to.
     if (typeof document === "undefined") return;
     // The palette shortcut every editor uses: Cmd+K on macOS, Ctrl+K elsewhere.
-    // It opens the search first — the row has no input to focus — and the effect
-    // below puts the caret in the field the click just mounted.
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        // Open it only when there is no field; when one is already on screen the
-        // state is unchanged, React skips the render, and the effect below never
-        // runs — so the focus is taken here instead.
-        if (searchField.current === null) setSearching(true);
-        else searchField.current.focus();
-        return;
-      }
-      if (event.key === "Escape" && searchField.current === document.activeElement) {
-        searchField.current?.blur();
+        setSearchOpen(true);
       }
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
-
-  // The field appears after the click or the shortcut, so the focus cannot be an
-  // `autoFocus` on a node that does not exist yet: it follows the open state.
-  useEffect(() => {
-    if (searching) searchField.current?.focus();
-  }, [searching]);
 
   const anchor = (event: { clientX: number; clientY: number }) => ({
     x: event.clientX,
@@ -427,9 +398,25 @@ export function Sidebar({
   };
 
   return (
-    <aside className="sidebar">
+    <>
+      <aside className="sidebar">
       <div className="side-head">
         <span className="side-title">{TEXT.sidebar.title}</span>
+        {onSearch === undefined ? null : (
+          <button
+            aria-label={TEXT.sidebar.searchLabel}
+            className="side-head-button"
+            onClick={() => setSearchOpen(true)}
+            title={TEXT.sidebar.searchLabel}
+            type="button"
+          >
+            <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round"
+              strokeWidth="1.8" viewBox="0 0 24 24" width="16">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m16.5 16.5 4 4" />
+            </svg>
+          </button>
+        )}
         {onToggleSidebar ? <SidebarToggle onClick={onToggleSidebar} open /> : null}
       </div>
 
@@ -443,238 +430,6 @@ export function Sidebar({
           <img alt="" aria-hidden="true" src={migrationIcon} /><span>{TEXT.researchPackage.import}</span>
         </button>
       </div>
-
-      {/* The entry is a row like 新建会话 and 导入会话: the column's resting
-          state says 搜索 and spends no field on it. Clicking it turns that row
-          into the field, in place, with the results underneath. A column drawn
-          without a workspace has nothing to search, so it draws no row. */}
-      {onSearch === undefined ? null : searching ? (
-        <div className="side-search">
-          <svg aria-hidden="true" className="side-search-glyph" fill="none" height="15" stroke="currentColor"
-            strokeLinecap="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
-            <circle cx="11" cy="11" r="7" />
-            <path d="m16.5 16.5 4 4" />
-          </svg>
-          <input
-            aria-label={TEXT.sidebar.searchLabel}
-            className="side-search-field"
-            ref={searchField}
-            onChange={(event) => { setActiveHit(-1); onSearch(event.target.value); }}
-            onKeyDown={(event) => {
-              const hits = flatResults(searchResults?.results ?? []);
-              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                event.preventDefault();
-                setActiveHit((current) => moveHit(current, event.key === "ArrowDown" ? 1 : -1, hits.length));
-                return;
-              }
-              if (event.key === "Enter") {
-                const hit = hits[activeHit];
-                if (hit !== undefined) {
-                  event.preventDefault();
-                  setActiveHit(-1);
-                  onSearchOpen?.(hit);
-                }
-                return;
-              }
-              if (event.key === "Escape") {
-                // Escape leaves the search: the row comes back, and the list
-                // returns to what it was before the query.
-                event.preventDefault();
-                setActiveHit(-1);
-                setNarrowMenu(false);
-                setPickingProjects(false);
-                setSearching(false);
-                onSearch("");
-              }
-            }}
-            placeholder={TEXT.sidebar.searchPlaceholder}
-            type="search"
-            value={searchQuery}
-          />
-          <button
-            aria-expanded={pickingProjects}
-            aria-label={TEXT.sidebar.searchPickProjects}
-            className={`side-search-control${narrowing.projectIds.length > 0 ? " is-on" : ""}`}
-            onClick={() => { setPickingProjects((open) => !open); setNarrowMenu(false); }}
-            title={TEXT.sidebar.searchPickProjects}
-            type="button"
-          >
-            <svg aria-hidden="true" fill="none" height="15" stroke="currentColor" strokeLinecap="round"
-              strokeLinejoin="round" strokeWidth="1.7" viewBox="0 0 24 24" width="15">
-              <path d="M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z" />
-            </svg>
-          </button>
-          <button
-            aria-expanded={narrowMenu}
-            aria-label={TEXT.sidebar.filtersLabel}
-            className={`side-search-control${narrowed ? " is-on" : ""}`}
-            onClick={() => { setNarrowMenu((open) => !open); setPickingProjects(false); }}
-            title={TEXT.sidebar.filtersLabel}
-            type="button"
-          >
-            ⋯
-          </button>
-
-          {pickingProjects ? (
-            <div aria-label={TEXT.sidebar.searchPickProjects} className="side-search-menu" role="group">
-              {projects.length === 0 ? <p className="side-search-note">{TEXT.sidebar.noProjects}</p> : null}
-              {projects.map((project) => {
-                const on = narrowing.projectIds.includes(project.id);
-                return (
-                  <button
-                    aria-pressed={on}
-                    className={`side-search-option${on ? " is-on" : ""}`}
-                    key={project.id}
-                    onClick={() => actions.setSearchNarrowing({
-                      projectIds: on
-                        ? narrowing.projectIds.filter((id) => id !== project.id)
-                        : [...narrowing.projectIds, project.id],
-                    })}
-                    type="button"
-                  >
-                    {project.name}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-
-          {narrowMenu ? (
-            <div aria-label={TEXT.sidebar.filtersLabel} className="side-search-menu" role="group">
-              <button
-                aria-pressed={narrowing.onlyRunning}
-                className={`side-search-option${narrowing.onlyRunning ? " is-on" : ""}`}
-                onClick={() => actions.setSearchNarrowing({ onlyRunning: !narrowing.onlyRunning })}
-                type="button"
-              >
-                {TEXT.sidebar.filterOnlyRunning}
-              </button>
-              <button
-                aria-pressed={narrowing.onlyWithArtifacts}
-                className={`side-search-option${narrowing.onlyWithArtifacts ? " is-on" : ""}`}
-                onClick={() => actions.setSearchNarrowing({ onlyWithArtifacts: !narrowing.onlyWithArtifacts })}
-                type="button"
-              >
-                {TEXT.sidebar.filterWithArtifacts}
-              </button>
-              <span className="side-search-menu-label">{TEXT.sidebar.filterTime}</span>
-              {(["all", "day", "three-days", "week", "custom"] as const).map((window) => (
-                <button
-                  aria-pressed={narrowing.window === window}
-                  className={`side-search-option${narrowing.window === window ? " is-on" : ""}`}
-                  key={window}
-                  onClick={() => actions.setSearchNarrowing({ window })}
-                  type="button"
-                >
-                  {window === "all" ? TEXT.sidebar.windowAll
-                    : window === "day" ? TEXT.sidebar.windowDay
-                      : window === "three-days" ? TEXT.sidebar.windowThreeDays
-                        : window === "week" ? TEXT.sidebar.windowWeek : TEXT.sidebar.windowCustom}
-                </button>
-              ))}
-              {narrowing.window === "custom" ? (
-                <div className="side-search-range">
-                  <label>
-                    {TEXT.sidebar.rangeFrom}
-                    <input
-                      onChange={(event) => {
-                        const from = startOfLocalDay(event.target.value);
-                        if (from === undefined) return;
-                        actions.setSearchNarrowing({
-                          custom: { from, to: narrowing.custom?.to ?? Date.now() },
-                        });
-                      }}
-                      type="date"
-                      value={narrowing.custom === undefined ? "" : localDay(narrowing.custom.from)}
-                    />
-                  </label>
-                  <label>
-                    {TEXT.sidebar.rangeTo}
-                    <input
-                      onChange={(event) => {
-                        const to = endOfLocalDay(event.target.value);
-                        if (to === undefined) return;
-                        actions.setSearchNarrowing({
-                          custom: { from: narrowing.custom?.from ?? 0, to },
-                        });
-                      }}
-                      type="date"
-                      value={narrowing.custom === undefined ? "" : localDay(narrowing.custom.to)}
-                    />
-                  </label>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <button
-          className="side-new side-search-entry"
-          onClick={() => { setSearching(true); setPickingProjects(false); setNarrowMenu(false); }}
-          type="button"
-        >
-          <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round"
-            strokeWidth="1.8" viewBox="0 0 24 24" width="16">
-            <circle cx="11" cy="11" r="7" />
-            <path d="m16.5 16.5 4 4" />
-          </svg>
-          <span>{TEXT.sidebar.searchLabel}</span>
-        </button>
-      )}
-      {onSearch === undefined || !searching || searchQuery.trim() === "" ? null : (
-        <div className="side-search-results">
-          {searchError !== undefined ? (
-            // The reason the route gave, plus the next step the empty state also
-            // offers: a failure the reader cannot retry reads as a dead field.
-            <p className="side-search-note is-error" role="alert">
-              {searchError}
-              <button
-                className="side-search-retry"
-                onClick={() => onSearch(searchQuery.trim())}
-                type="button"
-              >
-                {TEXT.sidebar.searchRetry}
-              </button>
-            </p>
-          ) : searchResults === undefined ? null
-            : searchResults.results.length === 0 ? (
-              <p className="side-search-note">
-                {narrowed ? TEXT.sidebar.searchNarrowed(searchQuery.trim()) : TEXT.sidebar.searchEmpty(searchQuery.trim())}
-              </p>
-            ) : (
-              <>
-                {groupSearchResults(searchResults.results).map((group) => (
-                  <div className="side-search-group" key={group.kind}>
-                    <span className="side-search-heading">
-                      {group.kind === "project" ? TEXT.sidebar.searchProjects
-                        : group.kind === "session" ? TEXT.sidebar.searchSessions : TEXT.sidebar.searchArtifacts}
-                    </span>
-                    {group.results.map((result) => (
-                      <button
-                        className={`side-search-hit${flatResults(searchResults?.results ?? [])[activeHit] === result ? " is-active" : ""}`}
-                        key={`${result.kind}:${result.id}`}
-                        onClick={() => { setActiveHit(-1); onSearchOpen?.(result); }}
-                        type="button"
-                      >
-                        <span className="side-search-hit-label">{result.label}</span>
-                        <span className="side-search-hit-detail">{searchDetail(result)}</span>
-                      </button>
-                    ))}
-                  </div>
-                ))}
-                {searchResults.hasMore ? (
-                  // With a narrowing on, the route's total counts rows the column
-                  // is not showing: a number here would be a claim about the page
-                  // rather than about the results.
-                  <p className="side-search-note">
-                    {narrowed ? TEXT.sidebar.searchMoreNarrowed
-                      : TEXT.sidebar.searchMore(Math.max(0, searchResults.total - searchResults.results.length))}
-                  </p>
-                ) : null}
-              </>
-            )}
-        </div>
-      )}
 
       <div className="side-scroll">
         <div className="side-label side-label-row">
@@ -770,7 +525,7 @@ export function Sidebar({
                       narrow column each time the row's actions appear. */}
                   {foldedPage ? <div className="side-project-rule">{TEXT.sidebar.pageRule(PAGE_SIZE)}</div> : null}
                   {sessions.length === 0
-                    ? <div className="side-empty">{narrowingActive ? TEXT.sidebar.noMatch : TEXT.sidebar.noTasks}</div>
+                    ? <div className="side-empty">{TEXT.sidebar.noTasks}</div>
                     : sessionList(project.id, sessions)}
                 </>
               ) : null}
@@ -784,7 +539,7 @@ export function Sidebar({
             user filed anything. */}
         <div className="side-label side-label-spaced">{TEXT.sidebar.recent}</div>
         {recent.length === 0 ? (
-          <div className="side-empty">{narrowingActive ? TEXT.sidebar.noMatch : TEXT.sidebar.noRecent}</div>
+          <div className="side-empty">{TEXT.sidebar.noRecent}</div>
         ) : (
           <div className="side-flat">{sessionList("recent", recent)}</div>
         )}
@@ -844,6 +599,30 @@ export function Sidebar({
       ) : null}
 
       <RowMenu menu={menu} onClose={() => setMenu(undefined)} />
-    </aside>
+      </aside>
+
+      {searchOpen && onSearch !== undefined ? (
+        <SearchDialog
+          error={searchError}
+          kind={searchKind}
+          onClose={() => {
+            setSearchOpen(false);
+            setSearchKind("all");
+            onSearch("");
+          }}
+          onKind={setSearchKind}
+          onPick={(result) => {
+            setSearchOpen(false);
+            onSearchOpen?.(result);
+          }}
+          onQuery={(query) => {
+            onSearch(query);
+          }}
+          onRetry={() => onSearch(searchQuery.trim())}
+          query={searchQuery}
+          results={searchResults}
+        />
+      ) : null}
+    </>
   );
 }

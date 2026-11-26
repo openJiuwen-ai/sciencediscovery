@@ -387,6 +387,10 @@ export interface WorkbenchSearchResult {
   sessionTitle?: string;
   archived?: boolean;
   origin?: ArtifactOrigin;
+  /** When this row last changed, so a client can order a group newest first:
+   *  a Session's own stamp, an artifact's, or — for a Project — the stamp of
+   *  the newest Session inside it. The route promises no order of its own. */
+  updatedAt?: string;
 }
 
 export interface WorkbenchSearchResponse {

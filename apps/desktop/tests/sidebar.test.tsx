@@ -73,78 +73,18 @@ test("a project lists its sessions most recently used first", () => {
   assert.ok(markup.indexOf("较新的会话") < markup.indexOf("较早的会话"));
 });
 
-test("the resting column offers 搜索 as a row, and no field until it is asked for", () => {
-  const resting = render({ onSearch: () => {}, recent: [session("s1", "结构比对")] });
-  assert.match(resting, /class="side-new side-search-entry"/, "the entry is a row like 新建会话");
-  assert.match(resting, />搜索</, "carrying the word 搜索");
-  assert.doesNotMatch(resting, /type="search"/, "and no field is drawn until it is clicked");
+test("the title row carries the 搜索 magnifier, and the column spends no row on it", () => {
+  const markup = render({ onSearch: () => {}, recent: [session("s1", "结构比对")] });
+  const button = markup.indexOf('class="side-head-button"');
+  assert.ok(button >= 0, "the magnifier is missing from the title row");
+  assert.match(markup.slice(Math.max(0, button - 240), button + 240), /aria-label="搜索"/u, "it is named for a screen reader");
+  assert.doesNotMatch(markup, /side-search-entry/, "the old 搜索 row is gone");
+  assert.doesNotMatch(markup, /type="search"/, "and no field is drawn in the column at all");
+  assert.doesNotMatch(markup, /search-panel/, "the dialog is not part of the resting markup");
 
   // A column rendered without a workspace has nothing to search.
   const bare = render({ recent: [session("s1", "结构比对")] });
-  assert.doesNotMatch(bare, /side-search/);
-});
-
-function hit(kind: "project" | "session" | "artifact", label: string, over: Record<string, unknown> = {}) {
-  return { detail: "", id: `${kind}-1`, kind, label, projectId: "p1", ...over };
-}
-
-function results(list: unknown[], over: Record<string, unknown> = {}) {
-  return { hasMore: false, limit: 20, offset: 0, results: list, total: list.length, ...over } as never;
-}
-
-test("results are drawn in the fixed 项目 → 会话 → 产物 order, and an archived hit is not drawn", () => {
-  const markup = render({
-    onSearch: () => {},
-    searchQuery: "本周",
-    searchResults: results([
-      hit("artifact", "figure.png", { projectName: "材料", sessionId: "s9", sessionTitle: "本周实验" }),
-      hit("session", "本周实验", { archived: true, projectName: "材料" }),
-      hit("project", "材料"),
-    ]),
-  });
-  // The headings are the ones inside the results block, not the column's own
-  // 项目 / 会话 section labels.
-  const heading = (name: string) => markup.indexOf(`side-search-heading">${name}<`);
-  const [project, session, artifact] = [heading("项目"), heading("会话"), heading("产物")];
-  assert.ok(project >= 0 && session >= 0 && artifact >= 0, "a result group is missing");
-  assert.ok(project < session && session < artifact, "the groups are not in 项目 → 会话 → 产物 order");
-
-  assert.doesNotMatch(markup, /side-search-badge/, "an archived hit is filtered before it is drawn");
-  assert.match(markup, /本周实验/u, "a result label is drawn");
-  assert.match(markup, /材料 · 本周实验/u, "the artifact's detail names its Project and Session");
-});
-
-test("an empty answer, a failure and the rest of the list each say their own thing", () => {
-  const empty = render({ onSearch: () => {}, searchQuery: "晶", searchResults: results([]) });
-  assert.match(empty, /没有匹配「晶」/u);
-  assert.match(empty, /名称与标题/u, "the empty state says what is searched, where the caption used to");
-
-  const failed = render({ onSearch: () => {}, searchError: "boom", searchQuery: "晶", searchResults: undefined });
-  assert.match(failed, /class="side-search-note is-error" role="alert">boom</u);
-
-  const more = render({ onSearch: () => {}, searchQuery: "晶", searchResults: results([hit("project", "材料")], { hasMore: true, total: 41 }) });
-  assert.match(more, /还有 40 条结果/u, "the note counts the hits still unseen, not every hit the route mentions");
-});
-
-test("a column with no workspace draws no results either", () => {
-  const markup = render({ searchQuery: "晶", searchResults: results([hit("project", "材料")]) });
-  assert.doesNotMatch(markup, /side-search-results/, "no field means no list under it");
-});
-
-test("the search field names only itself, with no caption under it", () => {
-  const markup = render({ onSearch: () => {}, searchQuery: "结构" });
-  const from = markup.indexOf('class="side-search-field"');
-  assert.ok(from >= 0, "the field is missing");
-  // From the start of the tag, so the attributes written before the class name
-  // (aria-label) are in view as well.
-  const start = markup.lastIndexOf("<input", from);
-  const tag = markup.slice(start, markup.indexOf(">", from) + 1);
-  // One word, the field's own name — not a sentence about what a search box does.
-  assert.match(tag, /placeholder="搜索"/u);
-  assert.match(tag, /aria-label="搜索"/u, "it is still named for a screen reader");
-  assert.doesNotMatch(tag, /title=/, "the removed caption does not come back as a tooltip");
-  assert.doesNotMatch(markup, /side-search-hint/, "no explanatory caption is drawn under the field");
-  assert.equal(EN.sidebar.searchPlaceholder, "Search", "and the English field is one word too");
+  assert.doesNotMatch(bare, /side-head-button/);
 });
 
 test("a session row carries the double-click rename as its own tooltip", () => {

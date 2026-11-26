@@ -1610,7 +1610,6 @@ export function App({ initialToken }: Props) {
             projects={state.projects}
             recent={state.recent}
             running={state.running}
-            narrowing={state.narrowing}
             searchError={state.searchError}
             searchQuery={state.searchQuery}
             searchResults={state.searchResults}
