@@ -234,6 +234,9 @@ export function Sidebar({
   const [narrowMenu, setNarrowMenu] = useState(false);
 
   useEffect(() => {
+    // The shortcut is bound to the window, and a renderer that has none (the
+    // component tests render on react-test-renderer) has nothing to bind to.
+    if (typeof document === "undefined") return;
     // The palette shortcut every editor uses: Cmd+K on macOS, Ctrl+K elsewhere.
     // It opens the search first — the row has no input to focus — and the effect
     // below puts the caret in the field the click just mounted.
