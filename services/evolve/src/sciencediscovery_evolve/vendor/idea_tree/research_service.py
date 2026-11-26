@@ -101,8 +101,23 @@ def state_for(project, session, identifier):
 
 
 def settle_after_restart(state):
-    """The restart verdict for one research: interrupted, its activities closed."""
-    state.update(status='interrupted', reason=RESTART_REASON)
+    """The restart verdict for one research, its activities closed.
+
+    A stop the user requested while the run was in flight is persisted as
+    `pendingStop`, because the engine that would have settled it died with the
+    process. That request outranks the crash verdict (#1464): `end` restores the
+    research as `ended`, so continuing it stays refused, and `pause` as the
+    `paused` the user asked for. Without the mark a `running`/`pausing` record
+    is an interrupted run, which is also how records written before the mark
+    existed are read.
+    """
+    pending = state.pop('pendingStop', None)
+    if pending == 'end':
+        state.update(status='ended', reason='Ended by user')
+    elif pending == 'pause':
+        state.update(status='paused', reason='Paused by user')
+    else:
+        state.update(status='interrupted', reason=RESTART_REASON)
     for activity in state.get('activities', []):
         if activity.get('status') == 'running':
             activity.update(status='stopped', finishedAt=now(), error='Service restarted')
@@ -225,8 +240,14 @@ async def command(c: Command):
             active = _running.get(s['id'])
             if active:
                 active[0].stop_action = c.operation
+                # The engine still owns the settle, so the runtime status stays
+                # `pausing` and the SSE stream keeps running. Persisting the request
+                # is what lets a restart before that settle report the user's own
+                # verdict instead of folding it into `interrupted` (#1464).
+                s['pendingStop'] = c.operation
                 s['status'] = 'pausing'
             else:
+                s.pop('pendingStop', None)
                 s.update(status='ended' if c.operation == 'end' else 'paused', reason='Ended by user' if c.operation == 'end' else 'Paused by user')
             store().save(s)
         else:

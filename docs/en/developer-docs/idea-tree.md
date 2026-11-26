@@ -32,8 +32,10 @@ score.
 Pausing does not cancel a model request that has already been sent. The panel first
 shows **Pausing**, then **Paused** after the in-flight response finishes. The in-flight
 call can still incur usage, but it does not start the next stage. Resuming always
-requires an explicit user action. After a process restart, research is **Interrupted**
-and does not resume automatically. Stopping requires confirmation, retains existing
+requires an explicit user action. After a process restart, a research that was still
+running is **Interrupted** and does not resume automatically; a stop the user requested
+before the restart is kept, so an ended research comes back **Ended** (continuing stays
+refused) and a paused one **Paused**. Stopping requires confirmation, retains existing
 results, and cannot be reversed by resuming.
 
 ## Implementation and state
