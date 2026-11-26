@@ -201,6 +201,68 @@ test("a review card written by the running turn waits for that turn's answer", (
   assert.match(started, /data-testid="review-card-running"/);
 });
 
+test("a card written before the first question keeps its place at the head", () => {
+  // There is no turn for it to move after: the boundary rule only carries a
+  // held checkpoint to the next question, and one already above the first
+  // question stays there.
+  const markup = render({
+    detail: detail([
+      checkpointMessage("review-head", "2025-12-31T23:59:00.000Z"),
+      message("question-a", "user", "QUESTION-A"),
+      message("answer-a", "assistant", "ANSWER-A"),
+    ]),
+  });
+  const card = markup.indexOf('data-testid="review-card"');
+  assert.notEqual(card, -1);
+  assert.ok(card < markup.indexOf("QUESTION-A"));
+});
+
+test("two cards written in one turn both follow its answer, in the order they were written", () => {
+  const markup = render({
+    detail: detail([
+      message("question-a", "user", "QUESTION-A"),
+      checkpointMessage("review-one", "2026-01-01T00:00:01.000Z"),
+      checkpointMessage("review-two", "2026-01-01T00:00:02.000Z"),
+      message("answer-a", "assistant", "ANSWER-A"),
+      message("question-b", "user", "QUESTION-B"),
+    ]),
+  });
+  const first = markup.indexOf('data-testid="review-card"');
+  const second = markup.indexOf('data-testid="review-card"', first + 1);
+  assert.notEqual(first, -1);
+  assert.notEqual(second, -1);
+  assert.ok(markup.indexOf("ANSWER-A") < first);
+  assert.ok(second < markup.indexOf("QUESTION-B"));
+});
+
+test("a card whose write time cannot be read is drawn rather than hidden", () => {
+  // The live-turn hold compares the checkpoint's stamp with the run's start.
+  // An unreadable or missing stamp cannot prove the card belongs to the
+  // running turn, and losing a review is worse than drawing it a turn early,
+  // so the comparison fails open.
+  const unreadable = render({
+    detail: detail([message("question-a", "user", "QUESTION-A"), checkpointMessage("review-unreadable", "not-a-timestamp")]),
+    run: {
+      ...answered("run-live", "THOUGHT-LIVE", "ANSWER-LIVE"),
+      startedAt: Date.parse("2026-01-01T00:00:05.000Z"),
+      terminal: false,
+    },
+  });
+  assert.match(unreadable, /data-testid="review-card"/);
+
+  const missing = checkpointMessage("review-missing", "");
+  delete (missing as { createdAt?: string }).createdAt;
+  const unstamped = render({
+    detail: detail([message("question-a", "user", "QUESTION-A"), missing]),
+    run: {
+      ...answered("run-live", "THOUGHT-LIVE", "ANSWER-LIVE"),
+      startedAt: Date.parse("2026-01-01T00:00:05.000Z"),
+      terminal: false,
+    },
+  });
+  assert.match(unstamped, /data-testid="review-card"/);
+});
+
 test("a card from an earlier turn is drawn while the next turn streams", () => {
   // Only what the live run wrote is held. A card the coordinator wrote after
   // the previous turn belongs to that turn and is readable at once.

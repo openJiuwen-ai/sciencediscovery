@@ -299,6 +299,19 @@ describe("a review's rows", () => {
     assert.ok(noComparisonRow);
     assert.equal(noComparisonRow.body, TEXT.reviewer.deepGapBodies.noComparison);
 
+    // The producer writes only `completed` or `inconclusive` once the stage
+    // runs; a record with neither has no Deep result attached. "Nothing was
+    // compared" is still the truthful outcome there, and the alternative — the
+    // Quick pass's sentence — is the contradiction this row exists to remove.
+    const unstaged = review({
+      notChecked: [{ check: "claim_support", reason: "Quick review parses citation format only." }],
+      reviewLevel: "deep",
+    });
+    assert.equal(
+      reviewRows(unstaged).find((row) => row.id === "review-1:gap:0")?.body,
+      TEXT.reviewer.deepGapBodies.noComparison,
+    );
+
     // Only the claim-support gap changes; a gap the Deep stage did not touch
     // keeps the wording that says which check was skipped.
     const computation = review({
