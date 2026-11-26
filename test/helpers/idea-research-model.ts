@@ -33,7 +33,7 @@ export async function ideaResearchModel() {
       const handedOff = body.messages.slice(latestUserIndex + 1).some((m: any) => m.role === 'tool');
       const objective = typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content);
       const action = !handedOff;
-      const message = action ? {role: 'assistant', tool_calls: [{index: 0, id: 'create-research', type: 'function', function: {name: 'create_idea_research', arguments: JSON.stringify({objective, materials: 'User supplied: near-neutral water, recovery and leaching matter. Retrieval explicitly skipped for this demo.'})}}]} : {role: 'assistant', content: '已启动 Idea Tree 研究，请查看树卡片。'};
+      const message = action ? {role: 'assistant', tool_calls: [{index: 0, id: 'create-research', type: 'function', function: {name: 'create_idea_research', arguments: JSON.stringify({objective, materials: 'User supplied: near-neutral water, recovery and leaching matter. Retrieval explicitly skipped for this demo.'})}}]} : {role: 'assistant', content: '已启动研究思路树，请查看研究思路树卡片。'};
       reply(message, action ? "tool_calls" : "stop");
       return;
     }

@@ -4611,7 +4611,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           const result = await ideaResearch.command(sid, operation, input);
           if (operation === "create" && typeof input.content === "string") {
             await store.appendMessage(sid, "user", input.content);
-            await store.appendMessage(sid, "assistant", `已启动 Idea Tree 研究（${result.research.id}）。Python 引擎正在后台执行构思、设计、独立评估和迭代。请在 Idea Tree 卡片查看实时进度，也可以稍后询问研究结果。`);
+            await store.appendMessage(sid, "assistant", `已启动研究思路树（${result.research.id}）。Python 引擎正在后台执行构思、设计、独立评估和迭代。请在研究思路树卡片查看实时进度，也可以稍后询问研究结果。`);
           }
           sendJson(response, 200, result);
         }
