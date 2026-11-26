@@ -2550,11 +2550,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     [client],
   );
 
-  // The clock the time window is measured against, to the minute. A frozen
-  // `now` inside the memo would keep "today" pinned to whenever the last
-  // dependency changed; bucketing to the minute keeps the memo useful and the
-  // window honest, with at most a minute of lag after midnight.
-
   // What the sidebar lists: the raw listing keeps the drafts as well, because
   // 新建会话 reuses one and a draft is what a new Project opens on, but a
   // Session nobody has written in is not a row the reader asked for.

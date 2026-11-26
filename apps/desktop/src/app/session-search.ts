@@ -161,8 +161,6 @@ function newestFirst(results: readonly WorkbenchSearchResult[]): WorkbenchSearch
   return [...results].sort((left, right) => at(right) - at(left));
 }
 
-/** The dialog's rows: 全部 groups every kind, a kind shows only itself, and
- *  every group is newest first. */
 /**
  * The route's answer with the rule a search keeps: an archived Session is not
  * searchable, and neither are its artifacts, while an imported read-only snapshot
@@ -185,6 +183,8 @@ export function withoutArchivedHits(
   return { answer: { ...answer, results, total: answer.total - dropped }, dropped };
 }
 
+/** The dialog's rows: 全部 groups every kind, a kind shows only itself, and
+ *  every group is newest first. */
 export function groupsFor(
   results: readonly WorkbenchSearchResult[],
   kind: "all" | WorkbenchSearchResultKind,
