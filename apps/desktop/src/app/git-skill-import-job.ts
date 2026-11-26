@@ -227,11 +227,11 @@ export async function resumeGitSkillImport(api: ApiClient): Promise<void> {
   if (current !== undefined) return;
   const id = rememberedJob();
   if (id === undefined) return;
-  client = api;
   try {
     const job = await getGitSkillImportJob(api, id);
     // A foreground start may have won the race while the read was in flight.
     if (current !== undefined) return;
+    client = api;
     consecutiveFailures = 0;
     current = job;
     emit();
@@ -244,6 +244,10 @@ export async function resumeGitSkillImport(api: ApiClient): Promise<void> {
     // package that stayed off waits until it is dismissed.
     await enableCreatedSkills(api, job);
   } catch (reason) {
+    // A foreground start may have installed its own job and client while the
+    // read was in flight. That owner keeps both: clearing them here would
+    // leave a running job with no client to read it.
+    if (current !== undefined) return;
     client = undefined;
     // A job the API no longer knows is gone for good. Any other failure (the
     // API is still starting) keeps the id for the next mount.
