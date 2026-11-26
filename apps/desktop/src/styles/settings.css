@@ -1475,7 +1475,6 @@ a.secondary-button {
   font: inherit;
   font-size: 12.5px;
   text-align: left;
-  text-decoration: none;
 }
 .skill-row-menu-item:hover { background: var(--surface-hover); color: var(--text-strong); }
 .skill-row-menu-item.is-danger { color: var(--danger); }
