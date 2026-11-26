@@ -2,7 +2,7 @@
 
 [中文](../../zh/advanced-setup/configure-custom-mcp.md) | [REST API](../reference/rest-api.md)
 
-This guide covers custom MCP management in system settings. Existing built-in sources remain available in their own tab and do not need to be added again.
+This guide covers custom MCP management in system settings. On desktop, All MCP, My MCP and Official MCP tabs filter the catalog; built-in sources do not need to be added again. Search matches names and descriptions.
 
 > **Release availability:** Custom MCP server management is available in 0.3.0-beta and later builds. It is not included in the 0.2.0 release: that version has neither the **MCP servers** settings page nor the `/api/mcp/servers` routes described below. Upgrade before following this guide.
 
@@ -14,11 +14,11 @@ This guide covers custom MCP management in system settings. Existing built-in so
 
 ## Add and manage a server
 
-1. In the desktop UI, open **Settings → MCP servers → Add server → Manual entry** using the dark header menu. In the Web UI, open system settings, select **MCP servers → Custom**, and choose **Add server**.
+1. In the desktop UI, open **Settings → MCP servers → Add MCP server → Manual entry** using the dark header menu. In the Web UI, open system settings, select **MCP servers → Custom**, and choose **Add server**.
 2. Enter a name and optional description, select a transport, and complete its fields.
 3. Set **Tool timeout (seconds)**. The default is 60, with an allowed integer range of 1-600. This timeout cannot be disabled.
-4. The enable checkbox controls the entire server and is unchecked for a new configuration. The desktop list's **Enable service** switch and the edit checkbox update the same saved value. **Use by default** is a separate checkbox for session source selection: selecting a default does not enable a disabled server. Bulk default selection does not change service enablement. The Web UI also has an enable toggle in the list.
-5. In the desktop UI, creation automatically tests the connection and shows the result in the dialog. Choose **Done** to return to the list. A saved server's chevron menu provides **Tools**, **Test**, **Edit**, **Delete** and applicable OAuth actions, matching the Skills menu style. In the Web UI, expand the server and select **Test connection** to see the discovered tools, descriptions and input schemas. If a test fails, correct the configuration and retry.
+4. The **Enable service** switch at the bottom of the desktop create/edit form controls the entire server and starts off for a new configuration. The custom card, details and edit switches update the same saved value. **Use by default** is a separate switch in details: selecting a default does not enable a disabled server. **Enable all / Disable all** affect only currently visible custom servers and do not change session defaults. Built-in card switches control default selection, not service enablement. The Web UI retains its own list enable control.
+5. On desktop, choose **Confirm add** to save; the dialog closes and a single-server creation checks the connection. A failed check does not undo the saved configuration. Use **Test** on the card or in its details footer to retry. Click a card to read configuration and tools or manage OAuth. Its **⋮** menu offers **Try it**, **Edit** and **Delete**; built-in menus offer only **Try it**. Try it opens a new conversation with this source and the current model, without sending a message or granting extra permission. In the Web UI, expand the server and select **Test connection** to inspect discovered tools, descriptions and input schemas.
 
 | Transport | Fields |
 |---|---|
@@ -32,7 +32,7 @@ Testing a disabled server does not enable it, but STDIO testing does start the c
 
 ### Import JSON
 
-On desktop, choose **Add server → Import JSON**. Paste JSON into the dialog or choose **Upload JSON file** to read a UTF-8 `.json` file (maximum 1.5 MB). Upload fills the JSON and generates the preview automatically; inspect it and choose **Import servers** to save. Selecting a file does not save a server. The Web UI retains **Import JSON**. Provide a `mcpServers` object, for example:
+On desktop, choose **Add MCP server → Import JSON**. Paste JSON or choose **Upload JSON file** to read UTF-8 JSON (BOM accepted, maximum 1.5 MB). JSON fills the ordinary editable configuration form; for multiple servers, switch between their configurations to review each one. Choose **Confirm add** or **Add N servers** to save them through the normal per-server save route. Selecting a file or editing JSON alone saves nothing. Text editing keeps its caret in the JSON editor; file upload moves focus to the filled form. There is no separate import-preview confirmation or Done step. The Web UI retains **Import JSON**. Provide a `mcpServers` object, for example:
 
 ```json
 {
@@ -75,6 +75,8 @@ Tokens are stored and refreshed by the backend. Do not paste them into the local
 Registration policies, scopes, callback allowlists and account permissions differ between providers. OAuth support does not imply universal zero-configuration compatibility.
 
 ## Test tools with Inspector
+
+The following Inspector workflow is available in the Web UI. Desktop details provide the tool preview; use **Try it** to open a conversation for agent-driven calls.
 
 1. Open a Session in a Project, enable the MCP server and discover its tools with Test connection.
 2. Expand its details and open **MCP Inspector**. Check the associated Session.

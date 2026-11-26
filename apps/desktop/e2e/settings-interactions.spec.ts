@@ -486,7 +486,7 @@ test.describe("MCP 服务器", () => {
     await journey.step("Test the saved connection", "The server can be tested without changing which sources sessions use by default.", async () => {
       const card = settings.locator(".settings-card").filter({ hasText: "Local Echo" });
       await card.getByRole("button", { name: "测试", exact: true }).click();
-      await expect(page.locator(".toast-success").filter({ hasText: "连接测试成功" })).toBeVisible();
+      await expect(page.locator(".toast-info").filter({ hasText: "连接测试成功" })).toBeVisible();
       await expect(card.getByRole("switch", { name: "Local Echo · 启用服务" })).not.toBeChecked();
       expect(mock.state.mcpServers[0]?.enabled).toBe(false);
     });
@@ -537,7 +537,7 @@ test.describe("MCP 服务器", () => {
     const card = dialog.locator(".settings-card").filter({ hasText: "检索服务" });
 
     await card.getByRole("button", { name: "测试" }).click();
-    await expect(page.locator(".toast-success").filter({ hasText: "连接测试成功" })).toBeVisible();
+    await expect(page.locator(".toast-info").filter({ hasText: "连接测试成功" })).toBeVisible();
     expect(mock.calls.some((call) => call.method === "POST" && call.path === "/api/mcp/servers/mcp-1/test")).toBe(
       true,
     );
