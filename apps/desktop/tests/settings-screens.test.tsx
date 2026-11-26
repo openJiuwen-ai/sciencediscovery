@@ -243,7 +243,7 @@ describe("the server-backed settings panes", () => {
 
     // The explanation belongs to the page rather than to the data, so it is
     // there while the read is still running.
-    assert.ok(markup.includes(TEXT.settings.system.mcp.help));
+    assert.ok(markup.includes(TEXT.settings.system.groups.mcp.description));
     assert.ok(markup.includes(TEXT.settings.loading));
     assert.ok(!markup.includes(TEXT.settings.system.mcp.empty));
   });

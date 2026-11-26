@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { ConnectorId } from "@sciencediscovery/schema";
 import { useMcpDiscoveryRefresh } from "@sciencediscovery/configuration-ui";
@@ -23,7 +23,6 @@ import {
   clearMcpAuthorization,
   deleteMcpServer,
   getGlobalSettings,
-  importMcpServers,
   listMcpServers,
   listMcpSources,
   putGlobalSettings,
@@ -33,7 +32,6 @@ import {
 } from "../../../api/settings.js";
 import type {
   CustomMcpServerDetails,
-  CustomMcpServerInput,
   McpSource,
   RuntimeSettingsOverrides,
 } from "../../../api/types.js";
@@ -41,13 +39,16 @@ import type { ConfirmRequest, Toast } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { writeSettingsCache } from "../../../app/settings-cache.js";
 import { TEXT } from "../../../text.js";
-import { SettingsModal } from "../SettingsModal.js";
+import { McpModal } from "../McpModal.js";
 import { McpAddMenu } from "../McpAddMenu.js";
-import { McpRowMenu, type McpRowAction } from "../McpRowMenu.js";
-import { Group, LoadGate, Row, Select, Switch, Tag } from "../rows.js";
+import { draftOf, emptyDraft, inputOf, parseMcpDrafts, draftProblem, secretProblem, type Draft, type SecretRow } from "../mcp-config.js";
+import { McpServerCard } from "../McpServerCard.js";
+import { McpServerDetails } from "../McpServerDetails.js";
+import { Group, LoadGate, Row, Select, Switch } from "../rows.js";
 
 interface Props {
   client: ApiClient;
+  onTry?: (id: string) => Promise<void>;
   onConfirm: (request: ConfirmRequest) => void;
   onToast: (message: string, tone?: Toast["tone"]) => void;
 }
@@ -63,141 +64,6 @@ interface Page {
   enabledConnectorIds: ConnectorId[];
 }
 
-/** One secret slot. A saved key keeps `originalKey` and an empty value, which
- *  the server reads as "keep the stored secret"; typing a value replaces it. */
-interface SecretRow {
-  key: string;
-  originalKey?: string;
-  value: string;
-}
-
-interface OauthDraft {
-  clientId: string;
-  clientMetadataUrl: string;
-  clientSecret: string;
-  scope: string;
-}
-
-interface Draft {
-  args: string;
-  authMode: NonNullable<CustomMcpServerInput["authMode"]>;
-  command: string;
-  cwd: string;
-  description: string;
-  enabled: boolean;
-  envRows: SecretRow[];
-  headerRows: SecretRow[];
-  id?: string;
-  name: string;
-  oauth: OauthDraft;
-  originalArgs?: string[];
-  savedOauthSecret: boolean;
-  timeoutSeconds: string;
-  transport: CustomMcpServerInput["transport"];
-  url: string;
-}
-
-function emptyDraft(): Draft {
-  return {
-    args: "",
-    authMode: "headers",
-    command: "",
-    cwd: "",
-    description: "",
-    enabled: false,
-    envRows: [],
-    headerRows: [],
-    name: "",
-    oauth: { clientId: "", clientMetadataUrl: "", clientSecret: "", scope: "" },
-    savedOauthSecret: false,
-    timeoutSeconds: "60",
-    transport: "http",
-    url: "",
-  };
-}
-
-function rowsFrom(map: Record<string, null>): SecretRow[] {
-  return Object.keys(map).map((key) => ({ key, originalKey: key, value: "" }));
-}
-
-function draftOf(server: CustomMcpServerDetails): Draft {
-  return {
-    args: server.args.join("\n"),
-    originalArgs: server.args,
-    authMode: server.authMode ?? "headers",
-    command: server.command,
-    cwd: server.cwd,
-    description: server.description,
-    enabled: server.enabled,
-    envRows: rowsFrom(server.env),
-    headerRows: rowsFrom(server.headers),
-    id: server.id,
-    name: server.name,
-    oauth: {
-      clientId: server.oauth?.clientId ?? "",
-      clientMetadataUrl: server.oauth?.clientMetadataUrl ?? "",
-      clientSecret: "",
-      scope: server.oauth?.scope ?? "",
-    },
-    savedOauthSecret: server.oauth?.clientSecret === null,
-    timeoutSeconds: String(server.timeoutSeconds),
-    transport: server.transport,
-    url: server.url,
-  };
-}
-
-/** `null` keeps a saved secret; a typed value replaces it. An unchanged key
- *  therefore never has to resend the secret it never saw. */
-function secretMap(rows: SecretRow[]): Record<string, string | null> {
-  return Object.fromEntries(rows.map((row) => {
-    const key = row.key.trim();
-    const keep = row.value === "" && row.originalKey === key;
-    return [key, keep ? null : row.value];
-  }));
-}
-
-/** The server rejects a renamed key without a value, and a duplicate or blank
- *  key; catching it here names the row instead of failing the whole write. */
-function secretProblem(rows: SecretRow[]): string | undefined {
-  const keys = rows.map((row) => row.key.trim());
-  if (keys.some((key) => key === "")) return TEXT.settings.system.mcp.secretKeyEmpty;
-  if (new Set(keys).size !== keys.length) return TEXT.settings.system.mcp.secretKeyDuplicate;
-  if (rows.some((row) => row.originalKey !== undefined && row.originalKey !== row.key.trim() && row.value === "")) {
-    return TEXT.settings.system.mcp.secretRenameRequired;
-  }
-  return undefined;
-}
-
-function inputOf(draft: Draft): CustomMcpServerInput {
-  const stdio = draft.transport === "stdio";
-  // Preserve legacy empty arguments when only other fields are edited.
-  const args = draft.originalArgs?.join("\n") === draft.args
-    ? draft.originalArgs
-    : draft.args.split(/\r?\n/).filter((line) => line.length > 0);
-  return {
-    args,
-    authMode: stdio ? "headers" : draft.authMode,
-    command: draft.command.trim(),
-    cwd: draft.cwd.trim(),
-    description: draft.description.trim(),
-    enabled: draft.enabled,
-    env: stdio ? secretMap(draft.envRows) : {},
-    headers: stdio ? {} : secretMap(draft.headerRows),
-    name: draft.name.trim(),
-    ...(stdio ? {} : {
-      oauth: {
-        ...draft.oauth,
-        clientSecret: draft.oauth.clientSecret === "" && draft.savedOauthSecret
-          ? null
-          : draft.oauth.clientSecret,
-      },
-    }),
-    timeoutSeconds: Number(draft.timeoutSeconds),
-    transport: draft.transport,
-    url: draft.url.trim(),
-  };
-}
-
 const STATUS_TONE: Record<CustomMcpServerDetails["status"], string> = {
   disabled: "off",
   error: "warn",
@@ -205,64 +71,7 @@ const STATUS_TONE: Record<CustomMcpServerDetails["status"], string> = {
   untested: "off",
 };
 
-/** One server from an import spec, as the page lists it before and after writing. */
-interface ImportEntry {
-  name: string;
-  transport: string;
-  target: string;
-}
-
-/** What one import write did: the name it came in as, and its own outcome. */
-interface ImportOutcome extends ImportEntry {
-  ok: boolean;
-  message?: string;
-}
-
-/**
- * Read a `{ "mcpServers": { … } }` spec.
- *
- * The route accepts exactly that shape, so the page parses it here: a spec the
- * page cannot read is named before anything is written, and each entry keeps the
- * name it arrived under so the outcome list can name it.
- */
-function readSpec(text: string): { entries: ImportEntry[]; error?: string } {
-  const text_ = TEXT.settings.system.mcp;
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return { entries: [], error: text_.importInvalidJson };
-  }
-  const servers = (value as { mcpServers?: unknown } | null)?.mcpServers;
-  if (servers === null || typeof servers !== "object" || Array.isArray(servers)) {
-    return { entries: [], error: text_.importNoServers };
-  }
-  const configs = Object.entries(servers as Record<string, unknown>);
-  if (configs.length > 50) return { entries: [], error: text_.importTooMany };
-  const entries: ImportEntry[] = [];
-  for (const [name, raw] of configs) {
-    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-      return { entries: [], error: text_.importBadEntry(name) };
-    }
-    const config = raw as { command?: unknown; transport?: unknown; type?: unknown; url?: unknown };
-    // The route decides the transport as `transport ?? type ?? (url ? http : stdio)`
-    // and folds the streamable-HTTP aliases onto http; the preview has to read the
-    // spec the same way, or it describes a different server than the one written.
-    const declared = typeof config.transport === "string"
-      ? config.transport
-      : typeof config.type === "string" ? config.type : undefined;
-    const alias = declared === "streamable_http" || declared === "streamable-http" ? "http" : declared;
-    const transport = alias ?? (typeof config.url === "string" && config.url !== "" ? "http" : "stdio");
-    // The address shown is the one the resolved transport uses: a stdio entry
-    // launches its command, anything else is reached at its URL.
-    const command = typeof config.command === "string" ? config.command : "";
-    const url = typeof config.url === "string" ? config.url : "";
-    const target = transport === "stdio" ? command : url;
-    entries.push({ name, target, transport });
-  }
-  if (entries.length === 0) return { entries: [], error: text_.importNoServers };
-  return { entries };
-}
+interface ImportEntry { draft: Draft; saved?: boolean; error?: string; }
 
 /** Both the custom-server statuses and the catalog statuses are fixed
  *  vocabularies; only the ones this screen can show are translated, and an
@@ -287,8 +96,13 @@ function catalogTone(status: string): string {
   return "warn";
 }
 
-function initialOf(name: string): string {
-  return name.slice(0, 1).toUpperCase();
+function testProblem(server: CustomMcpServerDetails): string | undefined {
+  if (server.error) return server.error;
+  if (server.authorization && server.authorization.state !== "authorized") {
+    return server.authorization.state === "expired"
+      ? TEXT.settings.system.mcp.authorizationExpired : TEXT.settings.system.mcp.unauthorized;
+  }
+  return server.status === "ready" || server.status === "disabled" ? undefined : statusLabel(server.status);
 }
 
 /**
@@ -297,7 +111,7 @@ function initialOf(name: string): string {
  * 内置来源和自定义 MCP 都通过全局 `enabledConnectorIds` 管理是否默认选用；
  * 自定义服务的连接状态仍由各自的 `enabled` 字段控制，二者相互独立。
  */
-export function McpServers({ client, onConfirm, onToast }: Props) {
+export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
   const loaded = useLoaded<Page>(async () => {
     const [servers, sources, settings] = await Promise.all([
       listMcpServers(client),
@@ -312,8 +126,14 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
       enabledConnectorIds: effective?.enabledConnectorIds ?? ["web"],
     };
   }, { client, key: "mcp-servers" });
+  const errorId = useId();
   const [draft, setDraft] = useState<Draft>();
-  const [openId, setOpenId] = useState<string>();
+  const [detailId, setDetailId] = useState<string>();
+  const detailFocus = useRef<HTMLElement | null>(null);
+  const openDetails = (id: string) => {
+    detailFocus.current = document.activeElement as HTMLElement | null;
+    setDetailId(id);
+  };
   /** The provider URL minted for the row now waiting on consent; kept so a
    *  blocked popup still leaves a way to reach the provider. */
   const [authorizingUrl, setAuthorizingUrl] = useState<{ id: string; url: string }>();
@@ -321,6 +141,13 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
   const [failure, setFailure] = useState<string>();
   const [discovery, setDiscovery] = useState<{ base: Page; servers: CustomMcpServerDetails[] }>();
   const servers = discovery?.base === loaded.value ? discovery?.servers : loaded.value?.custom;
+
+  const [category, setCategory] = useState<"all" | "mine" | "official">("all");
+  const [query, setQuery] = useState("");
+  const matches = (name: string, description: string) => `${name} ${description}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  const visibleServers = (servers ?? []).filter((server) => category !== "official" && matches(server.name, server.description));
+  const visibleBuiltins = (loaded.value?.builtins ?? []).filter((source) => category !== "mine"
+    && matches(source.manifest.displayName || source.manifest.id, source.manifest.description || ""));
 
   useMcpDiscoveryRefresh(client, servers, async (isCurrent) => {
     const base = loaded.value;
@@ -335,122 +162,59 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     }
   });
 
-  useEffect(() => setFailure(undefined), [draft]);
-
-  /** The server just created, with what its first test found: the dialog stays
-   *  open so a wrong command or URL is visible where it was typed. */
-  const [created, setCreated] = useState<{ name: string; tools: string[]; error?: string }>();
   const [importOpen, setImportOpen] = useState(false);
   const importFileInput = useRef<HTMLInputElement>(null);
+  const importedName = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const [importFileName, setImportFileName] = useState<string>();
   const [importText, setImportText] = useState("");
   const [importEntries, setImportEntries] = useState<ImportEntry[]>();
   const [importError, setImportError] = useState<string>();
-  const [outcomes, setOutcomes] = useState<ImportOutcome[]>();
-  const [toolsOpen, setToolsOpen] = useState<string>();
+  const [importIndex, setImportIndex] = useState(0);
+  const [sourceOpen, setSourceOpen] = useState(true);
+  const [populated, setPopulated] = useState(0);
+  useEffect(() => { if (populated > 0) importedName.current?.focus(); }, [populated]);
 
-  /** A new server starts switched off, as an imported one does: it is reached by
-   *  agents only once the user has read its test result and turned it on. */
+  const resetImport = () => {
+    setImportEntries(undefined); setImportError(undefined); setImportText("");
+    setImportFileName(undefined); setImportIndex(0); setSourceOpen(true);
+  };
   const openCreate = () => {
-    setCreated(undefined);
-    setFailure(undefined);
-    setDraft({ ...emptyDraft(), enabled: false });
+    resetImport(); setImportOpen(false); setFailure(undefined);
+    detailFocus.current = document.activeElement as HTMLElement | null;
+    setDraft(emptyDraft());
   };
-
-  /** Edit opens the record's own form: a creation result left on screen belongs
-   *  to the server that was just created, not to the row being edited. */
   const openEdit = (server: CustomMcpServerDetails) => {
-    setCreated(undefined);
-    setFailure(undefined);
-    setDraft(draftOf(server));
+    resetImport(); setImportOpen(false); setFailure(undefined);
+    if (!detailId) detailFocus.current = document.activeElement as HTMLElement | null;
+    setDetailId(undefined); setDraft(draftOf(server));
   };
-
   const openImport = () => {
-    setOutcomes(undefined);
-    setImportEntries(undefined);
-    setImportError(undefined);
-    setImportText("");
-    setImportFileName(undefined);
-    setImportOpen(true);
+    resetImport(); setDraft(undefined); setFailure(undefined); setImportOpen(true);
+    detailFocus.current = document.activeElement as HTMLElement | null;
   };
-
+  const populateImport = (text: string, collapse = false) => {
+    const parsed = parseMcpDrafts(text);
+    setImportText(text); setImportIndex(0); setFailure(undefined);
+    setImportError(text.trim() === "" ? undefined : parsed.error);
+    setImportEntries(parsed.error ? undefined : parsed.drafts.map((draft) => ({ draft })));
+    if (!parsed.error && parsed.drafts.length) {
+      if (collapse) setSourceOpen(false);
+      setPopulated((version) => version + 1);
+    }
+  };
   const loadImportFile = async (file: File) => {
-    if (busy) return;
-    setBusy(true);
-    setImportText("");
-    setImportEntries(undefined);
-    setImportError(undefined);
-    setOutcomes(undefined);
-    setImportFileName(undefined);
+    if (busy || importEntries?.some((entry) => entry.saved)) return;
+    setBusy(true); setImportEntries(undefined); setImportError(undefined);
+    setImportText(""); setImportFileName(undefined); setSourceOpen(true);
     try {
-      // Match the API's ordinary JSON request limit; avoid reading huge files.
-      if (file.size > 1_500_000) {
-        setImportError(TEXT.settings.system.mcp.importFileTooLarge);
-      } else {
+      if (file.size > 1_500_000) setImportError(TEXT.settings.system.mcp.importFileTooLarge);
+      else {
         const text = (await file.text()).replace(/^\uFEFF/, "");
-        const parsed = readSpec(text);
-        setImportFileName(file.name);
-        setImportText(text);
-        setImportEntries(parsed.entries);
-        setImportError(parsed.error);
+        populateImport(text, true); setImportFileName(file.name);
       }
-    } catch {
-      setImportError(TEXT.settings.system.mcp.importFileReadFailed);
-    } finally {
-      setImportOpen(true);
-      setBusy(false);
-    }
-  };
-
-  const previewImport = () => {
-    const parsed = readSpec(importText);
-    setImportEntries(parsed.entries);
-    setImportError(parsed.error);
-    setOutcomes(undefined);
-  };
-
-  /**
-   * Write the spec one server per request.
-   *
-   * The route writes a whole spec or nothing and stops at the first name clash,
-   * which would report one opaque error for a spec of several servers. Sending
-   * each entry on its own gives every server its own outcome and leaves the valid
-   * ones written when one is refused.
-   */
-  const runImport = async () => {
-    if (busy) return;
-    const parsed = importEntries === undefined ? readSpec(importText) : { entries: importEntries, error: importError };
-    if (parsed.error !== undefined || parsed.entries.length === 0) {
-      setImportEntries(parsed.entries);
-      setImportError(parsed.error);
-      return;
-    }
-    let value: unknown;
-    try {
-      value = JSON.parse(importText);
-    } catch {
-      setImportError(TEXT.settings.system.mcp.importInvalidJson);
-      return;
-    }
-    const all = (value as { mcpServers: Record<string, unknown> }).mcpServers;
-    setBusy(true);
-    setImportError(undefined);
-    const results: ImportOutcome[] = [];
-    for (const entry of parsed.entries) {
-      try {
-        await importMcpServers(client, { mcpServers: { [entry.name]: all[entry.name] } });
-        results.push({ ...entry, ok: true });
-      } catch (reason) {
-        results.push({
-          ...entry,
-          message: reason instanceof Error ? reason.message : TEXT.errors.generic,
-          ok: false,
-        });
-      }
-      setOutcomes([...results]);
-    }
-    setBusy(false);
-    loaded.reload();
+    } catch { setImportError(TEXT.settings.system.mcp.importFileReadFailed); }
+    finally { setBusy(false); }
   };
 
   /** Open the provider's page and hand it the URL the route minted.
@@ -491,16 +255,26 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     }
   };
 
-  // Only a saved server opens the form, so there is never an empty draft: the
-  // record being edited is the source of every field.
-  const current = draft;
+  const current = importOpen ? importEntries?.[importIndex]?.draft : draft;
   const editing = current?.id !== undefined;
-  const change = (patch: Partial<Draft>) =>
-    setDraft((previous) => ({ ...(previous ?? emptyDraft()), ...patch }));
-
+  const sourceLocked = importEntries?.some((entry) => entry.saved) ?? false;
+  const pending = importEntries?.filter((entry) => !entry.saved).length ?? 0;
+  useEffect(() => {
+    const t = TEXT.settings.system.mcp;
+    const label = failure === t.nameRequired || failure === t.duplicateName ? t.name
+      : failure === t.commandRequired ? t.command
+        : failure === t.timeoutInvalid ? t.timeout : failure === t.urlInvalid ? t.url : undefined;
+    if (label) Array.from(formRef.current?.querySelectorAll<HTMLElement>("[aria-label]") ?? [])
+      .find((element) => element.getAttribute("aria-label") === label)?.focus();
+  }, [failure, importIndex]);
+  const change = (patch: Partial<Draft>) => {
+    setFailure(undefined);
+    if (importOpen) setImportEntries((entries) => entries?.map((entry, index) => index === importIndex
+      ? { ...entry, draft: { ...entry.draft, ...patch }, error: undefined } : entry));
+    else setDraft((previous) => ({ ...(previous ?? emptyDraft()), ...patch }));
+  };
   const closeForm = () => {
-    setCreated(undefined);
-    setDraft(undefined);
+    setDraft(undefined); setImportOpen(false); resetImport(); setFailure(undefined);
   };
 
   /** Toggle whether a data source is selected by default for new sessions. */
@@ -526,33 +300,31 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     }
   };
 
-  /** Select or clear every visible data source. Only the default selection
-   *  list changes; custom server connection settings are untouched. */
-  const setAllSelected = async (next: boolean) => {
-    const page = loaded.value;
-    if (!page) return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      const ids = new Set([...page.enabledConnectorIds]);
-      for (const source of page.builtins) {
-        if (next) ids.add(source.manifest.id);
-        else ids.delete(source.manifest.id);
-      }
-      for (const server of page.custom) {
-        if (next) ids.add(server.id);
-        else ids.delete(server.id);
-      }
-      await putGlobalSettings(client, {
-        ...page.overrides,
-        enabledConnectorIds: [...ids],
-      });
-      loaded.reload();
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
+  // Use the same serializer as editing: stored secrets and legacy STDIO args survive.
+  const toggleEnabled = async (server: CustomMcpServerDetails) => {
+    if (busy) return;
+    setBusy(true); setFailure(undefined);
+    try { await saveMcpServer(client, inputOf({ ...draftOf(server), enabled: !server.enabled }), server.id); }
+    catch (reason) { setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed); }
+    finally { loaded.reload(); setBusy(false); }
+  };
+  const setAllEnabled = async (enabled: boolean) => {
+    if (busy) return;
+    setBusy(true); setFailure(undefined);
+    const failed: string[] = [];
+    for (const server of visibleServers.filter((item) => item.enabled !== enabled)) {
+      try { await saveMcpServer(client, inputOf({ ...draftOf(server), enabled }), server.id); }
+      catch { failed.push(server.name); }
     }
+    loaded.reload(); setBusy(false);
+    if (failed.length) setFailure(TEXT.settings.system.mcp.bulkFailed(failed.join(", ")));
+  };
+  const tryServer = async (id: string) => {
+    if (busy || !onTry) return;
+    setBusy(true); setFailure(undefined);
+    try { await onTry(id); }
+    catch (reason) { setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic); }
+    finally { setBusy(false); }
   };
 
   /** A server waiting on its consent page settles in the browser, not here: the
@@ -592,51 +364,48 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
   }, [authorizingKey, client, loaded]);
 
   const submit = async (form: HTMLFormElement) => {
-    if (!current || busy) return;
-    // The create form opens with an empty name; saving it says why nothing
-    // happened instead of looking unresponsive.
-    if (current.name.trim() === "") {
-      setFailure(TEXT.settings.system.mcp.nameRequired);
-      return;
-    }
-    const problem = current.transport === "stdio"
-      ? secretProblem(current.envRows)
-      : secretProblem(current.headerRows);
-    if (problem !== undefined) {
-      setFailure(problem);
-      return;
-    }
+    if (!current || busy || importOpen && importError) return;
+    if (current.name.trim() === "") { setFailure(TEXT.settings.system.mcp.nameRequired); return; }
+    const problem = secretProblem(current.transport === "stdio" ? current.envRows : current.headerRows);
+    if (problem) { setFailure(problem); return; }
     if (!form.reportValidity()) return;
-    setBusy(true);
-    setFailure(undefined);
+    // Every hidden batch entry is checked before the first write.
+    if (importOpen && importEntries && importEntries.length > 1) {
+      const names = new Set<string>();
+      for (const [index, entry] of importEntries.entries()) {
+        const duplicate = names.has(entry.draft.name.trim().toLowerCase());
+        names.add(entry.draft.name.trim().toLowerCase());
+        const problem = !entry.saved ? draftProblem(entry.draft) ?? (duplicate ? TEXT.settings.system.mcp.duplicateName : undefined) : undefined;
+        if (problem) { setImportIndex(index); setFailure(problem); return; }
+      }
+      setBusy(true); setFailure(undefined);
+      const results = importEntries.map((entry) => ({ ...entry }));
+      try {
+        for (const entry of results) {
+          if (entry.saved) continue;
+          try { await saveMcpServer(client, inputOf(entry.draft)); entry.saved = true; entry.error = undefined; }
+          catch (reason) { entry.error = reason instanceof Error ? reason.message : TEXT.settings.saveFailed; }
+          setImportEntries([...results]);
+        }
+        loaded.reload();
+        const failed = results.findIndex((entry) => !entry.saved);
+        if (failed < 0) { closeForm(); onToast(TEXT.settings.system.mcp.addedCount(results.length), "success"); }
+        else { setImportIndex(failed); setFailure(results[failed]!.error); onToast(TEXT.settings.system.mcp.importProgress(results.filter((entry) => entry.saved).length, results.length), "error"); }
+      } finally { setBusy(false); }
+      return;
+    }
+    setBusy(true); setFailure(undefined);
     try {
       const saved = await saveMcpServer(client, inputOf(current), current.id);
-      if (current.id === undefined) {
-        // A newly created server is tested straight away: the row's status is
-        // what tells the user whether the command or URL it was typed with works,
-        // and finding that out here keeps the form — and the mistake — on screen.
-        let tools: string[] = [];
-        let testError: string | undefined;
-        try {
-          const tested = await testMcpServer(client, saved.id);
-          tools = tested.tools.map((tool) => tool.name);
-          testError = tested.error;
-        } catch (reason) {
-          testError = reason instanceof Error ? reason.message : TEXT.errors.generic;
-        }
-        setCreated({ error: testError, name: saved.name, tools });
-        loaded.reload();
-        onToast(TEXT.settings.system.mcp.saved, "info");
-        return;
+      let checkedProblem: string | undefined;
+      if (!editing) {
+        try { checkedProblem = testProblem(await testMcpServer(client, saved.id)); }
+        catch (reason) { checkedProblem = reason instanceof Error ? reason.message : TEXT.errors.generic; }
       }
-      closeForm();
-      loaded.reload();
-      onToast(TEXT.settings.system.mcp.saved, "info");
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
-    }
+      closeForm(); loaded.reload();
+      onToast(checkedProblem ? TEXT.settings.system.mcp.savedCheckFailed(checkedProblem) : TEXT.settings.system.mcp.saved, checkedProblem ? "error" : "success");
+    } catch (reason) { setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed); }
+    finally { setBusy(false); }
   };
 
   const isSelected = (id: string) => {
@@ -644,252 +413,150 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
     return page ? page.enabledConnectorIds.includes(id) : false;
   };
 
-  const rowAction = (server: CustomMcpServerDetails, action: McpRowAction) => {
-    if (busy) return;
-    if (action === "tools") {
-      setToolsOpen(toolsOpen === server.id ? undefined : server.id);
-    } else if (action === "edit") {
-      openEdit(server);
-    } else if (action === "authorize") {
-      void authorize(server);
-    } else if (action === "cancelAuthorization" || action === "clearAuthorization") {
-      void endAuthorization(server, action === "cancelAuthorization" ? "cancel" : "clear");
-    } else if (action === "delete") {
-      onConfirm({
-        accept: TEXT.menu.delete,
-        body: TEXT.settings.system.mcp.deleteBody(server.name),
-        eyebrow: TEXT.settings.system.mcp.heading,
-        onAccept: () => {
-          void deleteMcpServer(client, server.id)
-            .then(() => loaded.reload())
-            .catch((reason: unknown) => setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic));
-        },
-        title: TEXT.settings.system.mcp.deleteTitle(server.name),
-      });
-    } else if (action === "test") {
-      setBusy(true);
-      void testMcpServer(client, server.id)
-        .then((next) => {
-          loaded.reload();
-          const authorizationProblem = next.authorization && next.authorization.state !== "authorized"
-            ? next.authorization.state === "expired"
-              ? TEXT.settings.system.mcp.authorizationExpired : TEXT.settings.system.mcp.unauthorized
-            : undefined;
-          const passed = !next.error && !authorizationProblem && (next.status === "ready" || next.status === "disabled");
-          onToast(next.error ?? authorizationProblem
-            ?? (passed ? TEXT.settings.system.mcp.testPassed : statusLabel(next.status)), passed ? "info" : "error");
-        })
-        .catch((reason: unknown) => setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic))
-        .finally(() => setBusy(false));
-    }
-  };
-
-  const toggleService = async (server: CustomMcpServerDetails) => {
+  const testServer = (server: CustomMcpServerDetails) => {
     if (busy) return;
     setBusy(true);
     setFailure(undefined);
-    try {
-      // Reuse editing's credential/argument retention instead of rebuilding
-      // a partial configuration that could discard stored values.
-      await saveMcpServer(client, { ...inputOf(draftOf(server)), enabled: !server.enabled }, server.id);
-      loaded.reload();
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
-    }
+    void testMcpServer(client, server.id)
+      .then((next) => {
+        loaded.reload();
+        const problem = testProblem(next);
+        onToast(
+          problem ?? TEXT.settings.system.mcp.testPassed,
+          problem ? "error" : "success",
+        );
+      })
+      .catch((reason: unknown) => {
+        setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
+      })
+      .finally(() => setBusy(false));
   };
 
+  const removeServer = (server: CustomMcpServerDetails) => onConfirm({
+    accept: TEXT.menu.delete,
+    body: TEXT.settings.system.mcp.deleteBody(server.name),
+    eyebrow: TEXT.settings.system.mcp.heading,
+    title: TEXT.settings.system.mcp.deleteTitle(server.name),
+    onAccept: async () => {
+      if (busy) return;
+      setBusy(true);
+      setFailure(undefined);
+      try {
+        await deleteMcpServer(client, server.id);
+        setDetailId((id) => id === server.id ? undefined : id);
+        loaded.reload();
+        onToast(TEXT.settings.system.mcp.deleted, "success");
+      } catch (reason) {
+        setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
+      } finally { setBusy(false); }
+    },
+  });
+  const detailServer = (servers ?? loaded.value?.custom)?.find((server) => server.id === detailId);
+  const detailSource = loaded.value?.builtins.find((source) => source.manifest.id === detailId);
+
   return (
-    <div className="settings-group-detail">
-      <header className="settings-detail-header">
-        <div>
-          <h3>{TEXT.settings.system.groups.mcp.label}</h3>
-          <p>{TEXT.settings.system.groups.mcp.description}</p>
-        </div>
-        <McpAddMenu disabled={busy} onChoose={(source) => {
-          if (source === "manual") openCreate();
-          else openImport();
-        }} />
-      </header>
-      <p className="settings-note">{TEXT.settings.system.mcp.help}</p>
-      <input
-        accept=".json,application/json"
-        aria-label={TEXT.settings.system.mcp.importFile}
-        disabled={busy}
-        hidden
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0];
-          event.currentTarget.value = "";
-          if (file) void loadImportFile(file);
-        }}
-        ref={importFileInput}
-        type="file"
-      />
+    <div className="settings-group-detail mcp-settings">
+      <header className="mcp-page-header"><h2>MCP</h2><p>{TEXT.settings.system.groups.mcp.description}</p></header>
 
       <LoadGate loaded={loaded}>
         {(page) => (
           <Group>
-            {/* Creating and importing are the two ways in for a server this
-                machine has never seen; both write through the same routes the web
-                client uses, so the two clients cannot drift. */}
+            <div className="mcp-page-toolbar">
+              <div className="mcp-catalog-tabs" role="tablist" aria-label="MCP">
+                {(["all", "mine", "official"] as const).map((value) => <button key={value} role="tab" type="button"
+                  aria-selected={category === value} onClick={() => setCategory(value)}>
+                  {value === "all" ? TEXT.settings.system.mcp.allMcp : value === "mine" ? TEXT.settings.system.mcp.myMcp : TEXT.settings.system.mcp.officialMcp}
+                  <span>({value === "all" ? (servers ?? page.custom).length + page.builtins.length : value === "mine" ? (servers ?? page.custom).length : page.builtins.length})</span>
+                </button>)}
+              </div>
+              <div className="mcp-toolbar-actions">
+                <button className="mcp-bulk-button" disabled={busy || !visibleServers.some((server) => !server.enabled)} onClick={() => void setAllEnabled(true)} type="button"><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="9" /><path d="m10 8 6 4-6 4Z" /></svg>{TEXT.settings.system.mcp.enableAll}</button>
+                <button className="mcp-bulk-button" disabled={busy || !visibleServers.some((server) => server.enabled)} onClick={() => void setAllEnabled(false)} type="button"><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v10M6 5a9 9 0 1 0 12 0" /></svg>{TEXT.settings.system.mcp.disableAll}</button>
+                <input type="search" className="field-input mcp-search" aria-label={TEXT.settings.system.mcp.searchMcp} placeholder={TEXT.settings.system.mcp.searchMcp} value={query} onChange={(event) => setQuery(event.target.value)} />
+                <McpAddMenu disabled={busy} onChoose={(source) => { if (source === "manual") openCreate(); else openImport(); }} />
+              </div>
+            </div>
+            <p className="mcp-bulk-hint">{TEXT.settings.system.mcp.bulkHint}</p>
             {page.custom.length === 0 && page.builtins.length === 0 ? (
               <p className="settings-empty">{TEXT.settings.system.mcp.empty}</p>
             ) : (
-              <div className="settings-list">
-                <div className="settings-bulk">
-                  <button className="bulk-button" disabled={busy} onClick={() => void setAllSelected(true)} type="button">
-                    {TEXT.settings.system.mcp.selectAll}
-                  </button>
-                  <button className="bulk-button" disabled={busy} onClick={() => void setAllSelected(false)} type="button">
-                    {TEXT.settings.system.mcp.clearSelection}
-                  </button>
-                </div>
-                {(servers ?? page.custom).map((server) => (
-                  <div className="settings-card mcp-server-row" key={server.id}>
-                    <span className="settings-card-mark">{initialOf(server.name)}</span>
-                    <div className="settings-card-main">
-                      <strong>
-                        {server.name}
-                        <Tag tone={STATUS_TONE[server.status]}>{statusLabel(server.status)}</Tag>
-                        {server.authorization !== undefined && server.authorization.state !== "authorized"
-                          ? <Tag tone="warn">{server.authorization.state === "expired" ? TEXT.settings.system.mcp.authorizationExpired : TEXT.settings.system.mcp.unauthorized}</Tag>
-                          : null}
-                        <Tag tone="off">{TEXT.settings.system.mcp.toolCount(server.tools.length)}</Tag>
-                      </strong>
-                      {server.description ? <small>{server.description}</small> : null}
-                      <small className={server.description ? "settings-detail-meta" : undefined}>
-                        {server.transport} · {server.transport === "stdio" ? server.command : server.url}
-                        {server.error ? ` · ${server.error}` : ""}
-                      </small>
-                      {toolsOpen === server.id ? (
-                        <span className="settings-detail">
-                          {server.tools.length === 0 ? (
-                            <small className="settings-detail-meta">{TEXT.settings.system.mcp.toolsNone}</small>
-                          ) : (
-                            <span className="settings-builtin-tools">
-                              {server.tools.map((tool) => (
-                                <span key={tool.name}>
-                                  <code>{tool.name}</code>
-                                  {tool.description ? <small>{tool.description}</small> : null}
-                                </span>
-                              ))}
-                            </span>
-                          )}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="settings-card-actions mcp-source-actions">
-                      <label className="settings-check mcp-default-choice">
-                        <input type="checkbox" disabled={busy}
-                          aria-label={`${server.name} · ${TEXT.settings.system.mcp.useByDefault}`}
-                          checked={isSelected(server.id)} onChange={() => void toggleDefaultUse(server.id)} />
-                        {TEXT.settings.system.mcp.useByDefault}
-                      </label>
-                      <McpRowMenu authorization={server.authorization}
-                        authorizationUrl={authorizingUrl?.id === server.id ? authorizingUrl.url : undefined}
-                        disabled={busy} name={server.name} onAction={(action) => rowAction(server, action)} />
-                      <span className="mcp-service-choice">
-                        <span>{TEXT.settings.system.mcp.enableService}</span>
-                        <Switch disabled={busy}
-                          label={`${server.name} · ${TEXT.settings.system.mcp.enableService}`}
-                          onChange={() => void toggleService(server)} value={server.enabled} />
-                      </span>
-                    </div>
-                  </div>
-                ))}
+              <div className="mcp-servers-grid">
+                {!visibleServers.length && !visibleBuiltins.length ? <p className="settings-empty">{TEXT.settings.system.mcp.noMatches}</p> : null}
+                {visibleServers.map((server) => <McpServerCard key={server.id}
+                  name={server.name} description={server.description} builtin={false}
+                  status={server.authorization && server.authorization.state !== "authorized"
+                    ? server.authorization.state === "expired" ? TEXT.settings.system.mcp.authorizationExpired : TEXT.settings.system.mcp.unauthorized
+                    : statusLabel(server.status)} tone={server.authorization && server.authorization.state !== "authorized" ? "warn" : STATUS_TONE[server.status]} tools={server.tools.length}
+                  selected={server.enabled} busy={busy} onSelect={() => void toggleEnabled(server)} onTry={() => void tryServer(server.id)} tryDisabled={!server.enabled || !onTry}
+                  onOpen={() => openDetails(server.id)} onEdit={() => openEdit(server)} onDelete={() => removeServer(server)} onTest={() => testServer(server)} />)}
+                {visibleBuiltins.map((source) => <McpServerCard key={source.manifest.id}
+                  name={source.manifest.displayName || source.manifest.id} description={source.manifest.description || ""} builtin
+                  status={statusLabel(source.status.status)} tone={catalogTone(source.status.status)} tools={Object.keys(source.manifest.tools ?? {}).length}
+                  selected={isSelected(source.manifest.id)} busy={busy} onSelect={() => void toggleDefaultUse(source.manifest.id)}
+                  onOpen={() => openDetails(source.manifest.id)} onTry={() => void tryServer(source.manifest.id)} tryDisabled={source.status.status !== "ready" || !onTry} />)}
 
-                {page.builtins.map((source) => {
-                  const open = openId === source.manifest.id;
-                  const on = isSelected(source.manifest.id);
-                  const tools = Object.values(source.manifest.tools ?? {});
-                  const meta = [
-                    source.manifest.publisher,
-                    source.manifest.version ? `v${source.manifest.version}` : undefined,
-                  ].filter((part) => part !== undefined && part !== "").join(" · ");
-                  return (
-                    <div
-                      className={`settings-card mcp-server-row is-expandable${open ? " is-open" : ""}${on ? "" : " is-off"}`}
-                      key={source.manifest.id}
-                    >
-                      <span className="settings-card-mark">
-                        {initialOf(source.manifest.displayName || source.manifest.id)}
-                      </span>
-                      <button
-                        className="settings-card-main"
-                        onClick={() => setOpenId(open ? undefined : source.manifest.id)}
-                        type="button"
-                      >
-                        <strong>
-                          {source.manifest.displayName || source.manifest.id}
-                          <Tag tone="off">{TEXT.settings.system.mcp.builtin}</Tag>
-                          <Tag tone={catalogTone(source.status.status)}>
-                            {statusLabel(source.status.status)}
-                          </Tag>
-                          <Tag tone="off">{TEXT.settings.system.mcp.toolCount(tools.length)}</Tag>
-                        </strong>
-                        <small>{source.manifest.description || source.manifest.id}</small>
-                        {open ? (
-                          <span className="settings-detail">
-                            {tools.length === 0 ? null : (
-                              <span className="settings-builtin-tools">
-                                {tools.map((tool) => (
-                                  <span key={tool.id}>
-                                    <code>{tool.id}</code>
-                                    {tool.description ? <small>{tool.description}</small> : null}
-                                  </span>
-                                ))}
-                              </span>
-                            )}
-                            {meta === "" ? null : (
-                              <small className="settings-detail-meta">{meta}</small>
-                            )}
-                          </span>
-                        ) : null}
-                      </button>
-                      <div className="settings-card-actions">
-                        <label className="settings-check mcp-default-choice">
-                          <input type="checkbox" disabled={busy}
-                            aria-label={`${source.manifest.displayName || source.manifest.id} · ${TEXT.settings.system.mcp.useByDefault}`}
-                            checked={on} onChange={() => void toggleDefaultUse(source.manifest.id)} />
-                          {TEXT.settings.system.mcp.useByDefault}
-                        </label>
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
             )}
           </Group>
         )}
       </LoadGate>
 
-      {current ? (
-        <SettingsModal
+      {detailServer || detailSource ? <McpServerDetails server={detailServer} source={detailSource}
+        onToggleEnabled={() => { if (detailServer) void toggleEnabled(detailServer); else if (detailSource) void toggleDefaultUse(detailSource.manifest.id); }}
+        onToggleDefault={() => void toggleDefaultUse(detailId!)}
+        onTry={() => void tryServer(detailId!)} tryDisabled={!onTry || (detailServer ? !detailServer.enabled : detailSource?.status.status !== "ready")}
+        onDelete={() => { if (detailServer) { setDetailId(undefined); removeServer(detailServer); } }}
+        returnFocus={detailFocus.current}
+        status={statusLabel(detailServer?.status ?? detailSource?.status.status ?? "untested")}
+        selected={isSelected(detailId ?? "")} busy={busy} onClose={() => setDetailId(undefined)}
+        authorizationUrl={authorizingUrl?.id === detailId ? authorizingUrl?.url : undefined}
+        onEdit={() => { if (detailServer) openEdit(detailServer); }} onTest={() => { if (detailServer) testServer(detailServer); }}
+        onAuthorize={() => { if (detailServer) void authorize(detailServer); }}
+        onEndAuthorization={(operation) => { if (detailServer) void endAuthorization(detailServer, operation); }} /> : null}
+
+      {draft || importOpen ? (
+        <McpModal
+          
+          className="mcp-config-modal"
+          returnFocus={detailFocus.current}
           label={editing ? TEXT.settings.system.mcp.editTitle : TEXT.settings.system.mcp.createTitle}
           closeDisabled={busy}
           onClose={() => { if (!busy) closeForm(); }}
           wide
         >
-          {created === undefined ? (
+          {importOpen ? <section className="mcp-json-source">
+            <details open={sourceOpen} onToggle={(event) => setSourceOpen(event.currentTarget.open)}>
+              <summary>{TEXT.settings.system.mcp.jsonSource}{importFileName ? <small>{importFileName}</small> : null}</summary>
+              <p className="settings-note">{TEXT.settings.system.mcp.importFillHint}</p>
+              <button type="button" className="secondary-button" disabled={busy || sourceLocked} onClick={() => importFileInput.current?.click()}>{TEXT.settings.system.mcp.importFile}</button>
+              <textarea aria-label={TEXT.settings.system.mcp.importJson} className="field-textarea is-code" disabled={busy || sourceLocked}
+                rows={7} spellCheck={false} value={importText} onChange={(event) => { setImportFileName(undefined); populateImport(event.target.value); }} />
+            </details>
+            <input accept=".json,application/json" aria-label={TEXT.settings.system.mcp.importFile} disabled={busy || sourceLocked} hidden type="file" ref={importFileInput}
+              onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void loadImportFile(file); }} />
+            {importError ? <p className="mcp-inline-error" role="alert">{importError}</p> : null}
+            {importEntries?.length ? <div className="mcp-import-configurations">
+              <p className="mcp-check-note" role="status">{sourceLocked
+                ? TEXT.settings.system.mcp.importProgress(importEntries.filter((entry) => entry.saved).length, importEntries.length)
+                : TEXT.settings.system.mcp.importFilled(importEntries.length)}</p>
+              {importEntries.length > 1 ? <Select label={TEXT.settings.system.mcp.chooseConfiguration} disabled={busy} value={String(importIndex)}
+                onChange={(value) => { const index = Number(value); setImportIndex(index); setFailure(importEntries[index]?.error); }}
+                options={importEntries.map((entry, index) => ({ value: String(index), label: entry.draft.name + (entry.saved ? " · " + TEXT.settings.system.mcp.importAdded : entry.error ? " · " + TEXT.settings.system.mcp.statusError : "") }))} /> : null}
+            </div> : null}
+          </section> : null}
           <form
             className="settings-card is-form"
+            ref={formRef}
             noValidate
             onSubmit={(event) => { event.preventDefault(); void submit(event.currentTarget); }}
           >
-            <div className="settings-card-form">
-              <Row title={TEXT.settings.system.mcp.enableService}>
-                <label className="settings-check">
-                  <input
-                    checked={current.enabled}
-                    onChange={(event) => change({ enabled: event.target.checked })}
-                    type="checkbox"
-                  />
-                  <span>{TEXT.settings.system.mcp.enableService}</span>
-                </label>
-              </Row>
+            <fieldset disabled={busy || importEntries?.[importIndex]?.saved} className="settings-card-form mcp-form-fields">
+              {current ? <>
               <Row title={TEXT.settings.system.mcp.name}>
                 <input
+                  ref={importOpen ? importedName : undefined}
+                  aria-invalid={failure === TEXT.settings.system.mcp.nameRequired || failure === TEXT.settings.system.mcp.duplicateName || undefined}
+                  aria-describedby={failure === TEXT.settings.system.mcp.nameRequired || failure === TEXT.settings.system.mcp.duplicateName ? errorId : undefined}
                   aria-label={TEXT.settings.system.mcp.name}
                   className="field-input"
                   maxLength={100}
@@ -899,8 +566,10 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                 />
               </Row>
               <Row title={TEXT.settings.system.mcp.description}>
-                <input
-                  className="field-input"
+                <textarea
+                  aria-label={TEXT.settings.system.mcp.description}
+                  className="field-textarea"
+                  rows={2}
                   onChange={(event) => change({ description: event.target.value })}
                   value={current.description}
                 />
@@ -921,6 +590,8 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                 <>
                   <Row title={TEXT.settings.system.mcp.command}>
                     <input
+                      aria-invalid={failure === TEXT.settings.system.mcp.commandRequired || undefined}
+                      aria-describedby={failure === TEXT.settings.system.mcp.commandRequired ? errorId : undefined}
                       aria-label={TEXT.settings.system.mcp.command}
                       className="field-input"
                       required
@@ -954,6 +625,8 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                 <>
                   <Row title={TEXT.settings.system.mcp.url}>
                     <input
+                      aria-invalid={failure === TEXT.settings.system.mcp.urlInvalid || undefined}
+                      aria-describedby={failure === TEXT.settings.system.mcp.urlInvalid ? errorId : undefined}
                       aria-label={TEXT.settings.system.mcp.url}
                       className="field-input"
                       type="url"
@@ -1036,6 +709,8 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
               )}
               <Row title={TEXT.settings.system.mcp.timeout}>
                 <input
+                  aria-invalid={failure === TEXT.settings.system.mcp.timeoutInvalid || undefined}
+                  aria-describedby={failure === TEXT.settings.system.mcp.timeoutInvalid ? errorId : undefined}
                   aria-label={TEXT.settings.system.mcp.timeout}
                   className="field-input is-number"
                   min="1"
@@ -1046,130 +721,25 @@ export function McpServers({ client, onConfirm, onToast }: Props) {
                   value={current.timeoutSeconds}
                 />
               </Row>
-              {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
-              <div className="settings-card-actions">
-                <button className="secondary-button" disabled={busy} onClick={closeForm} type="button">
-                  {TEXT.settings.cancel}
-                </button>
-                <button className="primary-button" disabled={busy} type="submit">
-                  {TEXT.settings.system.save}
-                </button>
-              </div>
+              <Row title={TEXT.settings.system.mcp.enableService}>
+                <Switch label={TEXT.settings.system.mcp.enableService} value={current.enabled} disabled={busy}
+                  onChange={(enabled) => change({ enabled })} />
+              </Row>
+              </> : <p className="mcp-check-note">{TEXT.settings.system.mcp.importEmptyHint}</p>}
+            </fieldset>
+            {failure ? <small id={errorId} className="row-note is-error" role="alert">{failure}</small> : null}
+            <div className="settings-card-actions mcp-form-actions">
+              <button className="secondary-button" disabled={busy} onClick={closeForm} type="button">{TEXT.settings.cancel}</button>
+              <button className="primary-button" disabled={busy || !current || importOpen && (!!importError || pending === 0)} type="submit">
+                {editing ? TEXT.settings.system.save : TEXT.settings.system.mcp.confirmAdd(importOpen ? pending : 1)}
+              </button>
             </div>
           </form>
-          ) : (
-            <section className="settings-card is-form">
-              <div className="settings-card-form">
-                <Row title={TEXT.settings.system.mcp.name}>
-                  <span>{created.name}</span>
-                </Row>
-                {/* The first test of the server just created, on the screen its
-                    command or URL was typed on. */}
-                {created.error === undefined ? (
-                  <Row title={TEXT.settings.system.mcp.testedResult}>
-                    <span className="settings-detail">
-                      {created.tools.length === 0
-                        ? TEXT.settings.system.mcp.toolsNone
-                        : <span className="settings-builtin-tools">
-                          {created.tools.map((tool) => <code key={tool}>{tool}</code>)}
-                        </span>}
-                    </span>
-                  </Row>
-                ) : <small className="row-note is-error">{created.error}</small>}
-                <div className="settings-card-actions">
-                  <button className="primary-button" onClick={closeForm} type="button">
-                    {TEXT.settings.system.mcp.done}
-                  </button>
-                </div>
-              </div>
-            </section>
-          )}
-        </SettingsModal>
+        </McpModal>
       ) : null}
 
-      {failure && current === undefined ? <small className="row-note is-error" role="alert">{failure}</small> : null}
-      {importOpen ? (
-        <SettingsModal
-          label={TEXT.settings.system.mcp.importTitle}
-          closeDisabled={busy}
-          onClose={() => { if (!busy) setImportOpen(false); }}
-          wide
-        >
-          <section className="settings-card is-form mcp-import-card">
-            <div className="settings-card-form">
-              {importFileName ? <p className="settings-note">{TEXT.settings.system.mcp.importFileLoaded(importFileName)}</p> : null}
-              <button className="secondary-button" disabled={busy} onClick={() => importFileInput.current?.click()} type="button">
-                {TEXT.settings.system.mcp.importFile}
-              </button>
-              <Row hint={TEXT.settings.system.mcp.importHint} title={TEXT.settings.system.mcp.importJson} tone="stack">
-                <textarea
-                  aria-label={TEXT.settings.system.mcp.importJson}
-                  className="field-textarea is-code"
-                  disabled={busy}
-                  onChange={(event) => {
-                    setImportText(event.target.value);
-                    setImportEntries(undefined);
-                    setImportError(undefined);
-                    setOutcomes(undefined);
-                    setImportFileName(undefined);
-                  }}
-                  rows={10}
-                  spellCheck={false}
-                  value={importText}
-                />
-              </Row>
-              <div className="settings-card-actions">
-                <button
-                  className="secondary-button"
-                  disabled={busy || importText.trim() === ""}
-                  onClick={previewImport}
-                  type="button"
-                >
-                  {TEXT.settings.system.mcp.importPreview}
-                </button>
-              </div>
-              {importError ? <small className="row-note is-error" role="alert">{importError}</small> : null}
-              {importEntries !== undefined && importEntries.length > 0 ? (
-                <ul className="mcp-import-list" aria-label={TEXT.settings.system.mcp.importPreview}>
-                  {importEntries.map((entry) => (
-                    <li key={entry.name}>
-                      <code>{entry.name}</code>
-                      <small>{entry.transport} · {entry.target}</small>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {outcomes !== undefined && outcomes.length > 0 ? (
-                <ul className="mcp-import-list" aria-label={TEXT.settings.system.mcp.importResults}>
-                  {outcomes.map((outcome) => (
-                    <li key={outcome.name}>
-                      <code>{outcome.name}</code>
-                      <small className={outcome.ok ? undefined : "is-error"}>
-                        {outcome.ok
-                          ? TEXT.settings.system.mcp.importAdded
-                          : TEXT.settings.system.mcp.importFailed(outcome.message ?? TEXT.errors.generic)}
-                      </small>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              <div className="settings-card-actions">
-                <button className="secondary-button" disabled={busy} onClick={() => setImportOpen(false)} type="button">
-                  {TEXT.settings.cancel}
-                </button>
-                <button
-                  className="primary-button"
-                  disabled={busy || importText.trim() === "" || importError !== undefined}
-                  onClick={() => void runImport()}
-                  type="button"
-                >
-                  {TEXT.settings.system.mcp.importRun}
-                </button>
-              </div>
-            </div>
-          </section>
-        </SettingsModal>
-      ) : null}
+      {failure && !draft && !importOpen ? <small className="row-note is-error" role="alert">{failure}</small> : null}
+
     </div>
   );
 }

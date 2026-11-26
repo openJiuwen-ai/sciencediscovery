@@ -13,3 +13,5 @@ Acceptance: desktop unit tests protect Skills and MCP action availability; brows
 Keyboard acceptance for MCP-CTRL-08: after clicking the trigger, focus may remain on that trigger while the menu is already open. ArrowUp must enter at the last enabled item and ArrowDown at the first; subsequent presses wrap through enabled items.
 
 Visual acceptance for MCP-CTRL-06/07: the pending-authorization open-page link uses the same plain menu-item typography and hover treatment as button actions, without a link underline. Include the authorizing state in both screenshot languages while preserving its external-link semantics.
+
+The latest MCP layout and PR scope are specified in [v3](desktop-mcp-controls.v3.md).

@@ -940,12 +940,12 @@ describe("the data sources page", () => {
       <McpServers client={client} onConfirm={noConfirm} onToast={noConfirm} />,
     );
 
-  it("reads one card list, not the custom/built-in tabs", () => {
+  it("shows catalog identity while the first read is pending", () => {
     const markup = page();
     assert.ok(markup.includes("settings-section"), "数据源 rendered no section");
     assert.ok(markup.includes(loading), "数据源 did not start a read");
     assert.ok(!markup.includes('role="tablist"'), "the custom/built-in tabs are back");
-    assert.ok(markup.includes(TEXT.settings.system.mcp.help), "the page does not explain default selection");
+    assert.ok(markup.includes(TEXT.settings.system.groups.mcp.description), "the page does not explain default selection");
   });
 
   it("keeps the create form closed until the user opens it", () => {

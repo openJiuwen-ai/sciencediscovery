@@ -35,6 +35,7 @@ export function McpAddMenu({ disabled, onChoose }: {
         if (event.key === "Escape" && open) {
           event.preventDefault(); event.stopPropagation(); close();
         } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+          if (disabled) return;
           event.preventDefault();
           if (!open) {
             focusLast.current = event.key === "ArrowUp" || event.key === "End";
@@ -43,7 +44,8 @@ export function McpAddMenu({ disabled, onChoose }: {
             const items = Array.from(root.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
             const current = items.indexOf(document.activeElement as HTMLButtonElement);
             const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
-              : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+              : current < 0 ? event.key === "ArrowUp" ? items.length - 1 : 0
+                : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
             items[next]?.focus();
           }
         }
@@ -54,7 +56,7 @@ export function McpAddMenu({ disabled, onChoose }: {
         aria-controls={open ? id : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="pill-button is-dark mcp-import-trigger"
+        className="primary-button mcp-import-trigger"
         disabled={disabled}
         onClick={() => { focusLast.current = false; setOpen((value) => !value); }}
         ref={trigger}
@@ -71,7 +73,7 @@ export function McpAddMenu({ disabled, onChoose }: {
               role="menuitem"
               type="button"
             >
-              {source === "manual" ? TEXT.settings.system.mcp.manualEntry : TEXT.settings.system.mcp.importChoice}
+              {source === "manual" ? TEXT.settings.system.mcp.manualEntry : TEXT.settings.system.mcp.importJsonEntry}
             </button>
           ))}
         </div>

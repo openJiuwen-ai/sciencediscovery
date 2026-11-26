@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 
+import { createSession, ensureInbox } from "../api/sessions.js";
 import type { ApiClient } from "../api/client.js";
 import type { WorkspaceActions, WorkspaceState } from "../app/use-workspace.js";
 import { TEXT } from "../text.js";
@@ -163,6 +164,16 @@ export function SystemSettingsDialog({
           <McpServers
             client={client}
             onConfirm={actions.confirmAction}
+            onTry={async (id) => {
+              const inbox = state.inboxProject ?? await ensureInbox(client);
+              const modelId = state.detail?.modelId ?? state.defaultModelId;
+              const session = await createSession(client, inbox.id, { settingsOverrides: {
+                enabledConnectorIds: [id], ...(modelId ? { modelId } : {}),
+              } });
+              await actions.refreshSessions();
+              await actions.openSession(session.id, inbox.id);
+              onClose();
+            }}
             onToast={actions.toast}
           />
         );

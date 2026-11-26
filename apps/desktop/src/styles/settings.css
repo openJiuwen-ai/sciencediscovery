@@ -1666,7 +1666,6 @@ a.secondary-button {
   font: inherit;
   font-size: 12px;
   text-align: left;
-  text-decoration: none;
 }
 .skill-row-menu-item:hover { background: #f5f5f5; color: #191919; }
 .skill-row-menu-icon { display: inline-flex; color: inherit; }
