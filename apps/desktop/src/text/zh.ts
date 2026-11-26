@@ -394,7 +394,7 @@ export const ZH = {
   },
 
   ideaTreeOverride: {
-    title: "idea-tree 参数",
+    title: "研究思路树参数",
     hint: "确认后把这套参数用于当前会话，并在输入框放好研究思路树命令；补全研究任务后发送即可。单次修改只用于当前会话，不影响全局默认；只有点「覆盖全局设置」才会改全局默认。",
     template: "研究模板",
     templateGeneral: "通用科学假设",
