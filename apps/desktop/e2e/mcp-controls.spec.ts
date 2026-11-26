@@ -72,6 +72,11 @@ test("MCP card menus and details keep keyboard, authorization recovery and busy 
       if (action === "clear") clearRequests += 1;
       mock.state.mcpServers[0].authorization = { state: "required" }; await route.fulfill({ json: { ok: true } });
     });
+    await page.route(`**/api/mcp/servers/${id}/oauth/start`, route => route.fulfill({ status: 503, json: { error: "Authorization temporarily refused" } }), { times: 1 });
+    await details.getByRole("button", { name: "授权", exact: true }).click();
+    await expect(details.getByRole("alert")).toHaveText("Authorization temporarily refused");
+    await expect(details.getByRole("alert")).toBeInViewport();
+    await expect(details.getByRole("button", { name: "授权", exact: true })).toBeEnabled();
     await details.getByRole("button", { name: "授权", exact: true }).click();
     await expect(details.getByRole("button", { name: "授权", exact: true })).toBeDisabled();
     const fallback = details.getByRole("link", { name: "打开授权页面", exact: true });
@@ -80,6 +85,10 @@ test("MCP card menus and details keep keyboard, authorization recovery and busy 
     await expect(fallback).toHaveCSS("text-decoration-line", "none");
     await details.getByRole("button", { name: "取消授权", exact: true }).click();
     await expect(details.getByRole("button", { name: "授权", exact: true })).toBeEnabled();
+    await page.route(`**/api/mcp/servers/${id}/oauth/clear`, route => route.fulfill({ status: 503, json: { error: "Clear temporarily refused" } }), { times: 1 });
+    await details.getByRole("button", { name: "清除授权", exact: true }).click();
+    await expect(details.getByRole("alert")).toHaveText("Clear temporarily refused");
+    await expect(details.getByRole("alert")).toBeInViewport();
     await details.getByRole("button", { name: "清除授权", exact: true }).click(); await expect.poll(() => clearRequests).toBe(1);
     await page.keyboard.press("Escape");
   });

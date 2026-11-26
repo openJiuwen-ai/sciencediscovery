@@ -132,6 +132,7 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
   const detailFocus = useRef<HTMLElement | null>(null);
   const openDetails = (id: string) => {
     detailFocus.current = document.activeElement as HTMLElement | null;
+    setFailure(undefined);
     setDetailId(id);
   };
   /** The provider URL minted for the row now waiting on consent; kept so a
@@ -198,8 +199,10 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
     setImportText(text); setImportIndex(0); setFailure(undefined);
     setImportError(text.trim() === "" ? undefined : parsed.error);
     setImportEntries(parsed.error ? undefined : parsed.drafts.map((draft) => ({ draft })));
-    if (!parsed.error && parsed.drafts.length) {
-      if (collapse) setSourceOpen(false);
+    // A file upload hands editing to the filled form. Text entry keeps its
+    // caret even when an intermediate document happens to parse successfully.
+    if (!parsed.error && parsed.drafts.length && collapse) {
+      setSourceOpen(false);
       setPopulated((version) => version + 1);
     }
   };
@@ -389,7 +392,7 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
         }
         loaded.reload();
         const failed = results.findIndex((entry) => !entry.saved);
-        if (failed < 0) { closeForm(); onToast(TEXT.settings.system.mcp.addedCount(results.length), "success"); }
+        if (failed < 0) { closeForm(); onToast(TEXT.settings.system.mcp.addedCount(results.length), "info"); }
         else { setImportIndex(failed); setFailure(results[failed]!.error); onToast(TEXT.settings.system.mcp.importProgress(results.filter((entry) => entry.saved).length, results.length), "error"); }
       } finally { setBusy(false); }
       return;
@@ -403,7 +406,7 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
         catch (reason) { checkedProblem = reason instanceof Error ? reason.message : TEXT.errors.generic; }
       }
       closeForm(); loaded.reload();
-      onToast(checkedProblem ? TEXT.settings.system.mcp.savedCheckFailed(checkedProblem) : TEXT.settings.system.mcp.saved, checkedProblem ? "error" : "success");
+      onToast(checkedProblem ? TEXT.settings.system.mcp.savedCheckFailed(checkedProblem) : TEXT.settings.system.mcp.saved, checkedProblem ? "error" : "info");
     } catch (reason) { setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed); }
     finally { setBusy(false); }
   };
@@ -423,7 +426,7 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
         const problem = testProblem(next);
         onToast(
           problem ?? TEXT.settings.system.mcp.testPassed,
-          problem ? "error" : "success",
+          problem ? "error" : "info",
         );
       })
       .catch((reason: unknown) => {
@@ -445,7 +448,7 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
         await deleteMcpServer(client, server.id);
         setDetailId((id) => id === server.id ? undefined : id);
         loaded.reload();
-        onToast(TEXT.settings.system.mcp.deleted, "success");
+        onToast(TEXT.settings.system.mcp.deleted, "info");
       } catch (reason) {
         setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
       } finally { setBusy(false); }
@@ -502,6 +505,7 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
       </LoadGate>
 
       {detailServer || detailSource ? <McpServerDetails server={detailServer} source={detailSource}
+        failure={failure}
         onToggleEnabled={() => { if (detailServer) void toggleEnabled(detailServer); else if (detailSource) void toggleDefaultUse(detailSource.manifest.id); }}
         onToggleDefault={() => void toggleDefaultUse(detailId!)}
         onTry={() => void tryServer(detailId!)} tryDisabled={!onTry || (detailServer ? !detailServer.enabled : detailSource?.status.status !== "ready")}
@@ -738,7 +742,7 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
         </McpModal>
       ) : null}
 
-      {failure && !draft && !importOpen ? <small className="row-note is-error" role="alert">{failure}</small> : null}
+      {failure && !draft && !importOpen && !detailId ? <small className="row-note is-error" role="alert">{failure}</small> : null}
 
     </div>
   );

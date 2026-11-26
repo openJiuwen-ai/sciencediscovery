@@ -27,6 +27,52 @@ const test = base.extend<{ journey: JourneyReporter }>({
     try { await use(reporter); } finally { await reporter.finalize(); }
   },
 });
+
+/**
+ * E2E-META
+ * Purpose: Edit JSON incrementally without moving the caret into a server name.
+ * Steps:
+ *   1. Type a valid JSON configuration one character at a time.
+ *   2. Continue editing valid JSON and check focus and the filled name.
+ *   3. Confirm once and inspect the saved configuration.
+ * Environment: isolated desktop Vite and stateful local API fixture.
+ * Type: mocked
+ * LLM: none
+ * WebSearch: none
+ * PaperSources: none
+ * MCP: in-memory configuration only
+ * OtherExternal: none
+ * Credentials: fixture token only
+ * CostSideEffects: isolated browser records only
+ */
+test("MCP 服务器 JSON typing preserves its caret after every valid parse", { tag: "@mocked" }, async ({ page, journey }) => {
+  test.setTimeout(90_000);
+  const mock = await installMockApi(page);
+  await openMcp(page);
+  const form = await openJson(page);
+  const source = form.getByLabel("JSON", { exact: true });
+  const json = JSON.stringify({ mcpServers: { A: { command: "node" } } });
+  journey.scenario({ goal: "Edit JSON without corrupting the filled server name", preconditions: ["Empty MCP list"] });
+  await journey.step("Type a complete configuration", "A successful parse fills the name while the JSON editor keeps focus.", async () => {
+    await source.click();
+    await source.pressSequentially(json);
+    await expect(source).toBeFocused();
+    await expect(form.getByLabel("名称", { exact: true })).toHaveValue("A");
+  });
+  await journey.step("Continue editing valid JSON", "Additional keystrokes stay in JSON and never become part of the server name or trigger a write.", async () => {
+    await source.pressSequentially("  ");
+    await expect(source).toBeFocused();
+    await expect(source).toHaveValue(json + "  ");
+    await expect(form.getByLabel("名称", { exact: true })).toHaveValue("A");
+    expect(mock.calls.filter(call => call.method === "POST" && call.path === "/api/mcp/servers")).toHaveLength(0);
+  });
+  await journey.step("Confirm the unchanged configuration", "Only confirmation saves the original name, once.", async () => {
+    await form.getByRole("button", { name: "确认添加", exact: true }).click();
+    await expect(form).toBeHidden();
+    expect(mock.state.mcpServers.map(server => server.name)).toEqual(["A"]);
+    expect(mock.calls.filter(call => call.method === "POST" && call.path === "/api/mcp/servers")).toHaveLength(1);
+  });
+});
 async function openMcp(page: Page) {
   await page.addInitScript(([key, token]) => {
     localStorage.setItem(key, token);
