@@ -217,3 +217,76 @@ def test_socket_that_keeps_reading_cannot_extend_wall_deadline(monkeypatch):
         assert failures == ["completion call deadline exceeded"]
     finally:
         finished.set()
+
+
+# --- Cancellation is not an empty reply ---------------------------------------
+#
+# The reported run ended with `{'reply': '', 'failure_callbacks': [], 'stopped':
+# True}` for every call still in flight. The frame above that saw one empty
+# string and reported "the model returned an empty reply", which points at the
+# prompt or the token ceiling; the budget is what had run out. The two are now
+# separate sinks, and a genuine empty answer keeps the old one.
+
+
+def test_a_call_abandoned_by_a_stop_reports_cancellation_not_a_failure(monkeypatch):
+    import io
+
+    from sciencediscovery_evolve.cancellation import StopGate
+
+    gate = StopGate()
+    started, release = threading.Event(), threading.Event()
+
+    def respond(*args, **kwargs):
+        started.set()
+        release.wait(5)
+        return io.BytesIO(json.dumps({"choices": [{"message": {"content": "too late"}}]}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    failures: List[str] = []
+    cancellations: List[str] = []
+    complete = completion_for("http://synthetic.test", "token", should_stop=gate, timeout=5)
+    timer = threading.Timer(
+        0.2, lambda: gate.stop(reason="token budget reached (600000)", cause="budget"),
+    )
+    timer.start()
+    try:
+        assert complete("hello", on_failure=failures.append,
+                        on_cancelled=cancellations.append) == ""
+    finally:
+        release.set()
+        timer.cancel()
+    assert failures == [], "an abandoned call did not fail"
+    assert cancellations == ["token budget reached (600000)"]
+    assert started.is_set(), "the request really was in flight, not skipped"
+
+
+def test_a_call_never_sent_because_the_run_was_stopped_is_cancelled(monkeypatch):
+    from sciencediscovery_evolve.cancellation import StopGate
+
+    gate = StopGate()
+    gate.stop(reason="token budget reached (600000)", cause="budget")
+    calls: List[int] = []
+    cancellations: List[str] = []
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: calls.append(1))
+    complete = completion_for("http://synthetic.test", "token", should_stop=gate)
+    assert complete("hello", on_cancelled=cancellations.append) == ""
+    assert calls == [], "a stopped run does not start another paid call"
+    assert cancellations == ["token budget reached (600000)"]
+
+
+def test_a_genuine_empty_reply_is_not_reported_as_a_cancellation(monkeypatch):
+    import io
+
+    from sciencediscovery_evolve.cancellation import StopGate
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *args, **kwargs: io.BytesIO(b'{"choices":[{"message":{"content":""}}]}'),
+    )
+    failures: List[str] = []
+    cancellations: List[str] = []
+    complete = completion_for("http://synthetic.test", "token", should_stop=StopGate())
+    assert complete("hello", on_failure=failures.append,
+                    on_cancelled=cancellations.append) == ""
+    assert cancellations == [], "the model answered; the run was not stopped"
+    assert failures == [], "and the answer was not a failed call either"

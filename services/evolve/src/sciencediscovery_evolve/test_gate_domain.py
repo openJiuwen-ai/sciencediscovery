@@ -51,6 +51,7 @@ import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
+from .cancellation import CAUSE_TEXT, mark_cancelled, stop_reason_of
 from .logging_config import get_logger
 from .prompt import mutation_prompt
 from .scorecard import evaluate_constraints, score_candidate
@@ -118,7 +119,11 @@ def test_gate_domain(
                 capability=capability, timeout=candidate_timeout, should_stop=should_stop,
             )
         except RunStopped:
-            return False, {SCORE_KEY: float("-inf")}, "the search was stopped"
+            # A run that was stopped has not measured this candidate at all, and
+            # an exception here would report a fault in a suite that never got
+            # to run. The marker keeps it out of `candidate-failed`.
+            reason = stop_reason_of(should_stop) or CAUSE_TEXT[""]
+            return (False, mark_cancelled({SCORE_KEY: float("-inf")}, reason), reason)
         if outcomes is None:
             return False, {SCORE_KEY: float("-inf")}, "the test suite produced no readable result"
 

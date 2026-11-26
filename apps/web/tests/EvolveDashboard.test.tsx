@@ -34,7 +34,7 @@ import type { EvolveGoal } from "@sciencediscovery/schema";
 import { formatDuration } from "../src/evolve/BudgetBar.js";
 import { EvolveRunCard } from "../src/evolve/EvolveRunCard.js";
 import { LocaleProvider } from "../src/i18n/LocaleProvider.js";
-import { verdictOf } from "../src/evolve/CandidateStream.js";
+import { CandidateStream, verdictOf } from "../src/evolve/CandidateStream.js";
 import { collectSeries } from "../src/evolve/ScoreChart.js";
 import { collapseContext, diffLines } from "../src/evolve/text-diff.js";
 import { emptyRunView, type EvolveCandidateView, type EvolveRunView } from "../src/evolve/model.js";
@@ -98,6 +98,36 @@ test("the stream names which of four things happened", () => {
   assert.equal(verdictOf(candidate({
     accepted: false, category: "constraint-violated", score: null, valid: false,
   })), "violated");
+});
+
+test("a cancelled candidate is neither accepted, rejected, nor failed", () => {
+  // A run that ran out of budget before this candidate was measured. Calling it
+  // "did not run" points at the candidate's code; the fix is a bigger budget.
+  const cancelled = candidate({
+    accepted: false, category: "cancelled", score: null, valid: false,
+  });
+  assert.equal(verdictOf(cancelled), "cancelled");
+  assert.notEqual(verdictOf(cancelled), "failed");
+});
+
+test("a cancelled candidate reads as not evaluated, not as did not run", () => {
+  // The verdict is what the row prints, so the label is part of the fix: the
+  // card and the list used to say "did not run" for a candidate the search
+  // never measured, which points the reader at the candidate's code.
+  const cancelled = candidate({
+    accepted: false, category: "cancelled", error: "not evaluated: cancelled by token budget reached (600000)",
+    nodeIndex: 2, parentIndex: 0, score: null, valid: false,
+  });
+  const render = (locale: "en" | "zh-CN") => renderToStaticMarkup(createElement(
+    LocaleProvider, { initialLocale: locale },
+    createElement(CandidateStream, { candidates: [cancelled], onSelect: () => undefined }),
+  ));
+
+  const english = render("en");
+  assert.match(english, /evolve-verdict-cancelled/);
+  assert.match(english, /not evaluated/);
+  assert.doesNotMatch(english, /did not run/);
+  assert.match(render("zh-CN"), /未评估/);
 });
 
 test("a violated constraint is not filed as an ordinary failure", () => {

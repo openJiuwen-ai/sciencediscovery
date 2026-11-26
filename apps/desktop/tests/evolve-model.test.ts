@@ -163,6 +163,8 @@ test("the four verdicts stay apart", () => {
   assert.equal(verdictOf(candidate({ valid: false })), "failed");
   assert.equal(verdictOf(candidate({ category: "constraint-violated" })), "violated");
   assert.equal(verdictOf(candidate({ accepted: false })), "rejected");
+  // A candidate the run never measured is not a candidate that would not run.
+  assert.equal(verdictOf(candidate({ valid: false, category: "cancelled" })), "cancelled");
 });
 
 test("a finished search keeps its stop reason, planned count and test score", () => {

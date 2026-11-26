@@ -38,7 +38,8 @@ def judge_returning(marks: List[float], monkeypatch: pytest.MonkeyPatch) -> None
     calls = {"n": 0}
 
     def completion(spec: Any, on_usage: Any, should_stop: Any):
-        def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
+        def complete(prompt: str, sink: Any = None, on_failure: Any = None,
+                     on_cancelled: Any = None) -> str:
             mark = marks[min(calls["n"], len(marks) - 1)]
             calls["n"] += 1
             return str(mark)
@@ -126,7 +127,8 @@ def test_a_damaged_copy_that_will_not_score_is_not_counted_as_a_pass(
     calls = {"n": 0}
 
     def completion(spec: Any, on_usage: Any, should_stop: Any):
-        def complete(prompt: str, sink: Any = None, on_failure: Any = None) -> str:
+        def complete(prompt: str, sink: Any = None, on_failure: Any = None,
+                     on_cancelled: Any = None) -> str:
             reply = marks[min(calls["n"], len(marks) - 1)]
             calls["n"] += 1
             return reply

@@ -467,6 +467,9 @@
 .evolve-verdict-rejected { color: var(--muted); }
 .evolve-verdict-violated { color: var(--warning, #ef6c00); }
 .evolve-verdict-failed { color: var(--danger, #c62828); }
+/* Neither a success nor a failure: the candidate was never measured. Muted
+   like "rejected", because it is missing evidence rather than a verdict. */
+.evolve-verdict-cancelled { color: var(--muted); font-style: italic; }
 
 /* --- ④ Budget -------------------------------------------------------------- */
 
