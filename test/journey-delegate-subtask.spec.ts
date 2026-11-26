@@ -186,17 +186,25 @@ test("J4 委派子任务后可核对过程与两份交付物", { tag: "@mocked" 
         const execution = conversation.locator(".run-timeline details.timeline-disclosure.tool").first();
         await execution.locator(":scope > summary").click();
         const result = execution.locator(".tool-io-section").filter({ has: page.locator(".tool-io-label", { hasText: /^Result$/ }) }).locator("pre");
-        const transcript = await result.textContent() ?? "";
-        const boundary = "\n\n---\n\n";
-        const boundaryIndex = transcript.lastIndexOf(boundary);
-        expect(boundaryIndex).toBeGreaterThanOrEqual(0);
-        expect(transcript.slice(0, boundaryIndex)).toContain("PRIVATE-FILE-VERIFIED");
-        const projected = transcript.slice(boundaryIndex + boundary.length);
-        expect(JSON.parse(projected)).toMatchObject({ state: "completed", exitCode: 0 });
+        // #1444 dropped the duplicated progress prefix, so the sectioned text is
+        // the projected result alone: the execution envelope stays in Result and
+        // the command's own stream is labelled stdout. The old `---` separator is
+        // gone, and this assertion is what tells the two contracts apart.
+        const transcript = (await result.textContent() ?? "").trim();
+        expect(JSON.parse(transcript)).toMatchObject({ state: "completed", exitCode: 0 });
         const stdout = execution.locator(".tool-io-section").filter({
           has: page.locator(".tool-io-label", { hasText: /^stdout$/ }),
         }).locator("pre");
         await expect(stdout).toContainText("PRIVATE-FILE-VERIFIED");
+        await expect(stdout).toContainText(childMarker);
+        // Count the markers in the output sections only. The Input section above
+        // spells the command out, and that command legitimately contains `echo
+        // PRIVATE-FILE-VERIFIED`, so its text is the task, not a repeated output
+        // line. The output must carry each marker once and no `---` rule.
+        const outputText = (await Promise.all([result, stdout].map(async (section) => (await section.textContent()) ?? ""))).join("\n");
+        expect(outputText).not.toContain("\n\n---\n\n");
+        expect(outputText.split("PRIVATE-FILE-VERIFIED").length - 1).toBe(1);
+        expect(outputText.split(childMarker).length - 1).toBe(1);
         const reply = conversation.locator(".run-timeline .message.assistant").last();
         await expect(reply).toContainText("review notes are ready");
         await expect(reply).toContainText(childMarker);
