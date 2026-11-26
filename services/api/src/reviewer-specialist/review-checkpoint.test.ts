@@ -31,6 +31,7 @@ import {
   cancelReviewerCheckpoints,
   citationReviewClaim,
   isReviewerReportCandidate,
+  QUICK_REVIEWER_VERSION,
   reviewerCheckpointPromptContent,
   runReviewerCheckpoint,
 } from "@sciencediscovery/provenance";
@@ -355,6 +356,70 @@ test("Quick checkpoint reuses an unchanged complete review without running check
   assert.equal(second.reviews[0]?.reusedFromReviewId, first.reviews[0]?.id);
   assert.equal(second.reviews[0]?.toolCallId, "tool-2");
   assert.equal(saved.length, 2);
+});
+
+test("Quick checkpoint recomputes a stored review that predates the Evidence source-document fix", async () => {
+  // Reviews written before the fix carry CITATION_EVIDENCE_CHAIN_BROKEN for a
+  // WebPage- or PDF-sourced Evidence. Reuse keys on the Artifact version and
+  // content hash, which the fix does not move, so without a version bump the
+  // false finding and its REVISE_AND_RETRY decision would be served forever.
+  // A bibliography keeps the narrative Quick pass's citation check in the
+  // record: reuse of a narrative report requires it, and without it every
+  // run recomputes anyway and the version bump would go untested.
+  const { cas, saved, store, version } = fixture(
+    "Nvidia shares rose 30% [evidence1]. See [1] Example et al. (2024). PMID: 12345678",
+  );
+  version.references = [{ id: "evidence-1", kind: "evidence", label: "evidence1" }];
+  const traceEvidenceReference = async () => ({
+    evidence: { content: "Nvidia shares rose 30%." },
+    evidenceFound: true,
+    sourceLinked: true,
+  });
+  await runReviewerCheckpoint({
+    cas,
+    parentRunId: "run-1",
+    reason: "First review",
+    sessionId: "session-1",
+    store,
+    toolCallId: "tool-1",
+    traceEvidenceReference,
+  });
+  const stored = saved[0];
+  assert.ok(stored);
+  assert.equal(stored.reviewerSpecialistVersion, QUICK_REVIEWER_VERSION);
+
+  // Retype the stored record as the previous version's output: the false
+  // chain finding and the revise decision it produced.
+  stored.reviewerSpecialistVersion = "2.6.0-review-coverage";
+  stored.decision = "REVISE_AND_RETRY";
+  stored.findings = [{
+    code: "CITATION_EVIDENCE_CHAIN_BROKEN",
+    evidenceRefs: ["artifact:artifact-version-1", "evidence:evidence-1"],
+    id: "stale-finding",
+    message: "Evidence marker [evidence1] does not have an extracts link from a Paper node.",
+    severity: "critical",
+    status: "open",
+  }];
+
+  const second = await runReviewerCheckpoint({
+    artifactVersionIds: [version.id],
+    cas,
+    parentRunId: "run-2",
+    reason: "Re-review",
+    sessionId: "session-1",
+    store,
+    toolCallId: "tool-2",
+    traceEvidenceReference,
+  });
+
+  assert.ok(second.reviews[0]);
+  assert.equal(second.reviews[0].reusedFromReviewId, undefined, "a pre-fix record is not reused");
+  assert.equal(second.reviews[0].reviewerSpecialistVersion, QUICK_REVIEWER_VERSION);
+  assert.equal(
+    second.reviews[0].findings.some((finding) => finding.code === "CITATION_EVIDENCE_CHAIN_BROKEN"),
+    false,
+    "the recomputed review does not repeat the false Paper-link finding",
+  );
 });
 
 test("Reviewer checkpoint feedback exposes findings to the next model context", async () => {

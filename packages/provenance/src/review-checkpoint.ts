@@ -73,7 +73,13 @@ export interface ReviewCheckpointStore {
   listArtifactVersions(sessionId: string, artifactId: string): ScientificArtifactVersion[];
 }
 
-export const QUICK_REVIEWER_VERSION = "2.6.0-review-coverage";
+/** Bumped whenever a stored Quick review's findings can no longer be trusted.
+ *  Reuse keys on the Artifact version and content hash, which a semantics fix
+ *  does not move, so without a bump every already-reviewed report keeps the
+ *  old verdict. 2.7.0 retires the records written when an `extracts` source
+ *  had to be a Paper: their CITATION_EVIDENCE_CHAIN_BROKEN findings are false
+ *  for WebPage- and PDF-sourced Evidence. */
+export const QUICK_REVIEWER_VERSION = "2.7.0-evidence-source-chain";
 const sessionReviewQueues = new Map<string, Promise<void>>();
 const activeReviewControllers = new Map<string, Set<AbortController>>();
 
