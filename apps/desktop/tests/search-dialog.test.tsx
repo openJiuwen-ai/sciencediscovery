@@ -127,6 +127,24 @@ test("a failure, an empty answer and an unfinished list each say their own thing
   assert.match(more, /还有 40 条结果/u, "the note counts what is still unseen");
 });
 
+test("a kind says more exist without counting the kinds it is not showing", () => {
+  // 全部's total belongs to the whole answer, so it can count what it held back.
+  // A kind is handed that same answer and shows one slice of it, so borrowing
+  // the number would say "7 more" beside two rows of Projects.
+  const results = answer(
+    [
+      hit("project", "材料", "2026-01-02T00:00:00.000Z"),
+      hit("artifact", "figure.png", "2026-01-04T00:00:00.000Z"),
+    ],
+    { hasMore: true, total: 9 },
+  );
+  assert.match(render({ results }), /还有 7 条结果/u, "全部 counts what the answer holds back");
+
+  const onlyProjects = render({ kind: "project", results });
+  assert.match(onlyProjects, /还有更多结果/u, "a kind still says that more exist");
+  assert.doesNotMatch(onlyProjects, /条结果/u, "and never states how many");
+});
+
 test("nothing typed yet asks for a query instead of claiming an empty answer", () => {
   const markup = render({ query: "", results: undefined });
   assert.match(markup, /输入以搜索会话、项目和产物。/u, "an untouched field asks for a query");
