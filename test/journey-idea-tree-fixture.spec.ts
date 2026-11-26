@@ -97,7 +97,8 @@ test("Idea Tree autonomous research can pause, resume and iterate", { tag: "@moc
       // the API's appended sentence: the research here is created by the agent's
       // `create_idea_research` tool, which emits `idea_research.created` and appends no
       // message, and no client posts the route's `operation: "create"` with `content` either.
-      // The service sentence is therefore copy-only in this PR and has no test on this path.
+      // That sentence is pinned by services/api/src/idea-research-route.test.ts, which
+      // starts a research through the route and reads the turn it appends.
       await expect(page.getByText(/已启动研究思路树/)).toBeVisible();
       await card.getByRole("button", {name: /查看研究进度/}).click();
       await expect(panel.getByRole("list", {name: "研究执行进度"})).toContainText("设计候选");
