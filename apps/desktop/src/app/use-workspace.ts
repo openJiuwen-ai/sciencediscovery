@@ -31,7 +31,9 @@ import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
 import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
-import { artifactHitPlan, isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, type PendingArtifact } from "./session-search.js";
+import {
+  artifactHitPlan, isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, withoutArchivedHits, type PendingArtifact,
+} from "./session-search.js";
 
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
@@ -394,9 +396,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [connection, setConnection] = useState<Connection>("online");
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [projects, setProjects] = useState<Project[]>([]);
-  /** Whether the Project listing has answered; a prune before it would see an
-   *  empty list and read a stored selection as stale. */
-  const projectsLoaded = useRef(false);
   const [inboxProject, setInboxProject] = useState<Project>();
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
   // The listing is unfiltered now — archived Sessions are read for membership
@@ -407,8 +406,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [searchQuery, setSearchQuery] = useState("");
   const [searchAnswer, setSearchResults] = useState<WorkbenchSearchResponse>();
   const [searchError, setSearchError] = useState<string>();
-  /** Ids of the Sessions the last listing read as archived, for the search rules. */
-  const archivedIds = useRef<ReadonlySet<string>>(new Set());
+  /** Ids of the Sessions the last listing read as archived, for the search
+   *  rules. Kept as state rather than a ref: a listing that lands after the
+   *  answer has to re-run the filter, not leave archived hits on screen. */
+  const [archivedIds, setArchivedIds] = useState<ReadonlySet<string>>(new Set());
   const searchTicket = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /** A search hit for an artifact, waiting for the panel to list it. */
@@ -904,14 +905,13 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
           [project.id, await listSessions(client, project.id, "all")] as const),
       );
       if (ticket !== refreshTicket.current) return undefined;
-      projectsLoaded.current = true;
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
       // Archived Sessions are read for membership, not for the list — and for the
       // search, which has to answer "is this hit archived?" for artifacts too.
-      archivedIds.current = new Set(
+      setArchivedIds(new Set(
         sessions.filter((session) => session.archivedAt !== undefined).map((session) => session.id),
-      );
+      ));
       const drawn = sessions.filter((session) => session.archivedAt === undefined);
       setSessionsByProject(Object.fromEntries(
         entries.map(([id, list]) => [id, list.filter((session) => session.archivedAt === undefined)]),
@@ -2554,7 +2554,6 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // `now` inside the memo would keep "today" pinned to whenever the last
   // dependency changed; bucketing to the minute keeps the memo useful and the
   // window honest, with at most a minute of lag after midnight.
-  const filterNow = Math.floor(Date.now() / 60000) * 60000;
 
   // What the sidebar lists: the raw listing keeps the drafts as well, because
   // 新建会话 reuses one and a draft is what a new Project opens on, but a
@@ -2576,13 +2575,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
    * snapshot is, because 活跃 is archived versus live rather than writable versus
    * read-only. A hit whose Session this page never read is kept.
    */
-  const searchResults = useMemo(() => {
-    if (searchAnswer === undefined) return undefined;
-    const archived = archivedIds.current;
-    const results = searchAnswer.results.filter((result) =>
-      result.sessionId === undefined || !archived.has(result.sessionId));
-    return { ...searchAnswer, results };
-  }, [searchAnswer]);
+  const searchResults = useMemo(
+    () => (searchAnswer === undefined ? undefined : withoutArchivedHits(searchAnswer, archivedIds).answer),
+    [archivedIds, searchAnswer],
+  );
 
   // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.

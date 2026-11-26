@@ -823,9 +823,10 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       }
 
       if (path === "/api/search" && method === "GET") {
-        // The route matches names and titles, never message text, and the
-        // service leaves an archived Session — and its artifacts — out before
-        // it answers, so the fixture holds only what the dialog receives.
+        // The route matches names and titles, never message text. It does answer
+        // hits for an archived Session and for its artifacts — the `archived`
+        // flag exists for a client that marks them — so a fixture proving the
+        // page's own rule seeds one and watches it disappear.
         const term = (url.searchParams.get("q") ?? "").trim().toLowerCase();
         const hits = options.search?.results ?? [];
         const results = term === ""

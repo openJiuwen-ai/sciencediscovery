@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { SessionArtifactOutput, WorkbenchSearchResult, WorkbenchSearchResultKind } from "../api/types.js";
+import type {
+  SessionArtifactOutput,
+  WorkbenchSearchResponse,
+  WorkbenchSearchResult,
+  WorkbenchSearchResultKind,
+} from "../api/types.js";
 import { outputSessionId } from "./artifact-groups.js";
 
 /** How long the field waits after the last keystroke before it asks the route.
@@ -158,6 +163,28 @@ function newestFirst(results: readonly WorkbenchSearchResult[]): WorkbenchSearch
 
 /** The dialog's rows: 全部 groups every kind, a kind shows only itself, and
  *  every group is newest first. */
+/**
+ * The route's answer with the rule a search keeps: an archived Session is not
+ * searchable, and neither are its artifacts, while an imported read-only snapshot
+ * is — 活跃 is archived versus live, not writable versus read-only.
+ *
+ * The route does answer archived hits (the `archived` flag is there for a client
+ * that marks them), so the page drops them here. `dropped` says how many this
+ * page threw away: the answer's `total` still counts them, so a caller printing
+ * "N more" has to take them off before it promises hits it will never draw.
+ */
+export function withoutArchivedHits(
+  answer: WorkbenchSearchResponse,
+  archived: ReadonlySet<string>,
+): { answer: WorkbenchSearchResponse; dropped: number } {
+  const results = archived.size === 0
+    ? answer.results
+    : answer.results.filter((result) => result.sessionId === undefined || !archived.has(result.sessionId));
+  const dropped = answer.results.length - results.length;
+  if (dropped === 0) return { answer, dropped };
+  return { answer: { ...answer, results, total: answer.total - dropped }, dropped };
+}
+
 export function groupsFor(
   results: readonly WorkbenchSearchResult[],
   kind: "all" | WorkbenchSearchResultKind,

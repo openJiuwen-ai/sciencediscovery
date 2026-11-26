@@ -192,3 +192,32 @@ test("a kind shows only its own hits, and its 更多 note counts no other kind",
   await expect(page.locator(".search-hit")).toHaveCount(HITS.length);
   await expect(note).toHaveText(/还有 5 条结果/u);
 });
+
+test("a hit for an archived Session is not drawn, and the note does not count it", async ({ page }) => {
+  // The route answers archived hits too, so the page carries the rule itself.
+  // Its listing has to be in hand for that: the archived Session here is seeded
+  // before the search answers, which is the ordering a reader actually gets.
+  const archived = { ...makeSession({ id: "session-gone", title: "晶体旧会话" }), archivedAt: "2026-01-05T00:00:00.000Z" };
+  await installMockApi(page, {
+    projects: [DEFAULT_PROJECT],
+    search: {
+      hasMore: true,
+      results: [
+        { detail: "", id: "session:session-1", kind: "session", label: "晶体结构分析", projectId: "project-1", sessionId: "session-1", updatedAt: "2026-01-03T00:00:00.000Z" },
+        { detail: "", id: "session:session-gone", kind: "session", label: "晶体旧会话", projectId: "project-1", sessionId: "session-gone", updatedAt: "2026-01-04T00:00:00.000Z" },
+        { detail: "", id: "artifact:artifact-gone", kind: "artifact", label: "晶体旧图.csv", projectId: "project-1", sessionId: "session-gone", updatedAt: "2026-01-02T00:00:00.000Z" },
+      ],
+      total: 9,
+    },
+    sessions: [makeSession({ id: "session-1", title: "晶体结构分析" }), archived],
+  });
+  await page.goto("/");
+
+  await page.locator(".side-head .side-head-button").click();
+  await page.locator(".search-panel-input").fill("晶");
+  await expect(page.locator(".search-hit")).toHaveCount(1);
+  await expect(page.locator(".search-hit-label")).toHaveText("晶体结构分析");
+
+  // 9 answered, 2 dropped by the rule, 1 drawn: six remain — not eight.
+  await expect(page.locator(".search-panel-note")).toHaveText(/还有 6 条结果/u);
+});
