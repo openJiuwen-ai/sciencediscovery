@@ -39,7 +39,7 @@ function render(
     limit?: string;
     projectName?: string;
     projects?: { id: string; name: string }[];
-    seededCommand?: { command: string; nonce: number; owner?: string; text: string };
+    seededCommand?: { command: string; nonce: number; owner: string; text: string };
     surfaceKey?: string;
     tag?: { kind: "research" | "experiment" | "analysis"; label: string };
     uploading?: boolean;
@@ -468,7 +468,7 @@ test("a row's mark comes from its provider, then from its name", () => {
 
 test("a design's command is a token in front of the sentence, not text", () => {
   const markup = render(false, {
-    seededCommand: { command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" },
+    seededCommand: { command: "/evolve-design --algorithm puct", nonce: 1, owner: "draft-1", text: "让压缩比更高" },
   });
   assert.match(markup, /class="composer-command"/u);
   assert.match(markup, /composer-command-text">\/evolve-design --algorithm puct</u);
@@ -506,7 +506,7 @@ test("sending a seeded design joins the token to the sentence once", async () =>
         onUpload={() => {}}
         projects={[]}
         running={false}
-        seededCommand={{ command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" }}
+        seededCommand={{ command: "/evolve-design --algorithm puct", nonce: 1, owner: "draft-1", text: "让压缩比更高" }}
         selectedModelId="m1"
         uploading={false}
       />,
@@ -559,7 +559,7 @@ test("a seeded design carries the parameters the dialog collected", async () => 
         onUpload={() => {}}
         projects={[]}
         running={false}
-        seededCommand={{ command: "/evolve-design --algorithm puct", direction, nonce: 1, text: "让压缩比更高" }}
+        seededCommand={{ command: "/evolve-design --algorithm puct", direction, nonce: 1, owner: "draft-1", text: "让压缩比更高" }}
         selectedModelId="m1"
         uploading={false}
       />,
@@ -578,7 +578,7 @@ test("a seeded design carries the parameters the dialog collected", async () => 
 
 test("a design's flags can be taken back without losing the sentence", async () => {
   const cleared: string[] = [];
-  const element = (seededCommand: { command: string; nonce: number; text: string } | undefined) => (
+  const element = (seededCommand: { command: string; nonce: number; owner: string; text: string } | undefined) => (
     <Composer
       attachments={[]}
       landing
@@ -602,7 +602,7 @@ test("a design's flags can be taken back without losing the sentence", async () 
       uploading={false}
     />
   );
-  const seeded = { command: "/evolve-design --algorithm puct", nonce: 1, text: "让压缩比更高" };
+  const seeded = { command: "/evolve-design --algorithm puct", nonce: 1, owner: "draft-1", text: "让压缩比更高" };
   let view;
   await act(async () => { view = create(element(seeded)); });
   try {
@@ -634,7 +634,7 @@ test("a seed owned by another session leaves this composer empty", async () => {
   const originalDocument = (globalThis as { document?: unknown }).document;
   (globalThis as { document?: unknown }).document = { addEventListener() {}, removeEventListener() {} };
   const mounted: Array<ReturnType<typeof create>> = [];
-  const element = (surfaceKey: string, seededCommand: { command?: string; nonce: number; owner?: string; text: string }) => (
+  const element = (surfaceKey: string, seededCommand: { command?: string; nonce: number; owner: string; text: string }) => (
     <Composer
       attachments={[]}
       models={[{ id: "m1", name: "测试模型" } as never]}
@@ -910,7 +910,7 @@ test("a seeded idea-tree token sends the command with the task written under it"
         onUpload={() => {}}
         projects={[]}
         running={false}
-        seededCommand={{ command: "/idea-tree-team", nonce: 1, text: "研究钙钛矿带隙" }}
+        seededCommand={{ command: "/idea-tree-team", nonce: 1, owner: "session-1", text: "研究钙钛矿带隙" }}
         selectedModelId="m1"
         uploading={false}
       />,
@@ -957,7 +957,7 @@ test("an idea-tree token without a task cannot be sent, and asks for a research 
         onUpload={() => {}}
         projects={[]}
         running={false}
-        seededCommand={{ command: "/idea-tree-team", nonce: 1, text: "" }}
+        seededCommand={{ command: "/idea-tree-team", nonce: 1, owner: "session-1", text: "" }}
         selectedModelId="m1"
         uploading={false}
       />,

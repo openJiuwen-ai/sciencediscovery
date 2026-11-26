@@ -68,10 +68,11 @@ export interface SeededCommand {
   /** Bumped on every seed, so choosing the same design twice still lands. */
   nonce: number;
   /** The surface that created the seed: a Session's id, or a draft's landing
-   *  key. The shell keeps the seed while a Session is switched away from, so a
-   *  composer drawing another surface has to ignore it — otherwise the
+   *  key. Required so a future seed site cannot silently lose the protection
+   *  this adds. The shell keeps the seed while a Session is switched away from,
+   *  so a composer drawing another surface has to ignore it — otherwise the
    *  sentence would arrive in a conversation that never asked for it (#1434). */
-  owner?: string;
+  owner: string;
   /** What the dialog collected, written after the token for the user to
    *  finish or replace. */
   text: string;
@@ -943,10 +944,10 @@ export function Composer({
   // Session switch, but the next composer mounts in the same commit that
   // switches, before that effect runs: reading the seed then would turn the
   // sentence collected in the session that was left into this session's draft
-  // (#1434). An unowned seed (or a composer with no surface) keeps the old
-  // behaviour, since there is nothing to compare.
+  // (#1434). A composer rendered with no surface (a static or test render) has
+  // nothing to compare against, so it still adopts the seed.
   const ownedSeed = seededCommand !== undefined
-    && (seededCommand.owner === undefined || surfaceKey === undefined || seededCommand.owner === surfaceKey)
+    && (surfaceKey === undefined || seededCommand.owner === surfaceKey)
     ? seededCommand
     : undefined;
   const [text, setText] = useState(ownedSeed?.text ?? "");
