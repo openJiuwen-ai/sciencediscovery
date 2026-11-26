@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { IdeaResearchView } from "@sciencediscovery/schema";
+import type { IdeaResearchState, IdeaResearchSummary, IdeaResearchView } from "@sciencediscovery/schema";
 import type { ApiClient } from "./api.js";
 import { isAuthFailure } from "./api/auth.js";
 import { IDEA_RESEARCH_EXPECTED_EVENT } from "./ideaResearchNotice.js";
@@ -24,16 +24,34 @@ const EMPTY_POLL_FAST_FOR_MS = 2 * 60_000;
  */
 const EMPTY_POLL_WINDOW_MS = 10 * 60_000;
 
-function keepLatestView(incoming: IdeaResearchView, current?: IdeaResearchView): IdeaResearchView {
-  // Both snapshots carry the evolve store's UTC ISO timestamp. Compare the strings
-  // directly to preserve microseconds when a list response races a stream update.
-  return current && current.graph.updatedAt > incoming.graph.updatedAt ? current : incoming;
+type SummaryOrView = IdeaResearchSummary | IdeaResearchView;
+
+/** The newest ISO timestamp either shape carries. A summary keeps the store's
+ *  `updatedAt`; a full view also has the graph's. Compare the strings directly
+ *  to preserve microseconds when a list response races a stream update. */
+function snapshotTime(item: SummaryOrView): string {
+  const research = item.research as IdeaResearchState & { updatedAt?: string };
+  return research.updatedAt ?? ("graph" in item ? item.graph.updatedAt : "");
+}
+
+function keepLatest<T extends SummaryOrView>(incoming: T, current?: T): T {
+  if (!current) return incoming;
+  return current && snapshotTime(current) > snapshotTime(incoming) ? current : incoming;
+}
+
+/** A list summary may carry fresher card fields than the full view already held
+ *  for the graph; show its research without discarding that graph. */
+function withSummary(summary: SummaryOrView, detail: IdeaResearchView): IdeaResearchView {
+  return snapshotTime(summary) > snapshotTime(detail) ? { ...detail, research: summary.research } : detail;
 }
 
 export function IdeaResearchCard({client, sessionId, onError, onResearchAvailability}: {client: ApiClient; sessionId: string; onError: (reason: string | Error) => void; onResearchAvailability?: (available: boolean) => void}) {
   const { t } = useLocale();
   const element = useRef<HTMLElement>(null);
-  const [items, setItems] = useState<IdeaResearchView[]>([]);
+  const [items, setItems] = useState<IdeaResearchSummary[]>([]);
+  /** Full views, keyed by research id, for the one tree the card renders. The
+   *  list is a summary projection; the graph comes from `get` or the stream. */
+  const [details, setDetails] = useState<Map<string, IdeaResearchView>>(() => new Map());
   const [selected, setSelected] = useState<string>();
   const [open, setOpen] = useState(false);
   const [clock, setClock] = useState(Date.now());
@@ -62,7 +80,22 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
       const result = await client.listIdeaResearch(sessionId);
       setItems(current => {
         const byId = new Map(current.map(item => [item.research.id, item]));
-        return result.items.map(incoming => keepLatestView(incoming, byId.get(incoming.research.id)));
+        return result.items.map(incoming => {
+          const kept = byId.get(incoming.research.id);
+          return kept === undefined ? incoming : keepLatest(incoming, kept);
+        });
+      });
+      // An older engine may still answer with full views. Keep those graphs, but
+      // never replace a graph with the summary projection.
+      setDetails(current => {
+        let next: Map<string, IdeaResearchView> | undefined;
+        for (const incoming of result.items) {
+          if (!("graph" in incoming)) continue;
+          next ??= new Map(current);
+          const full = incoming as IdeaResearchView;
+          next.set(full.research.id, keepLatest(full, next.get(full.research.id)));
+        }
+        return next ?? current;
       });
       // An item closes the window that was opened for an empty list, so a Session
       // that already has a research is not re-read for the rest of the card's
@@ -87,7 +120,14 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     if (!activeId) return;
     const controller = new AbortController();
     void client.subscribeIdeaResearch(sessionId, activeId, incoming => {
-      setItems(current => current.map(item => item.research.id === incoming.research.id ? keepLatestView(incoming, item) : item));
+      setDetails(current => {
+        const next = new Map(current);
+        next.set(incoming.research.id, keepLatest(incoming, next.get(incoming.research.id)));
+        return next;
+      });
+      setItems(current => current.map(item => item.research.id === incoming.research.id
+        ? (snapshotTime(item) > snapshotTime(incoming) ? item : { research: incoming.research })
+        : item));
       setError(undefined);
     }, controller.signal).catch(e => {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
@@ -169,8 +209,29 @@ export function IdeaResearchCard({client, sessionId, onError, onResearchAvailabi
     } catch (e) { onError(e instanceof Error ? e : String(e)); }
     finally {setBusy(false);}
   }
-  const view = items.find(i => i.research.id === selected) ?? items[0];
-  if (!view) return error ? <p role="alert">{error} <button className="secondary-button compact-button" type="button" onClick={() => void load()}>{t("ideaResearch.retry")}</button></p> : null;
+  const displayId = items.some(i => i.research.id === selected) ? selected : items[0]?.research.id;
+  const summary = displayId === undefined ? undefined : items.find(i => i.research.id === displayId);
+  const detail = displayId === undefined ? undefined : details.get(displayId);
+  // The tree is fetched only for the research the card is showing; a summary
+  // never becomes an empty graph, which would silently hide every candidate.
+  useEffect(() => {
+    if (!displayId || details.has(displayId)) return undefined;
+    let active = true;
+    void client.ideaResearchCommand(sessionId, { operation: "get", researchId: displayId })
+      .then(full => {
+        if (!active) return;
+        setDetails(current => {
+          const next = new Map(current);
+          next.set(displayId, keepLatest(full, next.get(displayId)));
+          return next;
+        });
+        setError(undefined);
+      })
+      .catch(e => { if (active) setError(isAuthFailure(e) ? undefined : e instanceof Error ? e.message : String(e)); });
+    return () => { active = false; };
+  }, [client, displayId, sessionId, reconnect]);
+  const view = summary === undefined ? undefined : (detail === undefined ? undefined : withSummary(summary, detail));
+  if (!view) return error ? <p role="alert">{error} <button className="secondary-button compact-button" type="button" onClick={() => { void load(); setReconnect(n => n + 1); }}>{t("ideaResearch.retry")}</button></p> : null;
   const r = view.research;
   // A spent budget is terminal: explain the used/limit tokens and never offer an
   // end action the engine would no-op, or a resume that would hit the same ceiling.

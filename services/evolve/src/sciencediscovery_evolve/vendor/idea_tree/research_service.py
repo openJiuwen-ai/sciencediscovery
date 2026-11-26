@@ -164,9 +164,41 @@ def reconcile_orphaned_researches():
     return settled
 
 
+def summary_view(s):
+    """The card's fields, without the tree: what the polled list answers."""
+    return dict(research={k: copy.deepcopy(v) for k, v in s.items() if k not in ['nodes', 'materials']})
+
+
+def backfill_research_summaries():
+    """Create list projections for documents saved before they existed.
+
+    This is a boot-time migration, not a read side effect: `list` stays
+    read-only, and after this pass a legacy research no longer costs a full
+    document parse on every 5 s poll. Returns how many projections were written.
+    """
+    root = store().root
+    if not root.is_dir():
+        return 0
+    written = 0
+    for path in sorted(root.glob('*/*/*.json')):
+        project, session, identifier = path.parts[-3], path.parts[-2], path.stem
+        if store().summary_is_current(project, session, identifier):
+            continue
+        try:
+            store().write_summary(store().read(project, session, identifier))
+        except Exception as error:  # noqa: BLE001 - one damaged file must not stop the rest
+            log.warning('could not backfill research summary %s/%s/%s: %s',
+                        project, session, identifier, error)
+            continue
+        written += 1
+    if written:
+        log.info('created %d research summary projection(s)', written)
+    return written
+
+
 def view(s):
     engine = IdeaTreeEngine(s, store(), {})
-    return dict(research={k: copy.deepcopy(v) for k, v in s.items() if k not in ['nodes', 'materials']}, graph=engine.graph())
+    return {**summary_view(s), 'graph': engine.graph()}
 
 
 def start(s, llm):
@@ -208,8 +240,21 @@ async def command(c: Command):
         if c.operation == 'defaults':
             return dict(prompts=DEFAULTS, criteria=CRITERIA)
         if c.operation == 'list':
-            states = [state_for(c.projectId, c.sessionId, s['id']) for s in store().list(c.projectId, c.sessionId)]
-            return dict(items=[view(s) for s in states])
+            # The desktop re-lists every few seconds while a research is live. Read
+            # only the persisted projections (or the in-memory state of a research
+            # this process is driving): the list must not parse every full document
+            # or rebuild every graph. An explicit `get` above still does both.
+            items = []
+            for saved in store().list(c.projectId, c.sessionId):
+                active = _running.get(saved['id'])
+                if active:
+                    state = active[0].state
+                    if state['projectId'] != c.projectId or state['sessionId'] != c.sessionId:
+                        raise HTTPException(404, 'Research not found')
+                else:
+                    state = saved
+                items.append(summary_view(state))
+            return dict(items=items)
         if c.operation == 'create':
             if not c.objective.strip():
                 raise ValueError('Research objective is required')

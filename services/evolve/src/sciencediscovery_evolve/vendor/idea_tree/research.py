@@ -13,9 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ...logging_config import get_logger
 from . import prompts
 from .research_tree import ResearchTree
 from .templates import snapshot
+
+log = get_logger('idea_research')
 
 
 def now() -> str:
@@ -144,14 +147,20 @@ class ResearchStore:
                 raise ValueError("Invalid research scope")
         return self.root / project / session / f"{research}.json"
 
-    def save(self, state: dict) -> None:
-        path = self.path(state['projectId'], state['sessionId'], state['id'])
+    def summary_path(self, project: str, session: str, research: str) -> Path:
+        """The list projection's companion file, beside the full document.
+
+        It lives in a subdirectory so the full-document scans (`list`, restart
+        reconciliation) never mistake it for a research.
+        """
+        return self.path(project, session, research).parent / '.summaries' / f'{research}.json'
+
+    def _write(self, path: Path, value: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        state['updatedAt'] = now()
         with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False, encoding='utf-8') as out:
             temporary = out.name
             try:
-                json.dump(state, out, ensure_ascii=False, allow_nan=False)
+                json.dump(value, out, ensure_ascii=False, allow_nan=False)
                 out.flush()
                 os.fsync(out.fileno())
             except BaseException:
@@ -162,6 +171,50 @@ class ResearchStore:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+
+    def write_summary(self, state: dict) -> None:
+        document = self.path(state['projectId'], state['sessionId'], state['id']).stat()
+        summary = {key: value for key, value in state.items() if key not in ('nodes', 'materials')}
+        # The marker ties the projection to the document it was built from. Size and
+        # nanosecond mtime catch a truncated or replaced document without reading it;
+        # this is not a cryptographic digest, so a same-size rewrite with a preserved
+        # timestamp remains a documented residual limit.
+        summary['_document'] = {'size': document.st_size, 'mtimeNs': document.st_mtime_ns}
+        self._write(self.summary_path(state['projectId'], state['sessionId'], state['id']), summary)
+
+    def read_summary(self, project: str, session: str, research: str) -> dict | None:
+        """The projection, only when it is an object whose marker still matches."""
+        full, companion = self.path(project, session, research), self.summary_path(project, session, research)
+        try:
+            document = full.stat()
+            summary = json.loads(companion.read_text(encoding='utf-8'))
+            # Any valid JSON is not necessarily a projection: a truncated or
+            # hand-edited file can be `[]`, `null`, a string or a number. Treat
+            # that as stale/corrupt so `list` falls back to the document.
+            if not isinstance(summary, dict):
+                return None
+            marker = summary.pop('_document', None)
+            if not isinstance(marker, dict) or marker.get('size') != document.st_size or marker.get('mtimeNs') != document.st_mtime_ns:
+                return None
+            return summary
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+
+    def summary_is_current(self, project: str, session: str, research: str) -> bool:
+        return self.read_summary(project, session, research) is not None
+
+    def save(self, state: dict) -> None:
+        path = self.path(state['projectId'], state['sessionId'], state['id'])
+        state['updatedAt'] = now()
+        # `list` is polled every few seconds while a research is live. Persist its
+        # projection beside the document so that read never parses or rebuilds the
+        # full tree; an explicit `get` still reads the document and builds the graph.
+        self._write(path, state)
+        try:
+            self.write_summary(state)
+        except Exception as error:  # noqa: BLE001 - the projection is a cache, the document is already durable
+            log.warning('could not write research summary %s/%s/%s: %s',
+                        state['projectId'], state['sessionId'], state['id'], error)
 
         # Publish only after the checkpoint is durable. Each subscriber needs the
         # latest state, not a backlog of full trees while its network is slow.
@@ -176,8 +229,21 @@ class ResearchStore:
         return json.loads(self.path(project, session, research).read_text(encoding='utf-8'))
 
     def list(self, project: str, session: str) -> list[dict]:
+        """The session's researches as their saved projections.
+
+        The projection excludes `nodes` and `materials`; a document written
+        before this companion file existed falls back to one full read and is
+        projected in memory, never rewritten by a read.
+        """
         directory = self.path(project, session, 'unused').parent
-        return sorted((json.loads(p.read_text(encoding='utf-8')) for p in directory.glob('*.json')), key=lambda s: s['createdAt'], reverse=True)
+        records = []
+        for path in directory.glob('*.json'):
+            state = self.read_summary(project, session, path.stem)
+            if state is None:
+                state = json.loads(path.read_text(encoding='utf-8'))
+                state = {key: value for key, value in state.items() if key not in ('nodes', 'materials')}
+            records.append(state)
+        return sorted(records, key=lambda s: s['createdAt'], reverse=True)
 
 
 def node(identifier: str, parent: str | None, hypothesis: str, kind: str, depth: int) -> dict:

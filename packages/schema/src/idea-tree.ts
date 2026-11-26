@@ -321,4 +321,6 @@ export interface IdeaResearchState {
   /** Frozen template metadata for rendering the assessment stages of this research. */
   template?: IdeaResearchTemplate;
 }
+/** The polled list projection: the same card fields, without the full graph. */
+export interface IdeaResearchSummary { research: IdeaResearchState }
 export interface IdeaResearchView { research: IdeaResearchState; graph: IdeaTreeGraph }

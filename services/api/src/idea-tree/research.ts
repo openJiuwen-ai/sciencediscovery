@@ -107,9 +107,16 @@ export function createIdeaResearchClient(options: {
     return response.body;
   }
   async function summary(sessionId: string, researchId?: string) {
-    const view: IdeaResearchView | undefined = researchId
-      ? await command(sessionId, "get", {researchId}) : (await command(sessionId, "list")).items[0];
-    if (!view) return {message: "This session has no Idea Tree research yet."};
+    // The list is a summary projection now, so it only supplies the newest id.
+    // The agent's own summary still needs the tree, which only `get` answers.
+    let identifier = researchId;
+    if (!identifier) {
+      const listing = await command(sessionId, "list");
+      const newest = listing.items?.[0] ?? (listing.research ? listing : undefined);
+      identifier = newest?.research?.id ?? newest?.id;
+      if (!identifier) return {message: "This session has no Idea Tree research yet."};
+    }
+    const view: IdeaResearchView = await command(sessionId, "get", {researchId: identifier});
     return { ...view.research, candidates: view.graph.nodes.filter(n => n.kind === "candidate").map(n => ({
       id: n.id, hypothesis: n.hypothesis, status: n.status, score: n.score, insight: n.insight,
     })), insight: view.graph.nodes.find(n => n.id === "ROOT")?.insight };

@@ -25,31 +25,28 @@
  * entry has not been designed yet, which is not a score of 0.
  */
 
-import type { IdeaResearchState, IdeaResearchView, IdeaTreeGraph } from "@sciencediscovery/schema";
+import type { IdeaResearchState, IdeaResearchSummary, IdeaResearchView, IdeaTreeGraph } from "@sciencediscovery/schema";
 import type { ApiClient } from "./client.js";
 import { SseFrameDecoder } from "./stream.js";
 
 export interface IdeaResearchList {
-  items: IdeaResearchView[];
+  items: IdeaResearchSummary[];
 }
 
-/** The list route answers with `{ items }`; older engines answer with a bare view. */
-function viewsOf(payload: IdeaResearchList | IdeaResearchView | IdeaResearchState): IdeaResearchView[] {
+/** The list route answers with `{ items }`; older engines answer with a bare view.
+ *  A summary is enough for the cards and the live poll: only `get` answers the tree. */
+function summariesOf(payload: IdeaResearchList | IdeaResearchView | IdeaResearchState): IdeaResearchSummary[] {
   if (Array.isArray((payload as IdeaResearchList).items)) return (payload as IdeaResearchList).items;
-  if ((payload as IdeaResearchView).research) return [payload as IdeaResearchView];
-  if ((payload as IdeaResearchState).id) return [{ research: payload as IdeaResearchState, graph: emptyGraph() }];
+  if ((payload as IdeaResearchView).research) return [{ research: (payload as IdeaResearchView).research }];
+  if ((payload as IdeaResearchState).id) return [{ research: payload as IdeaResearchState }];
   return [];
 }
 
-function emptyGraph(): IdeaTreeGraph {
-  return { edges: [], nodes: [], objective: "", revision: 0, treeId: "", updatedAt: "" };
-}
-
-export async function listIdeaResearches(client: ApiClient, sessionId: string): Promise<IdeaResearchView[]> {
+export async function listIdeaResearches(client: ApiClient, sessionId: string): Promise<IdeaResearchSummary[]> {
   const payload = await client.request<IdeaResearchList | IdeaResearchView | IdeaResearchState>(
     `/api/sessions/${encodeURIComponent(sessionId)}/idea-tree/research`,
   );
-  return viewsOf(payload);
+  return summariesOf(payload);
 }
 
 export async function getIdeaResearch(client: ApiClient, sessionId: string, researchId: string): Promise<IdeaResearchView> {
