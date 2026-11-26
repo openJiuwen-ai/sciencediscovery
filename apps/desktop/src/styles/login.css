@@ -58,7 +58,7 @@
 
 .login-content {
   width: 100%;
-  max-width: 544px;
+  max-width: 600px;
   padding-top: clamp(72px, 12.2vh, 132px);
   padding-bottom: 64px;
 }
@@ -108,7 +108,7 @@
 }
 
 .login-entry-primary {
-  flex: 1 1 220px;
+  flex: 0 0 auto;
   min-width: 0;
 }
 
@@ -120,7 +120,7 @@
   gap: 8px;
   height: 40px;
   min-height: 40px;
-  padding: 0 20px;
+  padding: 0 14px;
   border: 1px solid var(--login-line);
   border-radius: 999px;
   background: #fff;
