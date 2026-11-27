@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { createSession, ensureInbox } from "../api/sessions.js";
 import type { ApiClient } from "../api/client.js";
@@ -121,6 +121,9 @@ export function SystemSettingsDialog({
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
   const [specialistSubpage, setSpecialistSubpage] = useState(false);
+  const [addingSpecialist, setAddingSpecialist] = useState(false);
+  /** The panel the keyboard is kept inside; see the effect below. */
+  const panel = useRef<HTMLElement>(null);
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -145,6 +148,43 @@ export function SystemSettingsDialog({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
+
+  // settings-panel-focus: the backdrop already makes this surface modal for the
+  // pointer. Without an effect here it was modal for the pointer only: 设置 was
+  // pressed, focus stayed on the rail, the first 23 Tabs walked the page behind
+  // the scrim, and the 47th left the dialog for `BODY` and came round again
+  // (#1485). The rule is the one 导入会话 and 我要反馈 already use — focus the
+  // panel on open, wrap Tab at its ends, hand focus back to whatever had it —
+  // so a reader who opens 设置 with the keyboard stays inside it until Escape.
+  useEffect(() => {
+    const node = panel.current;
+    if (!node) return;
+    const previous = document.activeElement as HTMLElement | null;
+    node.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.defaultPrevented) return;
+      // 添加模型 / 新增专家 / 技能的对话框 draw inside this panel and are a
+      // smaller boundary with their own trap. While one is open the keys belong
+      // to it, or this one would wrap at a boundary it is not holding.
+      if (node.querySelector('[aria-modal="true"]')) return;
+      const items = Array.from(node.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]):not([hidden]), textarea:not([disabled]), select:not([disabled]), a[href], summary, [tabindex="0"]'))
+        .filter((item) => !item.matches(":disabled") && item.getClientRects().length > 0);
+      const first = items[0], last = items.at(-1);
+      if (!first || !last) { event.preventDefault(); node.focus(); return; }
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === node)) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === node)) {
+        event.preventDefault(); first.focus();
+      }
+    };
+    node.addEventListener("keydown", trap);
+    return () => {
+      node.removeEventListener("keydown", trap);
+      // 技能's 导入 and MCP's 试用 close this surface on their way somewhere else,
+      // so the opener is only given the focus back while it is still on the page.
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
 
   const meta = TEXT.settings.system.groups[group];
 
@@ -247,7 +287,9 @@ export function SystemSettingsDialog({
         aria-label={TEXT.settings.system.title}
         aria-modal="true"
         className={`config-panel${navOpen ? "" : " is-nav-collapsed"}${group === "specialists" && specialistSubpage ? " is-specialist-subpage" : ""}`}
+        ref={panel}
         role="dialog"
+        tabIndex={-1}
       >
         <nav aria-label={TEXT.settings.system.navLabel} className="settings-group-nav">
           <div className="settings-nav-head">
