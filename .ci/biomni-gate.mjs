@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { canonical } from '../test/support/tagged/plan.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
@@ -191,21 +191,37 @@ export function renderSuite(report) {
   return `### Biomni L5 active cases: ${report.status}\n\nCompleted metrics: ${report.measured}/${report.expected}. Partial means are diagnostic only. Baseline: ${report.baseline_kind}.${provenance} Gates and release figures use official scores only. Local-variant scores are informational; — means unavailable.\n\n| Metric (time in ms) | Actual | Historical reference | Budget scale | Effective reference | Warning | Block | Status |\n|---|---|---|---|---|---|---|---|\n${limits}\n\n| Case | Status | Delivery | Evaluation | Official score | Local-variant score (non-gating) | Tokens | Peak RSS GiB | Research min | Tool calls / rounds | Reason |\n|---|---|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n\n${report.warnings.map(w => `- ${w}`).join('\n')}\n`;
 }
 
-export function collectSuite(plan, root, policy, baseline) {
+export function usesFinalBiomniAttempt(entry, result, attemptDirectory) {
+  if (result?.outcome !== 'PASS' || result.passed_after_retry !== true) return true;
+  // The tagged browser runner writes retries under real-<fixture>-retry.
+  const fixture = entry.tags.find(tag => tag.startsWith('fixture:'))?.split(':')[1] ?? 'standard';
+  return attemptDirectory === `real-${fixture}-retry`;
+}
+
+export function collectSuite(plan, root, policy, baseline, caseResults = []) {
   const documents = [];
-  function visit(path) {
-    for (const entry of readdirSync(path, { withFileTypes: true })) {
-      const target = join(path, entry.name);
-      if (entry.isDirectory()) visit(target);
-      else if (entry.isFile() && entry.name === 'benchmark-metrics.json') {
-        const doc = JSON.parse(readFileSync(target, 'utf8'));
-        if (doc.benchmark === 'biomnibench-da') documents.push(doc);
+  const results = new Map(caseResults.map(result => [result.key, result]));
+  for (const shard of realShards(plan)) {
+    const entries = new Map(plan.entries.filter(e => shard.keys.includes(e.key) && biomniCase(e))
+      .map(e => [biomniCase(e), e]));
+    if (!entries.size) continue;
+    const directory = join(root, `real-e2e-results-${shard.name}`);
+    function visit(path) {
+      for (const entry of readdirSync(path, { withFileTypes: true })) {
+        const target = join(path, entry.name);
+        if (entry.isDirectory()) visit(target);
+        else if (entry.isFile() && entry.name === 'benchmark-metrics.json') {
+          const doc = JSON.parse(readFileSync(target, 'utf8'));
+          if (doc.benchmark !== 'biomnibench-da') continue;
+          const planned = entries.get(doc.case_id);
+          const attemptDirectory = relative(directory, target).split(sep)[0];
+          if (!planned || usesFinalBiomniAttempt(planned, results.get(planned.key), attemptDirectory)) {
+            documents.push(doc);
+          }
+        }
       }
     }
-  }
-  for (const shard of realShards(plan)) {
-    if (!plan.entries.some(e => shard.keys.includes(e.key) && biomniCase(e))) continue;
-    try { visit(join(root, `real-e2e-results-${shard.name}`)); }
+    try { visit(directory); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   return evaluateSuite(plan, documents, policy, baseline);

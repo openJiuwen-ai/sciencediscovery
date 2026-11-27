@@ -1,10 +1,11 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exactSum, sessionUsageTokens } from '../test/helpers/case-measurements.mjs';
-import { realShards } from '../test/support/tagged/execution.mjs';
+import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
+import { usesFinalBiomniAttempt } from './biomni-gate.mjs';
 import { validatePlan } from '../test/support/tagged/plan.mjs';
 
 export const columns = [
@@ -69,7 +70,9 @@ function metricDocuments(root) {
       else if (entry.isFile() && /^(benchmark|team|evolve|case)-metrics\.json$/.test(entry.name)) {
         try {
           const doc = JSON.parse(readFileSync(path, 'utf8'));
-          if (doc && typeof doc === 'object' && !Array.isArray(doc)) docs.push(doc);
+          if (doc && typeof doc === 'object' && !Array.isArray(doc)) {
+            docs.push({ doc, attemptDirectory: relative(root, path).split(sep)[0] });
+          }
         } catch { /* Incomplete optional evidence leaves n/a cells. */ }
       }
     }
@@ -88,9 +91,11 @@ export function caseExecutionSummary(plan, root, verdict) {
   for (const shard of realShards(plan)) {
     const docs = metricDocuments(join(root, `real-e2e-results-${shard.name}`));
     for (const entry of plan.entries.filter(entry => shard.keys.includes(entry.key))) {
-      const id = caseId(entry), candidates = docs.filter(doc => matches(doc, entry, id));
+      const id = caseId(entry), result = results.get(entry.key);
+      const candidates = docs.filter(({ doc, attemptDirectory }) => matches(doc, entry, id)
+        && (!biomniCase(entry) || usesFinalBiomniAttempt(entry, result, attemptDirectory)));
       // Ambiguous evidence cannot supply a measurement for this identity.
-      const doc = candidates.length === 1 ? candidates[0] : {};
+      const doc = candidates.length === 1 ? candidates[0].doc : {};
       const m = executionMeasurements(doc), evaluation = doc.evaluation;
       const lowerBound = doc.benchmark === 'biomnibench-da' && doc.judge_usage?.complete === false;
       const tokens = value => lowerBound && count(value) !== undefined ? `≥ ${compactTokens(value)}` : compactTokens(value);
@@ -99,7 +104,6 @@ export function caseExecutionSummary(plan, root, verdict) {
       const score = first(finite(evaluation?.overall_score), finite(evaluation?.total_score), finite(evaluation?.score));
       const duration = number(doc.generation_duration_ms);
       const started = typeof doc.started_at === 'string' ? Date.parse(doc.started_at) : NaN;
-      const result = results.get(entry.key);
       rows.push({ started: Number.isFinite(started) ? started : Infinity, row: {
         case: id,
         status: outcomeStatus[result?.outcome] ?? status(doc.integration_status) ?? status(doc.integration) ?? 'not_run',
