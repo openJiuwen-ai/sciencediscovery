@@ -165,7 +165,7 @@ test("Ctrl+K opens the same dialog, the arrows walk it, and Enter opens the hit"
   await expect(page.locator(".main-area")).toBeVisible();
 });
 
-test("a kind shows only its own hits, and its 更多 note counts no other kind", async ({ page }) => {
+test("a kind shows only its own hits, and the answer withholds its count", async ({ page }) => {
   await installMockApi(page, { ...seed(), search: { hasMore: true, results: HITS, total: 9 } });
   await page.goto("/");
 
@@ -173,27 +173,22 @@ test("a kind shows only its own hits, and its 更多 note counts no other kind",
   await page.locator(".search-panel-input").fill("晶");
   await expect(page.locator(".search-hit")).toHaveCount(HITS.length);
 
-  // 全部 counts what it did not show, across the whole answer.
-  await expect(page.locator(".search-panel-note")).toHaveText(/还有 5 条结果/u);
+  // 9 answered and 5 drawn: the dialog says nothing about the gap. The rows are
+  // the answer, and a line explaining how search works is noise around them.
+  await expect(page.locator(".search-panel-note")).toHaveCount(0);
 
   await page.locator(".search-kind", { hasText: "项目" }).click();
   await expect(page.locator(".search-hit")).toHaveCount(1);
   await expect(page.locator(".search-hit-label")).toHaveText("晶体材料研究");
   await expect(page.locator(".search-panel-heading")).toHaveCount(0);
+  await expect(page.locator(".search-panel-note")).toHaveCount(0);
 
-  // A kind cannot count the kinds it is not showing, so the note drops the
-  // number instead of borrowing 全部's.
-  const note = page.locator(".search-panel-note");
-  await expect(note).toHaveText(/还有更多结果/u);
-  await expect(note).not.toHaveText(/条结果/u);
-
-  // Back to 全部 and the count is the whole answer's again.
   await page.locator(".search-kind", { hasText: "全部" }).click();
   await expect(page.locator(".search-hit")).toHaveCount(HITS.length);
-  await expect(note).toHaveText(/还有 5 条结果/u);
+  await expect(page.locator(".search-panel-note")).toHaveCount(0);
 });
 
-test("a hit for an archived Session is not drawn, and the note does not count it", async ({ page }) => {
+test("a hit for an archived Session is not drawn", async ({ page }) => {
   // The route answers archived hits too, so the page carries the rule itself.
   // Its listing has to be in hand for that: the archived Session here is seeded
   // before the search answers, which is the ordering a reader actually gets.
@@ -218,8 +213,8 @@ test("a hit for an archived Session is not drawn, and the note does not count it
   await expect(page.locator(".search-hit")).toHaveCount(1);
   await expect(page.locator(".search-hit-label")).toHaveText("晶体结构分析");
 
-  // 9 answered, 2 dropped by the rule, 1 drawn: six remain — not eight.
-  await expect(page.locator(".search-panel-note")).toHaveText(/还有 6 条结果/u);
+  // 9 answered, 2 dropped by the rule, 1 drawn — and nothing is counted back.
+  await expect(page.locator(".search-panel-note")).toHaveCount(0);
 });
 
 test("Escape closes from the footer's kinds, and the magnifier takes the focus back", async ({ page }) => {
