@@ -60,7 +60,8 @@ assign you.
    Write Chinese only when the person who asked explicitly wants Chinese.
 8. **A user-visible change carries before/after screenshots in the body, in
    both locales.** A diff cannot show a label, a layout or a colour, so the
-   frames are the evidence: same view, same viewport, linked from a commit.
+   frames are the evidence: same view, same viewport, committed under
+   `docs/screenshots/<topic>/`, redacted before they are published.
 
 ## Run the layers first
 
@@ -173,8 +174,9 @@ blocked / skipped counts and failure attribution.>
 
 ## UI screenshots
 <Required when the change is visible to a user. Before and after frames of the
-same view, zh-CN and en, each linked from a commit SHA; name the surface, the
-viewport, how the state was produced, and what the frames do not cover.>
+same view, in zh-CN and en, committed under `docs/screenshots/<topic>/` with a
+README that says how they were captured, what is mocked and what each frame
+shows; embed them here from a commit SHA.>
 
 ## Release
 Release category: <one release:* label>
@@ -188,10 +190,12 @@ label on the pull request is what the release note reads.
 
 For a user-visible change the `UI screenshots` section is not decorative: a
 renamed string, a moved control or a new empty state is invisible in the diff,
-and one locale can carry a rename the other one missed. Take both frames from
-the same viewport and the same crop so the only difference between them is the
-change; push them to a separate branch of your own fork, link the **commit**
-SHA rather than the branch, and open every link once before you request review.
+and one locale can carry a rename the other one missed. Capture before and after
+from the same viewport and the same crop so the change is the only difference,
+commit them under `docs/screenshots/<topic>/` with a `README.md` that says how
+they were taken and what is mocked, and embed them in the body from a commit SHA
+— a branch moves and the body silently starts showing something else. Redact
+keys, tokens and absolute paths first.
 [CONTRIBUTING.md](../../../CONTRIBUTING.md#ui-changes-need-screenshots) states
 the same rule for people who do not work through this skill.
 
