@@ -136,15 +136,29 @@ export function evaluateSuite(plan, documents, policy, baseline) {
   if (!['candidate', 'compare', 'temporary'].includes(policy?.mode)) problems.push('INVALID_BASELINE_POLICY');
   if (policy?.mode === 'candidate' && (policy.baseline !== null || baseline)) problems.push('CANDIDATE_MUST_NOT_USE_BASELINE');
   for (const entry of expected) {
-    const matches = documents.filter(doc => doc.case_id === biomniCase(entry));
-    const state = { case_id: biomniCase(entry), status: 'incomplete', delivery: matches[0]?.integration_status ?? 'missing',
-      evaluation: matches[0]?.evaluation?.status ?? 'missing', measurements: matches.length === 1 ? projectMetrics(matches[0]).measurements : {},
-      local_evaluation: matches.length === 1 ? projectMetrics(matches[0]).local_evaluation : undefined, reason: null };
-    if (matches.length === 1) state.judge_usage = projectMetrics(matches[0]).judge_usage;
+    const caseId = biomniCase(entry);
+    const matches = documents.filter(doc => doc.case_id === caseId);
+    // A bounded case-level retry writes a fresh scorecard and keeps the attempt
+    // it repeats, so one case legitimately owns several documents. Accept the
+    // single attempt that validates instead of the first file; more than one
+    // validating document stays a genuine duplicate.
+    const accepted = [], failures = [];
+    for (const doc of matches) {
+      try { accepted.push({ doc, metrics: validateMetrics(doc, entry, plan) }); }
+      catch (error) { failures.push(error.message); }
+    }
+    const shown = accepted.length === 1 ? accepted[0].doc : matches[0];
+    const projected = shown ? projectMetrics(shown) : null;
+    const state = { case_id: caseId, status: 'incomplete', delivery: projected?.integration_status ?? 'missing',
+      evaluation: projected?.evaluation?.status ?? 'missing', measurements: projected?.measurements ?? {},
+      local_evaluation: projected?.local_evaluation, attempts: matches.length, valid_attempts: accepted.length,
+      passed_after_retry: accepted.length === 1 && matches.length > 1, reason: null };
+    if (projected?.judge_usage) state.judge_usage = projected.judge_usage;
     caseStatuses.push(state);
-    if (matches.length !== 1) { state.reason = 'MISSING_OR_DUPLICATE_METRICS'; problems.push(`${biomniCase(entry)}: ${state.reason}`); continue; }
-    try { results.push(validateMetrics(matches[0], entry, plan)); state.status = 'completed'; }
-    catch (error) { state.reason = error.message; problems.push(`${biomniCase(entry)}: ${error.message}`); }
+    if (accepted.length === 1) { results.push(accepted[0].metrics); state.status = 'completed'; continue; }
+    // Fail closed: no validating attempt is missing/incomplete, several are duplicate.
+    state.reason = matches.length === 1 ? failures[0] : 'MISSING_OR_DUPLICATE_METRICS';
+    problems.push(`${caseId}: ${state.reason}`);
   }
   if (documents.some(doc => !ids.includes(doc.case_id))) problems.push('UNEXPECTED_BIOMNI_METRICS');
   if (policy?.mode === 'compare') {
@@ -186,7 +200,10 @@ export function renderSuite(report) {
     const local = c.local_evaluation;
     const localScore = local?.status === 'scored' && Number.isFinite(local.score) ? format(local.score) : '—';
     const tokenNote = c.judge_usage?.complete === false ? `≥ ${value('total_tokens')} (${c.judge_usage.unknown_attempts} attempts unknown)` : value('total_tokens');
-    return `| ${c.case_id} | ${c.status} | ${c.delivery} | ${c.evaluation} | ${value('score')} | ${localScore} | ${tokenNote} | ${value('peak_rss_bytes', 1024 ** 3)} | ${value('e2e_ms', 60000)} | ${value('tool_calls')} / ${value('tool_rounds')} | ${c.reason ?? ''} |`;
+    // Name the recovered retry and the attempt actually certified.
+    const status = c.passed_after_retry
+      ? `${c.status} (passed after retry, ${c.valid_attempts} of ${c.attempts} scorecards valid)` : c.status;
+    return `| ${c.case_id} | ${status} | ${c.delivery} | ${c.evaluation} | ${value('score')} | ${localScore} | ${tokenNote} | ${value('peak_rss_bytes', 1024 ** 3)} | ${value('e2e_ms', 60000)} | ${value('tool_calls')} / ${value('tool_rounds')} | ${c.reason ?? ''} |`;
   });
   return `### Biomni L5 active cases: ${report.status}\n\nCompleted metrics: ${report.measured}/${report.expected}. Partial means are diagnostic only. Baseline: ${report.baseline_kind}.${provenance} Gates and release figures use official scores only. Local-variant scores are informational; — means unavailable.\n\n| Metric (time in ms) | Actual | Historical reference | Budget scale | Effective reference | Warning | Block | Status |\n|---|---|---|---|---|---|---|---|\n${limits}\n\n| Case | Status | Delivery | Evaluation | Official score | Local-variant score (non-gating) | Tokens | Peak RSS GiB | Research min | Tool calls / rounds | Reason |\n|---|---|---|---|---|---|---|---|---|---|---|\n${rows.join('\n')}\n\n${report.warnings.map(w => `- ${w}`).join('\n')}\n`;
 }

@@ -11,7 +11,7 @@ import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.
 import { prepareRealE2EResults } from './prepare-real-e2e-results.mjs';
 import { profiles } from '../test/support/tagged/profiles.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
-import { dataset, l5Tasks, manifestHash, evaluateSuite, projectMetrics, validateMetrics, renderSuite } from './biomni-gate.mjs';
+import { dataset, l5Tasks, manifestHash, collectSuite, evaluateSuite, projectMetrics, validateMetrics, renderSuite } from './biomni-gate.mjs';
 import { generationTokens, judgeTokens, toolMetrics, settled, selectedProcesses, MEASUREMENT_VERSION } from '../test/benchmarks/biomnibench-da/metrics.mjs';
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64', 'arch:arm64'] });
 const catalog = l5Tasks.map(t => ({ id: `playwright:test/biomnibench-da-swarm.spec.ts::BiomniBench-${t.id}%20analysis`,
@@ -66,6 +66,64 @@ test('missing, duplicate, foreign, incomplete and non-finite metrics fail closed
     const docs = documents(); mutate(docs); assert.equal(evaluateSuite(plan, docs, policy).status, 'failed');
   }
   assert.equal(evaluateSuite({ ...plan, entries: plan.entries.slice(1) }, documents().slice(1), policy).status, 'failed');
+});
+
+// A bounded case-level retry writes a fresh scorecard and keeps the attempt it
+// repeats, so one case_id can legitimately own two documents. The suite must
+// certify the attempt that validates and name the recovered retry.
+const superseded = doc => ({ ...structuredClone(doc), integration_status: 'failed',
+  evaluation: { ...doc.evaluation, status: 'not_run' }, local_evaluation: { status: 'error', score: null } });
+
+test('a case that passed only on its case-level retry is certified from the retried scorecard', () => {
+  const docs = documents(), retried = docs.shift(), failed = superseded(retried);
+  const collected = [failed, ...docs, retried];
+  const result = evaluateSuite(plan, collected, policy);
+  assert.equal(result.status, 'baseline_candidate');
+  assert.equal(result.measured, 45);
+  assert.equal(result.summary_complete, true);
+  const status = result.case_statuses.find(c => c.case_id === retried.case_id);
+  assert.equal(status.status, 'completed');
+  assert.equal(status.delivery, 'passed');
+  assert.equal(status.evaluation, 'scored');
+  assert.equal(status.measurements.score, 80);
+  assert.equal(status.passed_after_retry, true);
+  assert.equal(status.attempts, 2);
+  assert.equal(status.valid_attempts, 1);
+  const rendered = renderSuite(result);
+  assert.match(rendered, new RegExp(`${retried.case_id} \\| completed \\(passed after retry`));
+  assert.doesNotMatch(rendered, /MISSING_OR_DUPLICATE_METRICS/);
+});
+
+test('a shard directory holding a superseded and a retried scorecard certifies through collectSuite', t => {
+  const root = mkdtempSync(join(tmpdir(), 'biomni-retry-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const docs = documents(), retried = docs[0], failed = superseded(retried);
+  for (const shard of realShards(plan)) {
+    const directory = join(root, `real-e2e-results-${shard.name}`, 'e2e-real/test-results', shard.name);
+    mkdirSync(directory, { recursive: true });
+    const doc = docs.find(d => shard.keys.includes(d.key));
+    if (!doc) continue;
+    // Both attempts stay under the shard: the retry never erases its first attempt.
+    if (doc === retried) writeFileSync(join(directory, 'benchmark-metrics.json'), JSON.stringify(projectMetrics(failed)));
+    const attempt = doc === retried ? join(directory, 'retry') : directory;
+    mkdirSync(attempt, { recursive: true });
+    writeFileSync(join(attempt, 'benchmark-metrics.json'), JSON.stringify(projectMetrics(doc)));
+  }
+  const result = collectSuite(plan, root, policy);
+  assert.equal(result.status, 'baseline_candidate');
+  assert.equal(result.measured, 45);
+  assert.equal(result.case_statuses.find(c => c.case_id === retried.case_id).passed_after_retry, true);
+});
+
+test('two valid scorecards for one case still fail closed as a genuine duplicate', () => {
+  for (const second of [docs => structuredClone(docs[0]), docs => { const copy = structuredClone(docs[0]); copy.measurements.score = 90; copy.evaluation.score = 90; return copy; }]) {
+    const docs = documents(); docs.push(second(docs));
+    const result = evaluateSuite(plan, docs, policy);
+    assert.equal(result.status, 'failed');
+    assert.match(result.problems.join(), new RegExp(`${docs[0].case_id}: MISSING_OR_DUPLICATE_METRICS`));
+    assert.equal(result.case_statuses[0].valid_attempts, 2);
+    assert.equal(result.case_statuses[0].passed_after_retry, false);
+  }
 });
 
 test('comparison requires approval, compatible configuration, per-task score and resource bounds', () => {
