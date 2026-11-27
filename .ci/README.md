@@ -341,14 +341,48 @@ accounting, and gate jobs (`policy`, `l1`, `e2e-plan`, `coverage`, and
 `merge-gate` in `ci.yml`, plus `real-plan` and `real-report` in `real-e2e.yml`)
 route `merge_group` runs to dedicated self-hosted light runner slots labelled
 `[self-hosted, Linux, X64, sciencediscovery-light]`. Keeping these slots
-separate from heavier test runners prevents short decision/gate jobs from
-waiting behind hosted runner capacity or long-running test shards. When routed
-to a light slot, `l1`, `e2e-plan`, and `real-plan` skip the remote
-`setup-node` `pnpm` cache and reuse the container's local cache volume
-directly. `pull_request` (including forks), `workflow_dispatch`, `schedule`,
-`push`, and all credentialed or heavy test/build jobs never match
-`sciencediscovery-light`. Clearing `CI_SELF_HOSTED_MERGE_QUEUE` immediately
-returns all seven jobs to `ubuntu-latest`.
+separate from heavier test runners prevents short decision and gate jobs from
+waiting behind hosted runner capacity or long-running test shards.
+`pull_request` (including forks), `workflow_dispatch`, `schedule`, `push`, and
+all credentialed or heavy test/build jobs never match `sciencediscovery-light`.
+
+Because `policy` is a prerequisite of every other job in `ci.yml` and both the
+light pool (`sciencediscovery-light`) and heavy merge-queue pool share the same
+`CI_SELF_HOSTED_MERGE_QUEUE` repository variable, deploy and verify the light
+runners **before** setting `CI_SELF_HOSTED_MERGE_QUEUE=true`:
+
+1. **Container image and local cache environment**: Build a Linux x64 GitHub
+   Actions runner container image with `git`, Node.js `22.19.0` (pre-placed in
+   `/opt/hostedtoolcache/node/22.19.0/x64` or `PATH`), and `pnpm` `11.1.2`.
+   Mount a persistent host cache directory at `/ci-cache` and export
+   `pnpm_config_store_dir=/ci-cache/pnpm-store` and
+   `npm_config_cache=/ci-cache/npm-cache` inside the container.
+2. **Register dedicated light slots**: Obtain a repository runner registration
+   token under **Settings → Actions → Runners → New self-hosted runner** and
+   register at least two containers (for example with a `4 GiB` memory limit
+   each and separate persistent runner state directories) using
+   `--labels sciencediscovery-light`. Confirm the runners appear as **Idle**
+   with labels `self-hosted, Linux, X64, sciencediscovery-light` (kept disjoint
+   from any heavy `sciencediscovery` runner labels).
+3. **Warm `/ci-cache` before enabling**: When routed to a light slot, `l1`,
+   `e2e-plan`, and `real-plan` disable the remote `actions/setup-node` `pnpm`
+   cache to avoid cross-region cache transfers and reuse `/ci-cache` directly.
+   Run a one-time warm-up inside the runner image against `/ci-cache`
+   (`pnpm install --frozen-lockfile`, `node test/sync-e2e.mjs --write`,
+   `npm ci --prefix .e2e`) before flipping the variable; a cold cache volume
+   falls back to fetching packages from the public registry inside `l1`'s
+   unchanged 10-minute timeout.
+4. **Enable in order**: Confirm both the `sciencediscovery-light` runners and
+   any other runner pool gated by `CI_SELF_HOSTED_MERGE_QUEUE` are online and
+   warm, then set repository variable `CI_SELF_HOSTED_MERGE_QUEUE=true`.
+
+**Rollback and outage recovery**: GitHub Actions evaluates `runs-on` when a job
+is queued, not retroactively. Unsetting or changing
+`CI_SELF_HOSTED_MERGE_QUEUE` returns all **newly created** `merge_group` runs
+to `ubuntu-latest`, while jobs already queued waiting for
+`sciencediscovery-light` continue waiting for that label. During a light-runner
+outage, clear `CI_SELF_HOSTED_MERGE_QUEUE` first, then cancel and re-run the
+affected `merge_group` runs (or re-enqueue any PR ejected by the merge queue).
 
 ### Isolated JiuwenSwarm state
 
