@@ -159,6 +159,26 @@
   background-size: 14px 14px;
 }
 
+/* The grab cursor is the only hint that the drawing can be dragged, so it
+ * appears exactly when there is something to drag. */
+.idea-tree.is-pannable {
+  cursor: grab;
+}
+
+.idea-tree.is-dragging {
+  cursor: grabbing;
+}
+
+.idea-tree.is-dragging .idea-tree-plane {
+  user-select: none;
+}
+
+/* The tree takes focus for its keyboard zoom, so it has to show that it has. */
+.idea-tree:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
 /* The zoom controls sit above the drawing and stay there while it scrolls, so
  * they are reachable at any scale without taking a corner of the tree itself. */
 .idea-tree-zoom {

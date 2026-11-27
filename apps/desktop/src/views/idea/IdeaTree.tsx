@@ -32,6 +32,11 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 
 import type { IdeaTreeNode, IdeaTreeGraph } from "@sciencediscovery/schema";
 import { TEXT } from "../../text.js";
@@ -100,6 +105,9 @@ const MIN_SCALE = 0.6;
 export const IDEA_TREE_ZOOM_MIN = 0.4;
 export const IDEA_TREE_ZOOM_MAX = 2;
 const ZOOM_STEP = 1.2;
+/** A double-click moves further than one button press, so it is a gesture of
+ *  its own rather than a slower way to press ＋ twice. */
+const DOUBLE_CLICK_STEP = 1.5;
 const WHEEL_STEP = 0.0015;
 
 /** The scale that fits the drawing into the column, kept readable and never
@@ -236,6 +244,13 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
   /** A zoom changes the scale and the scroll in the same breath, but the scroll
    *  range only exists after the new size is laid out. */
   const pendingScroll = useRef<{ left: number; top: number } | null>(null);
+  /** A drag pans by scrolling; the press position and the scroll it started
+   *  from are what make the drag follow the pointer exactly. */
+  const drag = useRef<{ left: number; pointerId: number; top: number; x: number; y: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  /** The drawing is only draggable when it is bigger than the column: the grab
+   *  cursor says so, and nothing pretends to move when everything already fits. */
+  const [pannable, setPannable] = useState(false);
 
   const fitScale = (): number | undefined => {
     const element = box.current;
@@ -264,8 +279,9 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
   const fit = (): void => {
     manual.current = false;
     pendingScroll.current = null;
-    const next = fitScale();
-    if (next === undefined) return;
+    // With no measurable column (a closed panel, or a test without a DOM) the
+    // drawing's own size is the fit.
+    const next = fitScale() ?? 1;
     scaleRef.current = next;
     setScale(next);
   };
@@ -328,9 +344,87 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
   }, [applyScale]);
+
+  useLayoutEffect(() => {
+    const element = box.current;
+    if (element === null) return;
+    setPannable(layout.width * scale > element.clientWidth + 1 || layout.height * scale > element.clientHeight + 1);
+  }, [layout.height, layout.width, scale]);
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    // A press on a node belongs to that node's own click, not to the pan.
+    if ((event.target as HTMLElement).closest(".idea-tree-node-button") !== null) return;
+    const element = box.current;
+    if (element === null) return;
+    drag.current = {
+      left: element.scrollLeft,
+      pointerId: event.pointerId,
+      top: element.scrollTop,
+      x: event.clientX,
+      y: event.clientY,
+    };
+    element.setPointerCapture(event.pointerId);
+    setDragging(true);
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const current = drag.current;
+    const element = box.current;
+    if (current === null || element === null || current.pointerId !== event.pointerId) return;
+    element.scrollLeft = current.left - (event.clientX - current.x);
+    element.scrollTop = current.top - (event.clientY - current.y);
+  };
+
+  const endDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const element = box.current;
+    drag.current = null;
+    if (element !== null && element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId);
+    setDragging(false);
+  };
+
+  const onDoubleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest(".idea-tree-node-button") !== null) return;
+    // Zoomed in? Back to the column's fit. At the fit? One step closer.
+    const fitted = fitScale() ?? 1;
+    if (scaleRef.current > fitted + 1e-6) {
+      fit();
+      return;
+    }
+    applyScale(ideaTreeZoomScale(scaleRef.current, DOUBLE_CLICK_STEP));
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // Keys pressed inside a node button are that button's.
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      applyScale(ideaTreeZoomScale(scaleRef.current, ZOOM_STEP));
+    } else if (event.key === "-" || event.key === "_") {
+      event.preventDefault();
+      applyScale(ideaTreeZoomScale(scaleRef.current, 1 / ZOOM_STEP));
+    } else if (event.key === "0") {
+      event.preventDefault();
+      fit();
+    }
+  };
+
   if (!layout.nodes.length) return <p className="idea-tree-empty">{t.empty}</p>;
   return (
-    <div className="idea-tree" aria-label={t.tree} ref={box} role="group">
+    <div
+      aria-keyshortcuts="+ - 0"
+      aria-label={t.tree}
+      className={`idea-tree${dragging ? " is-dragging" : ""}${pannable ? " is-pannable" : ""}`}
+      onDoubleClick={onDoubleClick}
+      onKeyDown={onKeyDown}
+      onPointerCancel={endDrag}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      ref={box}
+      role="group"
+      tabIndex={0}
+    >
       <div className="idea-tree-zoom" role="group" aria-label={t.zoom.aria}>
         <button
           aria-label={t.zoom.out}

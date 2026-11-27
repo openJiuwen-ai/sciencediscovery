@@ -138,6 +138,56 @@ test("hand zoom stops at the limits the buttons share", () => {
   assert.equal(ideaTreeZoomScale(1, 1.2), 1.2);
 });
 
+test("the tree zooms from the keyboard and a double click, and both go back to the fit", async () => {
+  let view!: ReturnType<typeof create>;
+  await act(async () => {
+    view = create(React.createElement(IdeaTreeView, { graph: graph([node({ id: "root" })]) }));
+  });
+  const planeScale = (): string =>
+    String(view.root.findAll((item) => item.props.className === "idea-tree-plane")[0]!.props.style.transform);
+  const treeProps = () => view.root.findAll((item) => item.props.className === "idea-tree")[0]!.props;
+  const press = async (key: string) => {
+    // The handler only acts when the key came from the region itself.
+    const host = {};
+    await act(async () => { treeProps().onKeyDown({ key, preventDefault: () => undefined, target: host, currentTarget: host }); });
+  };
+
+  await press("+");
+  assert.match(planeScale(), /scale\(1\.2\)/);
+  await press("-");
+  assert.match(planeScale(), /scale\(1\)/);
+  await press("+");
+  await press("+");
+  await press("0");
+  assert.match(planeScale(), /scale\(1\)/, "0 is the fit");
+
+  const doubleClick = async () => {
+    await act(async () => { treeProps().onDoubleClick({ target: { closest: () => null } }); });
+  };
+  await doubleClick();
+  assert.match(planeScale(), /scale\(1\.5\)/, "a double click moves further than one button press");
+  await doubleClick();
+  assert.match(planeScale(), /scale\(1\)/, "the second double click is the way back");
+  view.unmount();
+});
+
+test("a double click on a node is that node's, not the canvas's", async () => {
+  const picked: string[] = [];
+  let view!: ReturnType<typeof create>;
+  await act(async () => {
+    view = create(React.createElement(IdeaTreeView, {
+      graph: graph([node({ id: "n1" })]),
+      onSelect: (selected) => picked.push(selected.id),
+    }));
+  });
+  const treeProps = () => view.root.findAll((item) => item.props.className === "idea-tree")[0]!.props;
+  await act(async () => { treeProps().onDoubleClick({ target: { closest: () => ({}) } }); });
+  const planeScale = String(view.root.findAll((item) => item.props.className === "idea-tree-plane")[0]!.props.style.transform);
+  assert.match(planeScale, /scale\(1\)/, "a double click on a node does not zoom the canvas");
+  assert.deepEqual(picked, []);
+  view.unmount();
+});
+
 test("an automatic fit leaves a hand-set scale alone", () => {
   assert.equal(ideaTreeAutoFit(true, 0.7), undefined, "new data must not take the reader's scale back");
   assert.equal(ideaTreeAutoFit(false, 0.7), 0.7, "before any hand zoom the fit still tracks the column");
