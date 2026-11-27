@@ -183,3 +183,21 @@ test("enabled defaults to enabled when the key is absent (backward compat)", asy
     assert.ok(dispatch.some((s) => s.id === id), "absent enabled key should mean enabled");
   }, "compat");
 });
+
+test("prompt examples persist separately from instructions and built-ins stay read-only", async () => {
+  await withStore(async store => {
+    const role = await store.createSpecialist({ name: "Example author", description: "d", instructions: "system role", promptExamples: ["  Check this dataset  "] });
+    assert.deepEqual(role.promptExamples, ["Check this dataset"]);
+    assert.equal(role.instructions, "system role");
+    await store.updateSpecialist(role.id, { description: "edited" });
+    assert.deepEqual(store.getSpecialist(role.id)?.promptExamples, ["Check this dataset"]);
+    await store.updateSpecialist(role.id, { enabled: false });
+    await store.load();
+    assert.deepEqual(store.getSpecialist(role.id)?.promptExamples, ["Check this dataset"]);
+    await assert.rejects(store.updateSpecialist(BUILTIN_SPECIALIST_IDS[0]!, { promptExamples: ["change"] }), /read-only/);
+    await assert.rejects(store.updateSpecialist(role.id, { promptExamples: [""] }), /Specialist prompt examples/);
+    await assert.rejects(store.updateSpecialist(role.id, { promptExamples: Array.from({ length: 11 }, () => "example") }), /Specialist prompt examples/);
+    await store.updateSpecialist(role.id, { promptExamples: [] });
+    assert.deepEqual(store.getSpecialist(role.id)?.promptExamples, []);
+  }, "prompt-examples");
+});

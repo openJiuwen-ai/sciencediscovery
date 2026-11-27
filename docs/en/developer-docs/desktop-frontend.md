@@ -148,14 +148,15 @@ Idea Tree's parameters — research template, exploration intensity, score direc
 
 What is absent from the panel is absent by request, not because the capability is gone: settings includes Specialists, MCP servers, Scientific Memory and Timeouts, while separate legacy connector, permission and feedback pages remain absent; 通用 carries only the interface language (the recorded data directory it once showed is gone, not a setting), network keeps only the sandbox policy — 无网络, 域名白名单 and 开放网络: the allowlist carries a domain box and a 保存 of its own, because the service refuses an empty allowlist and the box is grey and disabled in the other modes, so picking that mode only stages it and the save writes the mode and the domains together; 无网络 and 开放网络 are written on the pick, with 开放网络 still asking first; the private-network switch, the egress route and the save warning are still not offered, and the proxy server list is no longer read here — remote keeps only the Runner and no longer offers the 测试连接 button on its cards (connecting, trusting a host key and saving credentials still probe), the composer has no 会话配置 button, and sessions are no longer archived or restored from this app: the sidebar row menu is 重命名 and 删除. The session bar no longer hangs a ⋯ menu either — renaming is the double-click on the title, or the row menu in the sidebar.
 
-### Specialist settings controls (2026-11-25)
+### Specialist settings controls (2026-11-26)
 
-Desktop Settings › Specialists uses the Skills header alignment and dark pill
-create action. Custom and built-in dispatchable roles have enabled switches;
-bulk actions cover both and leave the fixed Review Specialist alone. Custom
-rows reuse the Skills chevron menu before the switch, with Edit and red Delete
-only. A clicked menu stays open during scrolling; hover-only opening remains
-transient. Delete requires confirmation, and cancelling preserves the role.
+The [2026-11-26 Specialist design](specialist-ui-2026-11-26.md) follows the
+user-provided card-grid handoff: source tabs, search, persistent switches,
+vertical-dot Try/Delete menus, full create/edit/detail subpages, capability
+drawers and optional prompt examples. Custom roles are edited from details;
+built-ins remain read-only. Bulk actions leave the fixed Reviewer alone.
+Delete requires confirmation, and cancelling preserves the role. The previous
+row/chevron/modal presentation is retained in Git history.
 
 `PUT /api/specialists/:id` validates and persists custom `enabled` flags;
 omission continues to mean enabled. Flag-only patches do not revalidate core

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState, type ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 
 import { LANDING_CATEGORIES, type LandingCategory, type LandingSeed } from "../app/landing.js";
 import { TEXT } from "../text.js";
@@ -34,10 +34,11 @@ type ComposerProps = Omit<ComponentProps<typeof Composer>, "landing" | "seed" | 
  * the next topic is one click away without losing the chip. The chip keeps the
  * turn's subject attached until the ✕ clears it.
  */
-export function Landing({ composer }: { composer: ComposerProps }) {
+export function Landing({ composer, externalSeed }: { composer: ComposerProps; externalSeed?: LandingSeed }) {
   const [category, setCategory] = useState<LandingCategory>();
   const [browsing, setBrowsing] = useState(false);
-  const [seed, setSeed] = useState<LandingSeed>();
+  const [seed, setSeed] = useState<LandingSeed | undefined>(externalSeed);
+  useEffect(() => { if (externalSeed !== undefined) setSeed(externalSeed); }, [externalSeed]);
 
   const topics = category === undefined ? [] : TEXT.landing.topics[category];
   const tag = category === undefined

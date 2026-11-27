@@ -23,7 +23,7 @@ import {
 } from "react";
 import { appendEvolveDirection, isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm, type EvolveDirectionInput } from "@sciencediscovery/schema";
 
-import { ApiClient } from "./api/client.js";
+import { ApiClient, ApiRequestError } from "./api/client.js";
 import { TOKEN_STORAGE_KEY } from "./state/storage.js";
 import { AccountApiError, accountsConfigured, revokeAccountSession } from "./auth/account.js";
 import { CREDITS_PROVIDER_NAME, ensureCreditsModel } from "./auth/credits-model.js";
@@ -32,7 +32,9 @@ import { clearSession, readSession, saveSession, sessionRefreshDelayMs, type Use
 import { ensureFreshAccountSession } from "./auth/session-refresh.js";
 import { LoginPage, hasAuthCallback, settleAuthCallback } from "./views/LoginPage.js";
 import { AccountPage, SignedOutAccount } from "./views/AccountPage.js";
-import { cancelRun, getSubagent } from "./api/sessions.js";
+import { cancelRun, createSession, ensureInbox, getSubagent } from "./api/sessions.js";
+import { listSpecialists } from "./api/settings.js";
+import { newSessionRequest } from "./app/approval-mode-preference.js";
 import type {
   ComposerReference,
   PermissionDecision,
@@ -40,6 +42,7 @@ import type {
   SessionArtifactOutput,
   Subagent,
   SubagentStep,
+  Specialist,
 } from "./api/types.js";
 import { CATALOG_FAILURES_BEFORE_STALE, createCatalogPoll } from "./app/catalog-poll.js";
 import { resumeGitSkillImport } from "./app/git-skill-import-job.js";
@@ -385,6 +388,7 @@ export function App({ initialToken }: Props) {
    *  token kept across the switch would come back as a search in the session
    *  that collected it the next time the reader returned there. */
   const [seededCommand, setSeededCommand] = useState<SeededCommand>();
+  const [specialistSeed, setSpecialistSeed] = useState<{ sessionId: string; nonce: number; text: string }>();
 
   // An open panel belongs to one session's searches, like a selected
   // subagent. The create dialog is deliberately left alone: it starts a run
@@ -882,6 +886,12 @@ export function App({ initialToken }: Props) {
     pageRef.current = { landing, running: state.running };
   }, [landing, state.running]);
 
+  useEffect(() => {
+    if (landing && specialistSeed && specialistSeed.sessionId === state.sessionId) {
+      setSpecialistSeed(undefined);
+    }
+  }, [landing, specialistSeed, state.sessionId]);
+
   // The tour is a tour of the page a new conversation starts on, so while it is
   // on screen the page stays there. Switching once when the guide opens is not
   // enough: the Session the boot listing resumes can finish opening after the
@@ -1270,6 +1280,28 @@ export function App({ initialToken }: Props) {
     }
   };
 
+  // Try is a new, bound conversation with an editable draft, never an automatic Run.
+  const trySpecialist = async (specialist: Specialist, prompt?: string) => {
+    const current = (await listSpecialists(client)).find(row => row.id === specialist.id);
+    if (!current || current.enabled === false) throw new Error(TEXT.settings.system.specialists.tryDisabled);
+    const inbox = state.inboxProject ?? await ensureInbox(client);
+    const created = await createSession(client, inbox.id, {
+      ...newSessionRequest(),
+      title: specialist.name,
+      specialistId: specialist.id,
+      ...(state.selectedModelId ? { settingsOverrides: { modelId: state.selectedModelId } } : {}),
+    }).catch((reason: unknown) => {
+      if (reason instanceof ApiRequestError && reason.code === "SPECIALIST_DISABLED") {
+        throw new Error(TEXT.settings.system.specialists.tryDisabled);
+      }
+      throw reason;
+    });
+    await actions.refreshSessions();
+    await actions.openSession(created.id, inbox.id);
+    if (prompt !== undefined) setSpecialistSeed({ sessionId: created.id, nonce: Date.now(), text: prompt });
+    closeSettings();
+  };
+
   /** The run the 任务 tab shows: the one the reader picked, else the one that
    *  wants attention, else the newest. The tab appears for any run, so there is
    *  always something behind it when the Session has one. */
@@ -1629,7 +1661,7 @@ export function App({ initialToken }: Props) {
           {landing ? (
             /* The page's category and its open topic row belong to one
                session; the key is what ends them when the session does. */
-            <Landing composer={composerProps} key={landingKey(state)} />
+            <Landing composer={composerProps} externalSeed={specialistSeed?.sessionId === state.sessionId ? specialistSeed : undefined} key={landingKey(state)} />
           ) : (
             <>
               {/* A design the client stopped carrying says so on the card it
@@ -1768,6 +1800,7 @@ export function App({ initialToken }: Props) {
 
       {settingsOpen ? (
         <SystemSettingsDialog
+          onTrySpecialist={trySpecialist}
           actions={actions}
           client={client}
           group={settingsGroup}

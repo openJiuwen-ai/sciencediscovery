@@ -499,6 +499,7 @@ const SPECIALIST_REJECTIONS: ReadonlyArray<readonly [string | RegExp, 400 | 404]
   ["Specialist description is required", 400],
   ["Specialist description must be 1-500 characters", 400],
   ["Specialist instructions must be 1-20000 characters", 400],
+  ["Specialist prompt examples must contain at most 10 nonempty strings of 1-1000 characters", 400],
   ["Specialist name already exists", 400],
   [/^Specialist (?:skills|connectors) are unavailable: /, 400],
   ["Built-in specialists are read-only; only their enabled flag can be toggled", 400],
@@ -3555,6 +3556,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
           {
             allowUnconfiguredModel: body.modelId === undefined && body.settingsOverrides?.modelId === undefined,
+            requireEnabledSpecialist: true,
             selectFallbackModel: true,
           },
         ));

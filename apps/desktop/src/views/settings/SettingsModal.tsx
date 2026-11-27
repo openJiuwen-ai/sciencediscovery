@@ -40,6 +40,8 @@ interface Props {
   /** Forms with stacked choices (the specialist form) need more room than the
    *  model form's five fields. */
   wide?: boolean;
+  /** Specialist capability selection uses a right-side drawer. */
+  side?: boolean;
 }
 
 /**
@@ -51,7 +53,23 @@ interface Props {
  * key here first is what keeps only the modal from closing. Between two
  * settings modals the stack above decides which one is on top.
  */
-export function SettingsModal({ children, closeDisabled = false, hint, label, onClose, wide = false }: Props) {
+export function SettingsModal({ children, closeDisabled = false, hint, label, onClose, wide = false, side = false }: Props) {
+  const surface = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!side) return;
+    const previous = document.activeElement;
+    const controls = () => Array.from(surface.current?.querySelectorAll<HTMLElement>("button, input, select, textarea, [tabindex='0']") ?? [])
+      .filter(node => !node.hasAttribute("disabled") && node.getClientRects().length > 0);
+    controls()[0]?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const nodes = controls(), first = nodes[0], last = nodes.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener("keydown", trap);
+    return () => { document.removeEventListener("keydown", trap); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+  }, [side]);
   // Re-registering on every new callback would move this dialog back on top of
   // a picker that opened after it, so the listener reads the current callback
   // through a ref and registers once.
@@ -80,7 +98,7 @@ export function SettingsModal({ children, closeDisabled = false, hint, label, on
 
   return (
     <div
-      className="modal-scrim"
+      className={`modal-scrim${side ? " specialist-drawer-scrim" : ""}`}
       onPointerDown={(event) => {
         // A nested picker draws over this scrim; closing this dialog too would
         // close both on one click.
@@ -91,9 +109,10 @@ export function SettingsModal({ children, closeDisabled = false, hint, label, on
       <div
         aria-label={label}
         aria-modal="true"
-        className={`settings-modal${wide ? " is-wide" : ""}`}
+        className={`settings-modal${wide ? " is-wide" : ""}${side ? " specialist-drawer" : ""}`}
         onPointerDown={(event) => event.stopPropagation()}
         role="dialog"
+        ref={surface}
       >
         <div className="settings-modal-head">
           <div className="settings-modal-heading">

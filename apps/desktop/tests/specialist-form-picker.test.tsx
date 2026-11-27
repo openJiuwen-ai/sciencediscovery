@@ -23,11 +23,12 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "./s
 
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 
-// The settings modal registers an Escape listener on the document, which this
-// renderer does not provide.
+// The drawer registers document listeners and restores focus when it closes.
+// This renderer has no browser DOM.
 Object.defineProperty(globalThis, "document", { configurable: true, writable: true, value: {
   addEventListener() {}, removeEventListener() {},
 } });
+Object.defineProperty(globalThis, "HTMLElement", { configurable: true, writable: true, value: class {} });
 Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: true });
 
 const copy = TEXT.settings.system.specialists;
@@ -83,26 +84,7 @@ function buttonWithText(view: ReactTestRenderer, label: string): ReactTestInstan
   return found;
 }
 
-/** The skills tab of the picker, which renders over the form's own tablist. */
-function pickerSkillsTab(view: ReactTestRenderer): ReactTestInstance {
-  const tablists = view.root.findAll((node) => node.props.role === "tablist");
-  const picker = tablists[tablists.length - 1];
-  assert.ok(picker, "the picker has no tablist");
-  assert.equal(tablists.length, 2, "the picker is not rendered over the form");
-  const skillTab = picker.findAllByType("button")[0];
-  assert.ok(skillTab, "the picker has no 技能 tab");
-  return skillTab;
-}
-
-function tabCount(tab: ReactTestInstance): string {
-  const count = tab.findAllByType("span").find((node) => (
-    String(node.props.className ?? "").includes("settings-ability-tab-count")
-  ));
-  assert.ok(count, "the tab has no count");
-  return count.children.join("");
-}
-
-test("the picker drops a saved package the catalog reports as failed and 添加 keeps it out", async () => {
+test("the Skill drawer removes a saved failed package when confirmed", async () => {
   const stub = new StubClient().reply(saved);
   const view = await mount(
     <SpecialistForm
@@ -118,37 +100,36 @@ test("the picker drops a saved package the catalog reports as failed and 添加 
   // Both ids are saved on the record, so the form's chips show both.
   for (const skill of [failed, valid]) {
     assert.equal(
-      view.root.findAll((node) => node.props["aria-label"] === `${copy.remove} ${skill.name}`).length,
+      view.root.findAllByType("button").filter(node => node.props["aria-label"] === `${copy.remove} ${skill.id}`).length,
       1,
       `the form does not show the saved chip for ${skill.id}`,
     );
   }
 
-  await press(view.root.findAllByType("button").find((node) => (
-    String(node.props.className ?? "").includes("settings-ability-add")
-  ))!);
+  assert.equal(buttonWithText(view, TEXT.settings.system.save).props.disabled, true);
+  await press(buttonWithText(view, copy.configureSkills));
 
-  // The 技能 tab of the picker must count only the capability 添加 can write;
-  // a failed bundled id would be rejected by the service on save with
-  // `Specialist skills are unavailable: <id>`.
-  assert.equal(tabCount(pickerSkillsTab(view)), "1", "the picker counts the failed package as selected");
+  const footer = view.root.findByProps({ className: "specialist-drawer-footer" });
+  assert.equal(footer.findByType("span").children.join(""), copy.selectedCount(1), "the picker counts the failed package as selected");
 
-  await press(buttonWithText(view, copy.addSelected));
+  await press(buttonWithText(view, copy.confirm));
 
   assert.equal(
-    view.root.findAll((node) => node.props["aria-label"] === `${copy.remove} ${failed.name}`).length,
+    view.root.findAllByType("button").filter(node => node.props["aria-label"] === `${copy.remove} ${failed.id}`).length,
     0,
-    "添加 wrote the failed package back into the specialist",
+    "Confirm wrote the failed package back into the specialist",
   );
   assert.equal(
-    view.root.findAll((node) => node.props["aria-label"] === `${copy.remove} ${valid.name}`).length,
+    view.root.findAllByType("button").filter(node => node.props["aria-label"] === `${copy.remove} ${valid.id}`).length,
     1,
-    "添加 dropped the valid package",
+    "Confirm dropped the valid package",
   );
 
   // Saving proves the applied list, not only the rendered chips.
-  await press(buttonWithText(view, TEXT.settings.system.save));
-  await act(async () => { await Promise.resolve(); });
+  assert.equal(buttonWithText(view, TEXT.settings.system.save).props.disabled, false);
+  await act(async () => {
+    view.root.findByType("form").props.onSubmit({ preventDefault() {} });
+  });
   assert.equal(stub.calls.length, 1, "the save was not sent");
   assert.equal(stub.calls[0].path, `/api/specialists/${saved.id}`);
   assert.deepEqual(

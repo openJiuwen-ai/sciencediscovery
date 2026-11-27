@@ -159,250 +159,200 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("专家", () => {
-  const page = (over: JsonRecord = {}) => ({
-    connectors: [{ displayName: "PubMed", id: "connector-1" }],
-    skills: [skill()],
-    specialists: [specialist(over)],
-  });
+  const data = (over: JsonRecord = {}) => ({ connectors: [{ displayName: "PubMed", id: "connector-1", trustLevel: "bundled" }], skills: [skill()], specialists: [specialist(over)] });
+  const editor = (page: Page, name = "编辑专家") => page.getByRole("region", { name, exact: true });
+  const detail = (page: Page) => page.getByRole("region", { name: "专家详情", exact: true });
+  const openDetail = async (page: Page, name = "晶体专家") => {
+    await page.getByRole("button", { name: `查看专家「${name}」`, exact: true }).click();
+    await expect(detail(page)).toBeVisible();
+  };
 
-  test("create the first specialist, discard a draft and save with defaults", async ({ page: browser }) => {
-    await browser.addInitScript((key) => localStorage.setItem(key, "en"), LOCALE_STORAGE_KEY);
-    const mock = await installMockApi(browser);
-    const form = browser.getByRole("dialog", { name: "Add specialist" });
-    await test.step("1. Open Add specialist from an empty catalog and discard a draft", async () => {
-      const dialog = await openSettings(browser, "Specialists", "Settings");
-      const add = dialog.getByRole("button", { name: "Add specialist" });
-      // The built-in Review expert is always listed; the empty catalogue has
-      // no "No specialists yet." line any more.
-      await expect(dialog.getByTestId("built-in-reviewer")).toContainText("Review");
-      await add.click();
-      await form.getByRole("textbox", { name: "Name" }).fill("Discard this draft");
-      await form.getByRole("combobox", { name: "Runtime" }).selectOption("codex");
-      await form.getByRole("button", { name: "Cancel" }).click();
-      await expect(form).toBeHidden();
+  test("create a specialist on a full page, discard a draft, then persist examples", async ({ page, journey }) => {
+    const mock = await installMockApi(page);
+    const settings = await openSettings(page, "专家");
+    const form = editor(page, "新增专家");
+    await journey.step("1. Discard a new full-page draft", "Cancel returns to the catalog without creating a record.", async () => {
+      await settings.getByRole("button", { name: "新增专家", exact: true }).click();
+      await form.getByLabel("专家名称", { exact: true }).fill("discard");
+      await form.getByRole("button", { name: "取消", exact: true }).click();
       expect(writeCall(mock, "POST", "/api/specialists")).toBeUndefined();
-      await add.click();
     });
-
-    await test.step("2. Enter the required fields and save a Native specialist", async () => {
-      const name = form.getByRole("textbox", { name: "Name" });
-      const description = form.getByRole("textbox", { name: "Description" });
-      const instructions = form.getByRole("textbox", { name: "Instructions" });
-      const save = form.getByRole("button", { name: "Save", exact: true });
-      await expect(name).toBeFocused();
-      await expect(name).toHaveValue("");
-      await expect(description).toHaveValue("");
-      await expect(instructions).toHaveValue("");
-      await expect(description).toHaveAttribute("maxlength", "500");
-      await expect(instructions).toHaveAttribute("maxlength", "20000");
-      await expect(form.getByRole("combobox", { name: "Runtime" })).toHaveValue("native");
-      await expect(form.getByRole("radio", { name: /Full access/u })).toBeChecked();
-      await expect(save).toBeDisabled();
-      await name.fill("  Data quality reviewer  ");
-      await description.fill("Checks missing values");
-      await instructions.fill("   ");
-      await expect(save).toBeDisabled();
-      await instructions.fill("  Report anomalies with evidence.  ");
-      await save.click();
-      await expect(form).toBeHidden();
-      await expect(browser.locator(".settings-card").filter({ hasText: "Data quality reviewer" })).toBeVisible();
-      expect(mock.calls.filter((call) => call.method === "POST" && call.path === "/api/specialists")).toHaveLength(1);
-      expect(writeCall(mock, "POST", "/api/specialists")).toEqual({
-        connectorIds: [],
-        description: "Checks missing values",
-        enabledSkillIds: [],
-        instructions: "Report anomalies with evidence.",
-        name: "Data quality reviewer",
-        runtime: { kind: "native" },
-      });
+    await journey.step("2. Create with a prompt example", "The saved detail has the example and the catalog shows its new card.", async () => {
+      await settings.getByRole("button", { name: "新增专家", exact: true }).click();
+      await expect(form.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+      await form.getByLabel("专家名称", { exact: true }).fill("新建测试专家");
+      await form.getByLabel("描述", { exact: true }).fill("检查数据");
+      await form.getByLabel("指令", { exact: true }).fill("报告异常及证据。");
+      await expect(form.getByRole("radio", { name: /使用全部能力/u })).toBeChecked();
+      await form.getByRole("button", { name: /配置提问示例/u }).click();
+      await form.getByLabel("提问示例 1", { exact: true }).fill("检查这个数据集");
+      await form.getByRole("button", { name: "保存", exact: true }).click();
+      await expect(detail(page)).toContainText("检查这个数据集");
+      expect(writeCall(mock, "POST", "/api/specialists")).toMatchObject({ name: "新建测试专家", promptExamples: ["检查这个数据集"], instructions: "报告异常及证据。", runtime: { kind: "native" }, enabledSkillIds: [], connectorIds: [] });
+      await detail(page).getByRole("button", { name: "返回", exact: true }).click();
+      await expect(settings.locator(".specialist-card")).toHaveCount(1);
     });
   });
 
-  test("retry a refused specialist creation and find the new expert in the session picker", async ({ page: browser }) => {
-    const options = {
-      ...page(),
-      fail: { message: "Specialist name already exists", method: "POST", path: "/api/specialists", status: 400 },
-      hold: { method: "POST", path: "/api/specialists" },
-    };
-    const mock = await installMockApi(browser, options);
-    const dialog = await openSettings(browser, "专家");
-    const form = browser.getByRole("dialog", { name: "新增专家" });
-    const save = form.getByRole("button", { name: "保存", exact: true });
-    const name = form.getByRole("textbox", { name: "名称" });
-
-    await test.step("1. Set up a new expert with an external runtime and specific capabilities", async () => {
-      await dialog.getByRole("button", { name: "新增专家" }).click();
-      await name.fill("晶体专家");
-      await form.getByRole("textbox", { name: "描述" }).fill("复核文献引用");
-      await form.getByRole("textbox", { name: "指令" }).fill("对照原文核对引用。");
-      await form.getByRole("combobox", { name: "运行时" }).selectOption("codex");
-      await form.locator(".settings-row", { hasText: "模型" }).locator("input").fill("gpt-5");
-      await form.getByRole("button", { name: "添加技能" }).click();
-      const picker = browser.getByRole("dialog", { name: "添加技能和连接器" });
-      await picker.getByRole("checkbox", { name: /文献检索/u }).check();
-      await picker.getByRole("tab", { name: /连接器/u }).click();
-      await picker.getByRole("checkbox", { name: /PubMed/u }).check();
-      await picker.getByRole("button", { name: "添加", exact: true }).click();
-      await expect(picker).toBeHidden();
+  test("drawer cancellation preserves the draft and confirmation configures separate skills and MCP", async ({ page, journey }) => {
+    const mock = await installMockApi(page, data());
+    await openSettings(page, "专家"); await openDetail(page);
+    await detail(page).getByRole("button", { name: "编辑", exact: true }).click();
+    const form = editor(page);
+    await journey.step("1. Cancel a capability selection", "Unconfirmed checkboxes do not change the editor.", async () => {
+      await form.getByRole("radio", { name: /指定可用能力/u }).click();
+      await form.getByRole("button", { name: /配置技能/u }).click();
+      const drawer = page.getByRole("dialog", { name: "配置技能", exact: true });
+      await expect(drawer.getByRole("tab")).toHaveText(["全部技能", "我的技能", "官方技能"]);
+      await drawer.getByRole("checkbox", { name: /文献检索/u }).check();
+      await drawer.getByRole("button", { name: "取消", exact: true }).click();
+      await expect(form.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+      await form.getByRole("button", { name: /配置技能/u }).click();
+      await expect(drawer.getByRole("checkbox", { name: /文献检索/u })).not.toBeChecked();
+      await drawer.getByRole("checkbox", { name: /文献检索/u }).check();
+      await drawer.getByRole("button", { name: "确定", exact: true }).click();
     });
+    await journey.step("2. Apply MCP and an external runtime", "Saved capabilities and runtime match the explicit draft.", async () => {
+      await form.getByRole("button", { name: /配置 MCP 服务/u }).click();
+      const drawer = page.getByRole("dialog", { name: "配置 MCP 服务", exact: true });
+      await expect(drawer.getByRole("tab")).toHaveText(["全部 MCP", "我的 MCP", "官方 MCP"]);
+      await drawer.getByRole("checkbox", { name: "PubMed", exact: true }).check();
+      await drawer.getByRole("button", { name: "确定", exact: true }).click();
+      await form.getByLabel("运行配置", { exact: true }).selectOption("codex");
+      await form.getByLabel("模型", { exact: true }).fill("test-model");
+      await form.getByRole("button", { name: "保存", exact: true }).click();
+      expect(writeCall(mock, "PUT", "/api/specialists/specialist-1")).toMatchObject({ enabledSkillIds: ["skill-1"], connectorIds: ["connector-1"], runtime: { kind: "codex", model: "test-model" } });
+      await expect(detail(page)).toContainText("PubMed");
+    });
+  });
 
-    await test.step("2. Keep the draft on a duplicate name error and save with a different name", async () => {
-      await save.click();
-      await expect(save).toBeDisabled();
-      await expect(form.getByRole("button", { name: "取消" })).toBeDisabled();
-      await browser.keyboard.press("Escape");
-      await expect(form).toBeVisible();
-      mock.release();
-      await expect(form.getByRole("alert")).toHaveText("Specialist name already exists");
-      await expect(name).toHaveValue("晶体专家");
-      await expect(form.getByRole("textbox", { name: "指令" })).toHaveValue("对照原文核对引用。");
-      await expect(form.getByRole("combobox", { name: "运行时" })).toHaveValue("codex");
+  test("a refused save retains all fields and retry succeeds", async ({ page, journey }) => {
+    const options = { ...data(), fail: { message: "name already exists", method: "PUT", path: "/api/specialists/specialist-1", status: 400 } };
+    await installMockApi(page, options); await openSettings(page, "专家"); await openDetail(page);
+    await detail(page).getByRole("button", { name: "编辑", exact: true }).click();
+    const form = editor(page);
+    await journey.step("1. Observe a refused save", "The error stays beside an intact editable draft.", async () => {
+      await form.getByLabel("专家名称", { exact: true }).fill("重复的专家");
+      await form.getByRole("button", { name: "保存", exact: true }).click();
+      await expect(form.getByRole("alert")).toContainText("name already exists");
+      await expect(form.getByLabel("专家名称", { exact: true })).toHaveValue("重复的专家");
+    });
+    await journey.step("2. Retry the same draft", "A successful retry opens the saved detail.", async () => {
       options.fail.path = "/not-this-request";
-      await name.fill("文献核查专家");
-      await save.click();
-      await expect(form).toBeHidden();
-      await expect(dialog.locator(".settings-card").filter({ hasText: "文献核查专家" })).toBeVisible();
-      expect(mock.calls.filter((call) => call.method === "POST" && call.path === "/api/specialists")).toHaveLength(2);
-      expect(lastWriteCall(mock, "POST", "/api/specialists")).toMatchObject({
-        connectorIds: ["connector-1"],
-        description: "复核文献引用",
-        enabledSkillIds: ["skill-1"],
-        name: "文献核查专家",
-        runtime: { kind: "codex", model: "gpt-5" },
-      });
-    });
-
-    await test.step("3. Find the new expert without changing the current selection", async () => {
-      await browser.keyboard.press("Escape");
-      await expect(dialog).toBeHidden();
-      await browser.getByRole("button", { name: "会话设置" }).click();
-      await browser.getByRole("button", { name: /^专家/u }).click();
-      await expect(browser.getByRole("button", { name: /文献核查专家/u })).toBeVisible();
-      await expect(browser.getByRole("button", { name: "无", exact: true })).toHaveAttribute("aria-current", "true");
+      await form.getByRole("button", { name: "点击重试", exact: true }).click();
+      await expect(detail(page)).toContainText("重复的专家");
     });
   });
 
-  test("a specialist's form writes its runtime and the capabilities picked in it", async ({ page: browser }) => {
-    const mock = await installMockApi(browser, page());
-    const dialog = await openSettings(browser, "专家");
-
-    const card = dialog.locator(".settings-card").filter({ hasText: "晶体专家" });
-    await card.getByRole("button", { name: "「晶体专家」的操作" }).click();
-    await card.getByRole("menuitem", { name: "编辑" }).click();
-    const form = browser.getByRole("dialog", { name: "编辑专家" });
-    await expect(form).toBeVisible();
-    // A specialist with no explicit lists has been inheriting everything, which
-    // the form shows as 完全访问 rather than as two empty lists.
-    await expect(form.getByRole("radio", { name: /完全访问/u })).toBeChecked();
-
-    await form.getByLabel("描述").fill("看分子结构");
-    await form.getByLabel("运行时").selectOption("codex");
-    await form.locator(".settings-row", { hasText: "模型" }).locator("input").fill("gpt-5");
-
-    // The first capability picked is what turns 完全访问 into an explicit pair
-    // of lists; until then the record carries nothing.
-    await form.getByRole("button", { name: "添加技能" }).click();
-    const picker = browser.getByRole("dialog", { name: "添加技能和连接器" });
-    await picker.getByRole("checkbox", { name: /文献检索/u }).check();
-    await picker.getByRole("tab", { name: /连接器/u }).click();
-    await picker.getByRole("checkbox", { name: /PubMed/u }).check();
-    await picker.getByRole("button", { name: "添加", exact: true }).click();
-    await expect(picker).toBeHidden();
-    await expect(form.locator(".settings-ability-list")).toContainText("文献检索");
-
-    await form.getByRole("button", { name: "保存", exact: true }).click();
-
-    await expect(form).toBeHidden();
-    expect(writeCall(mock, "PUT", "/api/specialists/specialist-1")).toMatchObject({
-      connectorIds: ["connector-1"],
-      description: "看分子结构",
-      enabledSkillIds: ["skill-1"],
-      instructions: "先读结构，再回答。",
-      name: "晶体专家",
-      runtime: { kind: "codex", model: "gpt-5" },
+  test("custom cards use Try and Delete while editing is in details", async ({ page, journey }) => {
+    const mock = await installMockApi(page, data()); const settings = await openSettings(page, "专家");
+    await journey.step("1. Edit from details", "Custom edits are available in the detail header.", async () => {
+      await openDetail(page); await detail(page).getByRole("button", { name: "编辑", exact: true }).click();
+      const form = editor(page); await form.getByLabel("专家名称", { exact: true }).fill("晶体专家改");
+      await form.getByRole("button", { name: "保存", exact: true }).click();
+      await detail(page).getByRole("button", { name: "「晶体专家改」的操作", exact: true }).click();
+      await detail(page).getByRole("menuitem", { name: "删除", exact: true }).click();
+      const confirm = page.getByRole("dialog", { name: "删除专家「晶体专家改」？", exact: true });
+      await expect(confirm).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(confirm).toBeHidden();
+      await expect(detail(page)).toBeVisible();
+      await detail(page).getByRole("button", { name: "返回", exact: true }).click();
+    });
+    await journey.step("2. Cancel then confirm pointer deletion", "Cancel preserves the card; confirmed deletion removes it.", async () => {
+      const card = settings.locator(".specialist-card").filter({ hasText: "晶体专家改" });
+      const menu = card.getByRole("button", { name: "「晶体专家改」的操作", exact: true });
+      await menu.click(); await expect(card.getByRole("menuitem")).toHaveText(["去试试", "删除"]);
+      await card.getByRole("menuitem", { name: "删除", exact: true }).click();
+      let confirm = page.getByRole("dialog", { name: "删除专家「晶体专家改」？", exact: true });
+      await confirm.getByRole("button", { name: "取消", exact: true }).last().click();
+      await expect(card).toBeVisible(); await menu.click(); await card.getByRole("menuitem", { name: "删除", exact: true }).click();
+      confirm = page.getByRole("dialog", { name: "删除专家「晶体专家改」？", exact: true });
+      await confirm.getByRole("button", { name: "删除", exact: true }).click();
+      await expect(card).toHaveCount(0);
+      expect(mock.calls.some(c => c.method === "DELETE" && c.path === "/api/specialists/specialist-1")).toBe(true);
     });
   });
 
-  test("editing and deleting a specialist use the card's own actions", async ({ page: browser }) => {
-    const mock = await installMockApi(browser, page());
-    const dialog = await openSettings(browser, "专家");
-
-    const card = dialog.locator(".settings-card").filter({ hasText: "晶体专家" });
-    await card.getByRole("button", { name: "「晶体专家」的操作" }).click();
-    await expect(card.getByRole("menuitem")).toHaveText(["编辑", "删除"]);
-    await card.getByRole("menuitem", { name: "编辑" }).click();
-    const form = browser.getByRole("dialog", { name: "编辑专家" });
-    await form.getByLabel("名称").fill("晶体专家（改）");
-    await form.getByRole("button", { name: "保存", exact: true }).click();
-
-    await expect(dialog.locator(".settings-card").filter({ hasText: "晶体专家（改）" })).toBeVisible();
-    expect(writeCall(mock, "PUT", "/api/specialists/specialist-1")).toMatchObject({
-      name: "晶体专家（改）",
+  test("built-in details are read-only and disabling prevents Try", async ({ page, journey }) => {
+    const mock = await installMockApi(page, data({ builtIn: true, name: "内置专家" }));
+    const settings = await openSettings(page, "专家");
+    await journey.step("1. Inspect a read-only built-in", "No edit or delete is offered.", async () => {
+      await openDetail(page, "内置专家");
+      await expect(detail(page).getByRole("button", { name: "编辑", exact: true })).toHaveCount(0);
+      await detail(page).getByRole("button", { name: "「内置专家」的操作", exact: true }).click();
+      await expect(detail(page).getByRole("menuitem")).toHaveText(["去试试"]);
+      await page.keyboard.press("Escape");
+      await expect(detail(page)).toBeVisible();
+      await expect(detail(page).getByRole("menu")).toHaveCount(0);
+      await detail(page).getByRole("button", { name: "返回", exact: true }).click();
     });
-
-    const renamed = dialog.locator(".settings-card").filter({ hasText: "晶体专家（改）" });
-    await renamed.getByRole("button", { name: "「晶体专家（改）」的操作" }).click();
-    await renamed.getByRole("menuitem", { name: "删除" }).click();
-    const confirm = browser.getByRole("dialog", { name: "删除专家「晶体专家（改）」？" });
-    await expect(confirm).toBeVisible();
-    await confirm.getByRole("button", { name: "删除" }).click();
-
-    await expect(dialog.locator(".settings-card").filter({ hasText: "晶体专家（改）" })).toHaveCount(0);
-    expect(mock.calls.some((call) => call.method === "DELETE" && call.path === "/api/specialists/specialist-1")).toBe(
-      true,
-    );
+    await journey.step("2. Disable and inspect actions", "The saved switch is off, Try is disabled, Delete is absent.", async () => {
+      const card = settings.locator(".specialist-card").filter({ hasText: "内置专家" });
+      await card.getByRole("switch").click(); await expect(card.getByRole("switch")).toHaveAttribute("aria-checked", "false");
+      await card.getByRole("button", { name: "「内置专家」的操作", exact: true }).click();
+      await expect(card.getByRole("menuitem", { name: "去试试", exact: true })).toBeDisabled();
+      await expect(card.getByRole("menuitem", { name: "删除", exact: true })).toHaveCount(0);
+      expect(writeCall(mock, "PUT", "/api/specialists/specialist-1")).toEqual({ enabled: false });
+    });
   });
 
-  test("a built-in specialist can only be switched off", async ({ page: browser }) => {
-    const mock = await installMockApi(browser, page({ builtIn: true, name: "内置专家" }));
-    const dialog = await openSettings(browser, "专家");
-
-    const card = dialog.locator(".settings-card").filter({ hasText: "内置专家" });
-    await expect(card.getByRole("button", { name: "删除" })).toHaveCount(0);
-    await expect(card.getByRole("button", { name: "编辑" })).toHaveCount(0);
-
-    await card.getByRole("switch", { name: "内置专家 · 已启用" }).click();
-    await expect(card.getByRole("switch", { name: "内置专家 · 已启用" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    await expect(card).toContainText("已停用");
-    expect(writeCall(mock, "PUT", "/api/specialists/specialist-1")).toEqual({ enabled: false });
+  test("a partial bulk failure reloads the rows already saved", async ({ page, journey }) => {
+    await installMockApi(page, { ...data(), specialists: [specialist({ id: "custom-a", name: "先保存的专家" }), specialist({ id: "custom-b", name: "失败的专家" })], fail: { message: "Bulk save refused", method: "PUT", path: "/api/specialists/custom-b", status: 500 } });
+    const settings = await openSettings(page, "专家");
+    await journey.step("1. Bulk disable with a partial failure", "Saved cards refresh even though the later write failed.", async () => {
+      await settings.getByRole("button", { name: "一键关闭", exact: true }).click();
+      await expect(settings.getByRole("alert")).toContainText("Bulk save refused");
+      await expect(settings.locator(".specialist-card").filter({ hasText: "先保存的专家" }).getByRole("switch")).toHaveAttribute("aria-checked", "false");
+      await expect(settings.locator(".specialist-card").filter({ hasText: "失败的专家" }).getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    });
   });
 
-  test("a partial bulk failure reloads the rows already saved", async ({ page: browser }) => {
-    await installMockApi(browser, {
-      ...page(),
-      specialists: [specialist({ id: "custom-a", name: "先保存的专家" }), specialist({ id: "custom-b", name: "保存失败的专家" })],
-      fail: { message: "Bulk save refused", method: "PUT", path: "/api/specialists/custom-b", status: 500 },
+  test("catalog source tabs and search filter the cards", async ({ page, journey }) => {
+    await installMockApi(page, { ...data(), specialists: [specialist(), specialist({ id: "builtin", name: "内置图表专家", builtIn: true })] });
+    const settings = await openSettings(page, "专家");
+    await journey.step("1. Filter by source and text", "Counts describe the catalog and matching cards remain reachable.", async () => {
+      await expect(settings.locator(".specialist-card")).toHaveCount(2);
+      await settings.getByRole("tab", { name: /我的专家/u }).click(); await expect(settings.locator(".specialist-card")).toHaveCount(1);
+      await settings.getByRole("tab", { name: /官方专家/u }).click(); await expect(settings.locator(".specialist-card")).toContainText("内置图表专家");
+      await settings.getByRole("tab", { name: /全部专家/u }).click();
+      await settings.getByRole("searchbox", { name: "搜索", exact: true }).fill("图表"); await expect(settings.locator(".specialist-card")).toHaveCount(1);
+      await settings.getByRole("searchbox", { name: "搜索", exact: true }).fill("missing-no-match"); await expect(settings.locator(".specialist-card")).toHaveCount(0);
     });
-    const dialog = await openSettings(browser, "专家");
-    await dialog.getByRole("button", { name: "一键关闭", exact: true }).click();
-    await expect(dialog.locator(".row-note.is-error")).toHaveText("Bulk save refused");
-    await expect(dialog.locator(".settings-card").filter({ hasText: "先保存的专家" }).getByRole("switch")).toHaveAttribute("aria-checked", "false");
-    await expect(dialog.locator(".settings-card").filter({ hasText: "保存失败的专家" }).getByRole("switch")).toHaveAttribute("aria-checked", "true");
   });
 
-  test("a rejected save keeps the form and names the reason", async ({ page: browser }) => {
-    await installMockApi(browser, {
-      ...page(),
-      fail: { message: "name already exists", method: "PUT", path: "/api/specialists/specialist-1" },
+  test("a prompt example opens a new bound session without submitting a Run", async ({ page, journey }) => {
+    const mock = await installMockApi(page, data({ promptExamples: ["复核这个数据集"] }));
+    await openSettings(page, "专家"); await openDetail(page);
+    await journey.step("1. Try a prompt example", "The composer is prefilled in a new session with the actual binding and no Run.", async () => {
+      await detail(page).getByRole("button", { name: /复核这个数据集/u }).click();
+      await expect(page.getByRole("dialog", { name: "设置", exact: true })).toBeHidden();
+      await expect(page.locator("#composer-textarea")).toHaveValue("复核这个数据集");
+      expect(mock.state.sessions.some(s => (s as JsonRecord).specialistId === "specialist-1")).toBe(true);
+      expect(mock.calls.some(c => c.method === "POST" && /\/runs$/u.test(c.path))).toBe(false);
     });
-    const dialog = await openSettings(browser, "专家");
+  });
 
-    const card = dialog.locator(".settings-card").filter({ hasText: "晶体专家" });
-    await card.getByRole("button", { name: "「晶体专家」的操作" }).click();
-    await card.getByRole("menuitem", { name: "编辑" }).click();
-    const form = browser.getByRole("dialog", { name: "编辑专家" });
-    await form.getByLabel("名称").fill("重复的专家");
-    await form.getByRole("button", { name: "保存", exact: true }).click();
-
-    // The reason belongs to the form that was refused, and the form stays open
-    // with the name still in it rather than sending the reader back to the list.
-    await expect(form.locator(".row-note.is-error")).toHaveText("name already exists");
-    await expect(form.getByLabel("名称")).toHaveValue("重复的专家");
+  test("Try reports a concurrent disable rejected by the API", async ({ page, journey }) => {
+    const mock = await installMockApi(page, data());
+    let attempted = false;
+    await page.route("**/api/projects/*/sessions", async route => {
+      if (route.request().method() !== "POST") return route.fallback();
+      attempted = true;
+      await route.fulfill({ status: 409, json: { error: "Specialist is disabled", code: "SPECIALIST_DISABLED" } });
+    });
+    const settings = await openSettings(page, "专家"); await openDetail(page);
+    await journey.step("1. Refuse a trial for a disabled Specialist", "The server rejects creation and settings show a localized error.", async () => {
+      await detail(page).getByRole("button", { name: "去试试", exact: true }).click();
+      await expect(settings.getByRole("alert")).toHaveText(/请先启用该专家/u);
+      expect(attempted).toBe(true);
+      expect(mock.state.sessions.some(s => (s as JsonRecord).specialistId === "specialist-1")).toBe(false);
+      await expect(settings).toBeVisible();
+      expect(mock.calls.some(c => c.method === "POST" && /\/runs$/u.test(c.path))).toBe(false);
+    });
   });
 });
+
 
 test.describe("MCP 服务器", () => {
   const sources: JsonRecord[] = [

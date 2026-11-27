@@ -199,7 +199,7 @@ for (const locale of ["zh", "en"] as const) {
     await screenshot(page, testInfo, frame("02-slash-palette"));
   });
 
-  test(`${locale}: the specialist 添加技能 picker offers only the skills that loaded`, { tag: "@mocked" }, async ({ page }, testInfo) => {
+  test(`${locale}: the specialist skill drawer offers only the skills that loaded`, { tag: "@mocked" }, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await setLocale(page, locale);
     await installCatalog(page);
@@ -208,14 +208,15 @@ for (const locale of ["zh", "en"] as const) {
 
     const settings = page.getByRole("dialog", { name: en ? "Settings" : "设置" });
     await settings.getByRole("button", { name: en ? "Add specialist" : "新增专家" }).click();
-    const form = page.getByRole("dialog", { name: en ? "Add specialist" : "新增专家" });
-    await form.getByRole("button", { name: en ? "Add skill" : "添加技能" }).click();
+    const form = settings.getByRole("region", { name: en ? "Add specialist" : "新增专家" });
+    await form.getByRole("radio", { name: en ? /Choose available capabilities/ : /指定可用能力/ }).click();
+    await form.getByRole("button", { name: en ? "Configure skills" : "配置技能" }).click();
 
-    const picker = page.getByRole("dialog", { name: en ? "Add skills and connectors" : "添加技能和连接器" });
+    const picker = page.getByRole("dialog", { name: en ? "Configure skills" : "配置技能" });
     await expect(picker).toBeVisible();
     // One row per healthy package, so the count is the check that the failed
     // one is not merely unlabelled.
-    await expect(picker.locator(".settings-picker-option")).toHaveCount(HEALTHY_IDS.length);
+    await expect(picker.locator(".specialist-capability-card")).toHaveCount(HEALTHY_IDS.length);
     for (const id of HEALTHY_IDS) await expect(picker.getByRole("checkbox", { name: new RegExp(id, "u") })).toBeVisible();
     await expect(picker.getByRole("checkbox", { name: new RegExp(FAILED_ID, "u") })).toHaveCount(0);
     // Nor under any other label: the whole picker names only loaded packages.

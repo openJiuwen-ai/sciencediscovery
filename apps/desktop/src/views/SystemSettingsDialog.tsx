@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { createSession, ensureInbox } from "../api/sessions.js";
 import type { ApiClient } from "../api/client.js";
+import type { Specialist } from "../api/types.js";
 import type { WorkspaceActions, WorkspaceState } from "../app/use-workspace.js";
 import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
@@ -72,7 +73,15 @@ function categoryOf(group: SettingsGroup): CategoryId {
   return CATEGORIES.find((category) => category.groups.includes(group))?.id ?? "system";
 }
 
+function SettingsMain({ standalonePage, children: [navigation, detail] }: {
+  standalonePage?: ReactNode;
+  children: [ReactNode, ReactNode];
+}) {
+  return <div className="settings-main">{navigation}{standalonePage ?? detail}</div>;
+}
+
 interface Props {
+  onTrySpecialist?: (specialist: Specialist, prompt?: string) => Promise<void>;
   actions: WorkspaceActions;
   client: ApiClient;
   group: SettingsGroup;
@@ -96,6 +105,7 @@ interface Props {
  * its own fields as they are left.
  */
 export function SystemSettingsDialog({
+  onTrySpecialist,
   actions,
   client,
   group,
@@ -110,7 +120,7 @@ export function SystemSettingsDialog({
    *  pane keeps the width rather than reflowing around a zero column. */
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
-  const [addingSpecialist, setAddingSpecialist] = useState(false);
+  const [specialistSubpage, setSpecialistSubpage] = useState(false);
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -122,7 +132,7 @@ export function SystemSettingsDialog({
   // state lives in the pane and unmounts here.
   useEffect(() => {
     setAddingModel(false);
-    setAddingSpecialist(false);
+    setSpecialistSubpage(false);
   }, [group]);
 
   useEffect(() => {
@@ -181,7 +191,8 @@ export function SystemSettingsDialog({
         return (
           <SpecialistsSettings
             client={client}
-            onCancelCreate={addingSpecialist ? () => setAddingSpecialist(false) : undefined}
+            onSubpageChange={setSpecialistSubpage}
+            onTry={onTrySpecialist}
             onConfirm={actions.confirmAction}
           />
         );
@@ -235,7 +246,7 @@ export function SystemSettingsDialog({
       <section
         aria-label={TEXT.settings.system.title}
         aria-modal="true"
-        className={`config-panel${navOpen ? "" : " is-nav-collapsed"}`}
+        className={`config-panel${navOpen ? "" : " is-nav-collapsed"}${group === "specialists" && specialistSubpage ? " is-specialist-subpage" : ""}`}
         role="dialog"
       >
         <nav aria-label={TEXT.settings.system.navLabel} className="settings-group-nav">
@@ -280,7 +291,7 @@ export function SystemSettingsDialog({
           </div>
         </nav>
 
-        <div className="settings-main">
+        <SettingsMain standalonePage={group === "specialists" ? pane : undefined}>
           {/* Folded, the directory's folder moves to the pane's top-left,
               where the session bar keeps its own: outside the scrolling
               detail, so a long page cannot carry it away. */}
@@ -300,17 +311,13 @@ export function SystemSettingsDialog({
                   <button className="pill-button is-dark" onClick={() => setAddingModel(true)} type="button">
                     {TEXT.settings.model.add}
                   </button>
-                ) : group === "specialists" ? (
-                  <button className="pill-button is-dark" onClick={() => setAddingSpecialist(true)} type="button">
-                    {TEXT.settings.system.specialists.add}
-                  </button>
                 ) : null}
               </header>
 
               {pane}
             </div>
           )}
-        </div>
+        </SettingsMain>
       </section>
     </div>
   );

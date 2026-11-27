@@ -1,444 +1,119 @@
-// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-import { useState } from "react";
-
+// Copyright (C) 2026 Huawei Technologies Co., Ltd
+// SPDX-License-Identifier: Apache-2.0
+import { useEffect, useId, useState } from "react";
 import type { ApiClient } from "../../../api/client.js";
 import { createSpecialist, updateSpecialist } from "../../../api/settings.js";
-import type {
-  ConnectorManifest,
-  CreateSpecialistRequest,
-  SkillDescriptor,
-  Specialist,
-  SpecialistRuntime,
-} from "../../../api/types.js";
+import type { ConnectorManifest, CreateSpecialistRequest, SkillDescriptor, Specialist, SpecialistRuntime } from "../../../api/types.js";
 import { TEXT } from "../../../text.js";
-import { Row, Select } from "../rows.js";
-import { SettingsModal } from "../SettingsModal.js";
-import { AbilityPicker, type AbilityTab } from "./AbilityPicker.js";
+import { claimsEscape } from "../../dialog-escape.js";
+import { AbilityPicker, selectableSkills, type AbilityTab } from "./AbilityPicker.js";
+import { SpecialistGlyph, SpecialistMark } from "./SpecialistParts.js";
 
 interface Props {
   client: ApiClient;
   connectors: ConnectorManifest[];
-  /** Called when 取消, × or the scrim closes the form. */
   onCancel: () => void;
-  /** Called after the server has accepted the write; the list reloads behind
-   *  the modal, so the caller closes it here. */
-  onSaved: () => void;
-  /** Present when editing; absent when creating. */
+  onSaved: (specialist: Specialist) => void;
   specialist?: Specialist;
   skills: SkillDescriptor[];
 }
-
 type RuntimeKind = "native" | "codex" | "claude-code" | "acp";
 
-/**
- * 完全访问 keeps no explicit lists: the specialist inherits the main agent's
- * capabilities, so anything enabled later is included without editing it
- * again. 特定能力 is the explicit pair of lists the API stores.
- */
-type CapabilityAccess = "all" | "specific";
-
-/** What the fields say above their counters, and what the inputs stop at. */
-const NAME_MAX_LENGTH = 80;
-const DESCRIPTION_MAX_LENGTH = 500;
-const INSTRUCTIONS_MAX_LENGTH = 20_000;
-const INSTRUCTIONS_MAX_DISPLAY = INSTRUCTIONS_MAX_LENGTH.toLocaleString("en-US");
-
-interface Draft {
-  access: CapabilityAccess;
-  connectorIds: string[];
-  description: string;
-  enabledSkillIds: string[];
-  instructions: string;
-  model: string;
-  name: string;
-  runtime: RuntimeKind;
-}
-
-function emptyDraft(): Draft {
-  return {
-    access: "all",
-    connectorIds: [],
-    description: "",
-    enabledSkillIds: [],
-    instructions: "",
-    model: "",
-    name: "",
-    runtime: "native",
-  };
-}
-
-function draftOf(specialist: Specialist): Draft {
-  return {
-    // An explicit list on the record is what 特定能力 looks like when the form
-    // opens; a specialist with none has been leaving capabilities to the main
-    // agent all along, which is 完全访问.
-    access: specialist.connectorIds.length === 0 && specialist.enabledSkillIds.length === 0
-      ? "all"
-      : "specific",
-    connectorIds: [...specialist.connectorIds],
-    description: specialist.description,
-    enabledSkillIds: [...specialist.enabledSkillIds],
-    instructions: specialist.instructions,
-    model: specialist.runtime !== undefined && specialist.runtime.kind !== "native"
-      ? (specialist.runtime.model ?? "")
-      : "",
-    name: specialist.name,
-    runtime: specialist.runtime?.kind ?? "native",
-  };
-}
-
-function runtimeOf(draft: Draft): SpecialistRuntime {
-  const model = draft.model.trim();
-  switch (draft.runtime) {
-    case "codex":
-      return { kind: "codex", ...(model === "" ? {} : { model }) };
-    case "claude-code":
-      return { kind: "claude-code", ...(model === "" ? {} : { model }) };
-    case "acp":
-      return { kind: "acp", ...(model === "" ? {} : { model }) };
-    default:
-      return { kind: "native" };
-  }
-}
-
-function bodyOf(draft: Draft): CreateSpecialistRequest {
-  return {
-    connectorIds: (draft.access === "all" ? [] : draft.connectorIds) as CreateSpecialistRequest["connectorIds"],
-    description: draft.description.trim(),
-    enabledSkillIds: draft.access === "all" ? [] : draft.enabledSkillIds,
-    instructions: draft.instructions.trim(),
-    name: draft.name.trim(),
-    runtime: runtimeOf(draft),
-  };
-}
-
-/**
- * The one place a specialist is created or edited.
- *
- * It owns the draft and the write, like {@link ModelForm} owns the model
- * write, so the settings page only has to say which specialist was opened and
- * what to do once the server answers. The form is mounted only while its
- * modal is open, which is what gives every open a fresh draft.
- */
 export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, specialist }: Props) {
-  const [draft, setDraft] = useState<Draft>(() => (
-    specialist === undefined ? emptyDraft() : draftOf(specialist)
-  ));
+  const labels = TEXT.settings.system.specialists;
+  const formId = useId();
+  const [name, setName] = useState(specialist?.name ?? "");
+  const [description, setDescription] = useState(specialist?.description ?? "");
+  const [instructions, setInstructions] = useState(specialist?.instructions ?? "");
+  const [runtime, setRuntime] = useState<RuntimeKind>(specialist?.runtime?.kind ?? "native");
+  const [model, setModel] = useState(specialist?.runtime && specialist.runtime.kind !== "native" ? specialist.runtime.model ?? "" : "");
+  const [skillIds, setSkillIds] = useState<string[]>([...(specialist?.enabledSkillIds ?? [])]);
+  const [connectorIds, setConnectorIds] = useState<string[]>([...(specialist?.connectorIds ?? [])]);
+  const [all, setAll] = useState(skillIds.length + connectorIds.length === 0);
+  const [examples, setExamples] = useState<string[]>([...(specialist?.promptExamples ?? [])]);
+  const [picking, setPicking] = useState<AbilityTab>();
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
-  const [abilityTab, setAbilityTab] = useState<AbilityTab>("skills");
-  const [picking, setPicking] = useState<AbilityTab>();
-  const creating = specialist === undefined;
-  const selectedSkills = skills.filter((skill) => draft.enabledSkillIds.includes(skill.id));
-  const unavailableSkillIds = draft.access === "all" ? []
-    : draft.enabledSkillIds.filter((id) => !skills.some((skill) => skill.id === id));
-  const canSave = unavailableSkillIds.length === 0
-    && [draft.name, draft.description, draft.instructions].every((value) => value.trim() !== "");
-  const selectedConnectors = connectors.filter((connector) => draft.connectorIds.includes(connector.id));
-  const showingSkills = abilityTab === "skills";
-
-  const removeSkill = (id: string) => {
-    setDraft({ ...draft, enabledSkillIds: draft.enabledSkillIds.filter((candidate) => candidate !== id) });
-  };
-
-  const removeConnector = (id: string) => {
-    setDraft({ ...draft, connectorIds: draft.connectorIds.filter((candidate) => candidate !== id) });
-  };
-
+  const availableSkills = selectableSkills(skills);
+  const missingSkills = all ? [] : skillIds.filter(id => !availableSkills.some(skill => skill.id === id));
+  const missingConnectors = all ? [] : connectorIds.filter(id => !connectors.some(connector => connector.id === id));
+  const canSave = [name, description, instructions].every(value => value.trim() !== "")
+    && (all || skillIds.length + connectorIds.length > 0) && missingSkills.length + missingConnectors.length === 0;
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (picking !== undefined || !claimsEscape(event)) return;
+      event.preventDefault();
+      if (!busy) onCancel();
+    };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [busy, onCancel, picking]);
   const save = async () => {
     if (busy || !canSave) return;
-    setBusy(true);
-    setFailure(undefined);
+    setBusy(true); setFailure(undefined);
     try {
-      const body = bodyOf(draft);
-      if (specialist === undefined) await createSpecialist(client, body);
-      else await updateSpecialist(client, specialist.id, body);
-      onSaved();
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
-    }
+      const preserved = specialist?.runtime?.kind === runtime ? specialist.runtime : undefined;
+      const nextRuntime: SpecialistRuntime = runtime === "native" ? { kind: "native" }
+        : { ...preserved, kind: runtime, model: model.trim() || undefined } as SpecialistRuntime;
+      const body: CreateSpecialistRequest = { name: name.trim(), description: description.trim(), instructions: instructions.trim(),
+        connectorIds: (all ? [] : connectorIds) as CreateSpecialistRequest["connectorIds"], enabledSkillIds: all ? [] : skillIds,
+        runtime: nextRuntime, promptExamples: examples.map(value => value.trim()).filter(Boolean) };
+      const saved = specialist ? await updateSpecialist(client, specialist.id, body) : await createSpecialist(client, body);
+      onSaved(saved);
+    } catch (reason) { setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed); }
+    finally { setBusy(false); }
   };
-
-  return (
-    <SettingsModal
-      closeDisabled={busy}
-      label={creating ? TEXT.settings.system.specialists.add : TEXT.settings.system.specialists.editTitle}
-      onClose={onCancel}
-      wide
-    >
-      <div className="settings-card is-form">
-        <div className="settings-card-form">
-          <label className="settings-field">
-            <span className="settings-field-head">
-              <span className="settings-field-label is-required">{TEXT.settings.system.specialists.name}</span>
-              <span className="settings-field-count">{draft.name.length} / {NAME_MAX_LENGTH}</span>
-            </span>
-            <input
-              aria-label={TEXT.settings.system.specialists.name}
-              autoFocus={creating}
-              className="field-input"
-              disabled={busy}
-              maxLength={NAME_MAX_LENGTH}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-              placeholder={TEXT.settings.system.specialists.namePlaceholder}
-              required
-              value={draft.name}
-            />
-          </label>
-          <label className="settings-field">
-            <span className="settings-field-head">
-              <span className="settings-field-label is-required">{TEXT.settings.system.specialists.description}</span>
-              <span className="settings-field-count">{draft.description.length} / {DESCRIPTION_MAX_LENGTH}</span>
-            </span>
-            <input
-              aria-label={TEXT.settings.system.specialists.description}
-              className="field-input"
-              disabled={busy}
-              maxLength={DESCRIPTION_MAX_LENGTH}
-              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
-              placeholder={TEXT.settings.system.specialists.descriptionPlaceholder}
-              required
-              value={draft.description}
-            />
-          </label>
-          <div className="settings-field">
-            <span className="settings-field-label is-required">{TEXT.settings.system.specialists.instructions}</span>
-            <span className="settings-field-hint">{TEXT.settings.system.specialists.instructionsHint}</span>
-            <span className="settings-textarea-wrap">
-              <textarea
-                aria-label={TEXT.settings.system.specialists.instructions}
-                className="field-textarea"
-                disabled={busy}
-                maxLength={INSTRUCTIONS_MAX_LENGTH}
-                onChange={(event) => setDraft({ ...draft, instructions: event.target.value })}
-                placeholder={TEXT.settings.system.specialists.instructionsPlaceholder}
-                required
-                rows={6}
-                value={draft.instructions}
-              />
-              <span className="settings-textarea-count">
-                {draft.instructions.length.toLocaleString("en-US")} / {INSTRUCTIONS_MAX_DISPLAY}
-              </span>
-            </span>
-          </div>
-          <Row hint={TEXT.settings.system.specialists.runtimeHint} title={TEXT.settings.system.specialists.runtime}>
-            <Select
-              disabled={busy}
-              label={TEXT.settings.system.specialists.runtime}
-              onChange={(value) => setDraft({ ...draft, runtime: value as RuntimeKind })}
-              options={[
-                { label: TEXT.settings.system.specialists.runtimeNative, value: "native" },
-                { label: "Codex", value: "codex" },
-                { label: "Claude Code", value: "claude-code" },
-                { label: "ACP", value: "acp" },
-              ]}
-              value={draft.runtime}
-            />
-          </Row>
-          {draft.runtime === "native" ? null : (
-            <Row hint={TEXT.settings.system.specialists.modelHint} title={TEXT.settings.system.specialists.model}>
-              <input
-                className="field-input"
-                disabled={busy}
-                onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                value={draft.model}
-              />
-            </Row>
-          )}
-          <div className="settings-ability">
-            <span className="settings-field-label">{TEXT.settings.system.specialists.capabilities}</span>
-            <span className="settings-field-hint">{TEXT.settings.system.specialists.capabilitiesHint}</span>
-
-            <label className={`settings-ability-option${draft.access === "all" ? " is-selected" : ""}`}>
-              <input
-                checked={draft.access === "all"}
-                disabled={busy}
-                name="specialist-capability-access"
-                onChange={() => setDraft({ ...draft, access: "all", connectorIds: [], enabledSkillIds: [] })}
-                type="radio"
-              />
-              <span className="settings-ability-option-main">
-                <span className="settings-ability-option-head">
-                  <span className="settings-ability-option-title">
-                    {TEXT.settings.system.specialists.fullAccess}
-                  </span>
-                  <span className="settings-ability-default">
-                    {TEXT.settings.system.specialists.defaultTag}
-                  </span>
-                </span>
-                <span className="settings-ability-option-hint">
-                  {TEXT.settings.system.specialists.fullAccessHint}
-                </span>
-              </span>
-            </label>
-
-            <div className="settings-ability-divider">
-              <span>{TEXT.settings.system.specialists.orSpecific}</span>
-            </div>
-
-            <div className="settings-ability-toolbar">
-              <div
-                aria-label={TEXT.settings.system.specialists.capabilities}
-                className="settings-ability-tabs"
-                role="tablist"
-              >
-                <button
-                  aria-selected={showingSkills}
-                  className={`settings-ability-tab${showingSkills ? " is-active" : ""}`}
-                  onClick={() => setAbilityTab("skills")}
-                  role="tab"
-                  type="button"
-                >
-                  {TEXT.settings.system.specialists.skills}
-                  <span className="settings-ability-tab-count">{selectedSkills.length}</span>
-                </button>
-                <button
-                  aria-selected={!showingSkills}
-                  className={`settings-ability-tab${showingSkills ? "" : " is-active"}`}
-                  onClick={() => setAbilityTab("connectors")}
-                  role="tab"
-                  type="button"
-                >
-                  {TEXT.settings.system.specialists.connectors}
-                  <span className="settings-ability-tab-count">{selectedConnectors.length}</span>
-                </button>
-              </div>
-              <button
-                className="settings-ability-add"
-                disabled={busy}
-                onClick={() => setPicking(abilityTab)}
-                type="button"
-              >
-                <span aria-hidden="true">+</span>
-                {showingSkills
-                  ? TEXT.settings.system.specialists.addSkill
-                  : TEXT.settings.system.specialists.addConnector}
-              </button>
-            </div>
-
-            {showingSkills ? (
-              selectedSkills.length === 0 && unavailableSkillIds.length === 0 ? (
-                <p className="settings-ability-empty">{TEXT.settings.system.specialists.noSkills}</p>
-              ) : (
-                <ul className="settings-ability-list">
-                  {selectedSkills.map((skill) => (
-                    <li className="settings-ability-item" key={skill.id}>
-                      <span className="settings-ability-item-name">{skill.name}</span>
-                      <button
-                        aria-label={`${TEXT.settings.system.specialists.remove} ${skill.name}`}
-                        className="settings-ability-remove"
-                        disabled={busy}
-                        onClick={() => removeSkill(skill.id)}
-                        type="button"
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
-                  {unavailableSkillIds.map((id) => (
-                    <li className="settings-ability-item" key={id}>
-                      <span className="settings-ability-item-name">{TEXT.settings.system.specialists.unavailableSkill(id)}</span>
-                      <button
-                        aria-label={`${TEXT.settings.system.specialists.remove} ${id}`}
-                        className="settings-ability-remove"
-                        disabled={busy}
-                        onClick={() => removeSkill(id)}
-                        type="button"
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )
-            ) : selectedConnectors.length === 0 ? (
-              <p className="settings-ability-empty">{TEXT.settings.system.specialists.noConnectors}</p>
-            ) : (
-              <ul className="settings-ability-list">
-                {selectedConnectors.map((connector) => (
-                  <li className="settings-ability-item" key={connector.id}>
-                    <span className="settings-ability-item-name">{connector.displayName ?? connector.id}</span>
-                    <button
-                      aria-label={`${TEXT.settings.system.specialists.remove} ${connector.displayName ?? connector.id}`}
-                      className="settings-ability-remove"
-                      disabled={busy}
-                      onClick={() => removeConnector(connector.id)}
-                      type="button"
-                    >
-                      ×
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            {unavailableSkillIds.length > 0 ? (
-              <p className="row-note is-error" role="status">{TEXT.settings.system.specialists.unavailableSkillsHint}</p>
-            ) : null}
-            <p className="settings-ability-note">
-              <span aria-hidden="true" className="settings-ability-note-icon">i</span>
-              <span>
-                {showingSkills
-                  ? TEXT.settings.system.specialists.skillsNote
-                  : TEXT.settings.system.specialists.connectorsNote}
-              </span>
-            </p>
-          </div>
-          {failure ? <small className="row-note is-error" role="alert">{failure}</small> : null}
-          <div className="settings-card-actions">
-            <button className="secondary-button" disabled={busy} onClick={onCancel} type="button">
-              {TEXT.settings.cancel}
-            </button>
-            <button
-              className="primary-button"
-              disabled={busy || !canSave}
-              onClick={() => void save()}
-              type="button"
-            >
-              {TEXT.settings.system.save}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {picking === undefined ? null : (
-        // The picker is the one layer that drops a capability the service can
-        // no longer resolve, so it gets the raw list and filters its own
-        // selection. The form's chips above still show a saved id the catalog
-        // reports as failed, so that it can be removed here.
-        <AbilityPicker
-          connectors={connectors}
-          initialTab={picking}
-          onApply={({ connectorIds, skillIds }) => {
-            setDraft({
-              ...draft,
-              access: "specific",
-              connectorIds,
-              enabledSkillIds: skillIds,
-            });
-            setPicking(undefined);
-          }}
-          onClose={() => setPicking(undefined)}
-          selectedConnectorIds={draft.connectorIds}
-          selectedSkillIds={draft.enabledSkillIds}
-          skills={skills}
-        />
-      )}
-    </SettingsModal>
-  );
+  const selectedCards = (tab: AbilityTab) => {
+    const rows = tab === "skills" ? skillIds.map(id => {
+      const s = skills.find(skill => skill.id === id);
+      return { id, name: s?.name ?? labels.unavailableSkill(id), description: s?.loadFailure ? "" : s?.description ?? "", official: s?.source === "built-in", missing: !s || s.loadFailure !== undefined };
+    }) : connectorIds.map(id => {
+      const c = connectors.find(connector => connector.id === id);
+      return { id, name: c?.displayName ?? c?.id ?? labels.unavailableCapability(id), description: c?.commercialUseConstraints ?? "", official: c?.trustLevel === "bundled", missing: !c };
+    });
+    return <details className="specialist-config-section" open>
+      <summary>{tab === "skills" ? labels.skillConfiguration : labels.mcpConfiguration}{rows.length ? `（${rows.length}）` : ""}</summary>
+      <button className="specialist-section-add" disabled={busy} onClick={() => setPicking(tab)} type="button">＋ {tab === "skills" ? labels.configureSkills : labels.configureMcp}</button>
+      {rows.length === 0 ? <p className="specialist-empty is-inline">{labels.unconfigured}</p> : <div className="specialist-selected-grid">
+        {rows.map(row => <div className={`specialist-capability-card${row.missing ? " is-missing" : ""}`} key={row.id}>
+          <div className="specialist-capability-top"><SpecialistMark name={row.name} /><div><strong>{row.name}</strong><span className="specialist-badge">{row.official ? labels.builtIn : labels.external}</span></div>
+            <button type="button" className="specialist-remove" disabled={busy} aria-label={`${labels.remove} ${row.id}`} onClick={() => tab === "skills" ? setSkillIds(ids => ids.filter(id => id !== row.id)) : setConnectorIds(ids => ids.filter(id => id !== row.id))}><SpecialistGlyph kind="delete" /></button>
+          </div><p>{row.description}</p>
+        </div>)}
+      </div>}
+    </details>;
+  };
+  return <section className="specialist-subpage" role="region" aria-label={specialist ? labels.editTitle : labels.add}>
+    <div className="specialist-subpage-content">
+      <button className="specialist-back" disabled={busy} type="button" onClick={onCancel}><SpecialistGlyph kind="back" />{labels.back}</button>
+      <h2>{specialist ? labels.editTitle : labels.add}</h2>
+      <form id={formId} className="specialist-editor" onSubmit={event => { event.preventDefault(); void save(); }}>
+        <label className="specialist-field"><span>{labels.name}</span><input className="field-input" aria-label={labels.name} autoFocus={!specialist} required maxLength={80} value={name} disabled={busy} placeholder={labels.namePlaceholder} onChange={event => setName(event.target.value)} /></label>
+        <label className="specialist-field"><span>{labels.description}</span><span className="specialist-input-wrap"><textarea className="field-textarea specialist-description" aria-label={labels.description} required maxLength={500} value={description} disabled={busy} placeholder={labels.descriptionPlaceholder} onChange={event => setDescription(event.target.value)} /><small>{description.length}/500</small></span></label>
+        <label className="specialist-field"><span>{labels.instructions}</span><span className="specialist-input-wrap"><textarea className="field-textarea specialist-instructions" aria-label={labels.instructions} required maxLength={20_000} value={instructions} disabled={busy} placeholder={labels.instructionsHint} onChange={event => setInstructions(event.target.value)} /><small>{instructions.length}/20,000</small></span></label>
+        <h3>{labels.configuration}</h3>
+        <label className="specialist-field specialist-runtime"><span>{labels.runtime}</span><select aria-label={labels.runtime} disabled={busy} value={runtime} onChange={event => setRuntime(event.target.value as RuntimeKind)}>
+          <option value="native">{labels.runtimeNative}</option><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="acp">ACP</option>
+        </select><small>{labels.runtimeHint}</small></label>
+        {runtime !== "native" ? <label className="specialist-field specialist-runtime"><span>{labels.model}</span><input className="field-input" aria-label={labels.model} disabled={busy} value={model} placeholder={labels.modelHint} onChange={event => setModel(event.target.value)} /></label> : null}
+        <div className="specialist-field"><span>{labels.capabilities}</span><div className="specialist-access" role="radiogroup" aria-label={labels.capabilities}>
+          <button className={all ? "is-selected" : ""} type="button" role="radio" aria-checked={all} disabled={busy} onClick={() => setAll(true)}><strong>{labels.fullAccess} <span className="specialist-badge">{labels.defaultTag}</span></strong><span>{labels.fullAccessHint}</span></button>
+          <button className={!all ? "is-selected" : ""} type="button" role="radio" aria-checked={!all} disabled={busy} onClick={() => setAll(false)}><strong>{labels.orSpecific}</strong><span>{labels.capabilitiesHint}</span></button>
+        </div></div>
+        {!all ? <>{selectedCards("skills")}{selectedCards("connectors")}
+          {skillIds.length + connectorIds.length === 0 ? <p className="specialist-validation" role="status">{labels.selectOne}</p> : null}
+          {missingSkills.length + missingConnectors.length > 0 ? <p className="specialist-validation" role="status">{labels.unavailableCapabilitiesHint}</p> : null}
+        </> : null}
+        <details className="specialist-config-section" open><summary>{labels.promptExamples}</summary><button type="button" className="specialist-section-add" disabled={busy || examples.length >= 10} onClick={() => setExamples(values => [...values, ""])}>＋ {labels.addExample}</button>
+          {examples.length === 0 ? <p className="specialist-empty is-inline">{labels.unconfigured}</p> : examples.map((example, index) => <div className="specialist-example-field" key={index}>
+            <input className="field-input" aria-label={labels.exampleNumber(index + 1)} maxLength={1000} disabled={busy} value={example} placeholder={labels.examplePlaceholder} onChange={event => setExamples(values => values.map((value, at) => at === index ? event.target.value : value))} />
+            <button type="button" disabled={busy} aria-label={`${labels.remove} ${labels.exampleNumber(index + 1)}`} onClick={() => setExamples(values => values.filter((_, at) => at !== index))}>−</button>
+          </div>)}
+        </details>
+        {failure ? <p className="specialist-feedback is-error" role="alert">{failure} <button type="button" disabled={busy} onClick={() => void save()}>{labels.retry}</button></p> : null}
+      </form>
+    </div>
+    <footer className="specialist-editor-footer"><button type="button" className="pill-button" disabled={busy} onClick={onCancel}>{TEXT.settings.cancel}</button><button className="pill-button is-dark" type="submit" form={formId} disabled={busy || !canSave}>{busy ? labels.saving : TEXT.settings.system.save}</button></footer>
+    {picking ? <AbilityPicker initialTab={picking} skills={skills} connectors={connectors} selectedSkillIds={skillIds} selectedConnectorIds={connectorIds} onClose={() => setPicking(undefined)} onApply={value => { setSkillIds(value.skillIds); setConnectorIds(value.connectorIds); setPicking(undefined); }} /> : null}
+  </section>;
 }
