@@ -43,12 +43,19 @@ function terminal(status: unknown): boolean {
  *
  * `continue` on an interrupted research can start a run that dies again on the
  * same cause: the name is unchanged, but the attempt left a mark — another
- * round, another round's usage, or the engine's own reason for stopping. With
- * none of them moved, nothing ran.
+ * round, another round's usage, the engine's own reason for stopping, or the
+ * activity it appends for each model call before making it. The last one
+ * matters on its own: a call that fails the same way again moves neither the
+ * round, nor the usage the provider never reported, nor the reason's text, so
+ * only the new activity says a call was made. With none of them moved, nothing
+ * ran.
  */
 function movedPast(previous: IdeaResearchView["research"] | undefined, next: IdeaResearchView["research"]): boolean {
   if (!previous) return false;
-  return next.round !== previous.round || next.tokens !== previous.tokens || next.reason !== previous.reason;
+  return next.round !== previous.round
+    || next.tokens !== previous.tokens
+    || next.reason !== previous.reason
+    || (next.activities?.length ?? 0) > (previous.activities?.length ?? 0);
 }
 
 /** Only transport and credentials live here. Python owns research state and scheduling. */

@@ -680,6 +680,41 @@ test("a resumed run that ends where it started is still reported as having run",
   }
 });
 
+test("a resumed run that fails the same way again is still reported as having run", async () => {
+  const tokens = recordingTokens();
+  const original = globalThis.fetch;
+  let resumed = false;
+  const failed = (activity: string, startedAt: string) =>
+    ({ id: activity, kind: "model", startedAt, status: "failed", detail: "Model HTTP 401: invalid api key" });
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    if (payload.operation === "continue") {
+      resumed = true;
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }
+    const view = researchView("interrupted") as ReturnType<typeof researchView> & { research: Record<string, unknown> };
+    const activities = resumed
+      ? [failed("a1", "2026-11-27T01:00:00Z"), failed("a2", "2026-11-27T01:05:00Z")]
+      : [failed("a1", "2026-11-27T01:00:00Z")];
+    // Same round, same usage, same reason text: only the new activity says a
+    // second call was made — and that is the only mark the engine leaves when a
+    // resumed run fails again on the same cause.
+    return { ok: true, json: async () => ({ ...view,
+      research: { ...view.research, tokens: 40, reason: "Model HTTP 401: invalid api key", activities } }) } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.equal(view.research.activities?.length, 2, "the caller gets the attempt the engine recorded");
+    assert.equal(view.research.reason, "Model HTTP 401: invalid api key",
+      "the engine's reason reaches the caller instead of a timeout");
+    assert.equal(tokens.last("research-1"), undefined, "the run ended, so its grant is retired");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
 test("a continue whose read-back leaves everything where it was reports the failure", async () => {
   const tokens = recordingTokens();
   const original = globalThis.fetch;
