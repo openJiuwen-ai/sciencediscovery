@@ -64,6 +64,7 @@ never be counted as mock evidence.
 | `boot.spec.ts` | credential gate, offline screen, rejected token, empty workspace, resume |
 | `setup.spec.ts` | first run with no model: test, then continue |
 | `failure-cards.spec.ts` | timeout cards, keyboard diagnostics, narrow layout, persisted replay, repeated failures, recovery and language switch |
+| `failed-skill-cards.spec.ts` | a skipped bundled skill stays visible as a failed card in 设置 › 技能, and is offered by neither the `/` palette nor the specialist picker, in Chinese and English |
 | `conversation.spec.ts` | compose, Enter vs Shift+Enter, SSE answer, persisted transcript |
 | `sessions.spec.ts` | rename and delete, both proved across a reload |
 | `settings.spec.ts` | default model and interface language surviving a reload |

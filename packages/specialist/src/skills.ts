@@ -173,6 +173,14 @@ interface ManagedPackage extends LoadedPackage {
   provenance: SkillVersionProvenance;
 }
 
+/** A bundled package the loader could not install, kept so the failure is
+ *  reported instead of the skill silently disappearing. */
+export interface SkillLoadFailure {
+  code: string;
+  id: string;
+  message: string;
+}
+
 interface StoredSkillReviewFile {
   binary?: boolean;
   content?: string;
@@ -1117,6 +1125,10 @@ function packageFileBytes(files: ReadonlyMap<string, Buffer>): SkillPackageFileB
 
 export class SkillCatalog {
   private builtIns = new Map<string, LoadedPackage>();
+  /** Built-ins whose package could not be validated. One malformed file is a
+   *  fact about that one skill, not a reason to leave the rest of the catalog
+   *  unloaded or to fail startup. */
+  private builtInFailures = new Map<string, SkillLoadFailure>();
   private index: CatalogIndex = { managed: {}, schemaVersion: 1 };
   private loaded = false;
   private managed = new Map<string, ManagedPackage>();
@@ -1235,15 +1247,25 @@ export class SkillCatalog {
     await rm(resolve(this.root, ".imports"), { force: true, recursive: true });
     await mkdir(resolve(this.root, ".staging"), { recursive: true });
     await mkdir(this.reviewDraftRoot, { recursive: true });
+    this.builtInFailures.clear();
     for (const id of BUNDLED_SKILL_IDS) {
-      const files = await readPackageDirectory(resolve(this.repositoryRoot, "skills", id));
-      this.builtIns.set(id, validateSkillPackage(files, {
-        directoryName: id,
-        readOnly: true,
-        revision: 1,
-        source: "built-in",
-        version: BUILT_IN_VERSIONS[id],
-      }));
+      try {
+        const files = await readPackageDirectory(resolve(this.repositoryRoot, "skills", id));
+        this.builtIns.set(id, validateSkillPackage(files, {
+          directoryName: id,
+          readOnly: true,
+          revision: 1,
+          source: "built-in",
+          version: BUILT_IN_VERSIONS[id],
+        }));
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        this.builtInFailures.set(id, {
+          code: error instanceof SkillCatalogError ? error.code : typeof code === "string" ? code : "SKILL_LOAD_FAILED",
+          id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     try {
       const saved = JSON.parse(await readFile(this.indexPath, "utf8")) as Partial<CatalogIndex>;
@@ -1347,14 +1369,37 @@ export class SkillCatalog {
     return [...this.builtIns.keys(), ...this.managed.keys()].toSorted();
   }
 
+  /** Bundled packages that were skipped during the one-shot startup load. The
+   *  `/api/skills` list renders each as a failed entry so an operator can see
+   *  the file is broken instead of wondering why a skill is missing. */
+  loadFailures(): SkillLoadFailure[] {
+    this.assertLoaded();
+    return [...this.builtInFailures.values()]
+      .map((failure) => ({ ...failure }))
+      .toSorted((left, right) => left.id.localeCompare(right.id));
+  }
+
   list(): SkillDescriptor[] {
     this.assertLoaded();
-    return [...this.builtIns.values(), ...this.managed.values()]
+    const loaded = [...this.builtIns.values(), ...this.managed.values()]
       .map(({ detail }) => {
         const { frontmatter: _frontmatter, instructions: _instructions, resources: _resources, ...descriptor } = detail;
         return structuredClone(descriptor);
-      })
-      .toSorted((left, right) => left.name.localeCompare(right.name));
+      });
+    const failed = [...this.builtInFailures.values()].map((failure): SkillDescriptor => ({
+      currentRevision: 1,
+      description: `Failed to load: ${failure.message}`,
+      diagnostics: [],
+      hash: "",
+      id: failure.id,
+      loadFailure: { code: failure.code, message: failure.message },
+      name: failure.id,
+      readOnly: true,
+      resourceSummary: { bytes: 0, files: 0, kinds: { asset: 0, other: 0, reference: 0, script: 0 } },
+      source: "built-in",
+      version: BUILT_IN_VERSIONS[failure.id as (typeof BUNDLED_SKILL_IDS)[number]] ?? "unknown",
+    }));
+    return [...loaded, ...failed].toSorted((left, right) => left.name.localeCompare(right.name));
   }
 
   get(id: string): SkillDetail | undefined {
@@ -2632,12 +2677,19 @@ export class SkillCatalog {
 
   resolve(ids: string[]): RuntimeSkillSnapshot[] {
     this.assertLoaded();
-    return ids.map((id) => {
+    // A selection saved before a bundled package broke still names that id.
+    // Dropping it here keeps one malformed file from failing plugin binding
+    // (and therefore every later request) for everyone who had it enabled; an
+    // id that was never installed still raises, so callers keep their signal.
+    return ids.flatMap((id) => {
       const value = this.builtIns.get(id) ?? this.managed.get(id);
-      if (!value) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${id}`);
+      if (!value) {
+        if (this.builtInFailures.has(id)) return [];
+        throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${id}`);
+      }
       const detail = structuredClone(value.detail);
       const files = cloneFiles(value.files);
-      return {
+      return [{
         content: detail.instructions,
         description: detail.description,
         hash: detail.hash,
@@ -2648,7 +2700,7 @@ export class SkillCatalog {
         resources: structuredClone(detail.resources),
         revision: detail.currentRevision,
         version: detail.version,
-      };
+      }];
     });
   }
 }

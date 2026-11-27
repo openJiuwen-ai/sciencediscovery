@@ -135,9 +135,11 @@ function serverValue(page: SkillPage, key: string): boolean | undefined {
  * A catalog skill brings the JiuwenSwarm name it is installed as when the page
  * knows it, which is what keeps the bulk write free of a lookup per skill. A
  * skill JiuwenSwarm does not have yet goes by id, and the server imports it
- * only if the action needs it there.
+ * only if the action needs it there. A bundled package that failed to load has
+ * no package to switch, so it is not a bulk target.
  */
-function skillRow(skill: SkillDescriptor | JiuwenSwarmSkill, installedNames: Record<string, string>): SkillRow {
+function skillRow(skill: SkillDescriptor | JiuwenSwarmSkill, installedNames: Record<string, string>): SkillRow | undefined {
+  if ("id" in skill && skill.loadFailure !== undefined) return undefined;
   return "id" in skill
     ? {
       key: catalogKey(skill.id),
@@ -149,6 +151,16 @@ function skillRow(skill: SkillDescriptor | JiuwenSwarmSkill, installedNames: Rec
       },
     }
     : { key: jiuwenKey(skill.name), name: skill.name, target: { name: skill.name } };
+}
+
+/** The rows a bulk action may write: the visible ones, minus any bundled
+ *  package the loader skipped. Its card says it failed; it has no package to
+ *  import into JiuwenSwarm, so it is never part of "enable everything". */
+function bulkTargets(page: SkillPage, scope: SkillScope, term: string): SkillRow[] {
+  return visibleRows(page, scope, term).flatMap((row) => {
+    const target = skillRow(row.skill, page.installedNames ?? {});
+    return target === undefined ? [] : [target];
+  });
 }
 
 /** The result that belongs to a row: by id when its target had one, else by name. */
@@ -394,10 +406,9 @@ export function SkillsSettings({ client, onConfirm }: Props) {
    * A page of 31 skills used to be 31 awaited requests plus its own reload,
    * which is what froze it for seconds.
    */
-  const setAll = async (next: boolean, visible: Array<SkillDescriptor | JiuwenSwarmSkill>) => {
+  const setAll = async (next: boolean, rows: SkillRow[]) => {
     const page = loaded.value;
     if (!page?.switchesAvailable) return;
-    const rows = visible.map((skill) => skillRow(skill, page.installedNames ?? {}));
     if (!rows.length) return;
     setFailure(undefined);
     setBulkPending(true);
@@ -719,7 +730,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
           mine: allRows.length - officialCount,
           official: officialCount,
         };
-        const bulkRows = page ? visibleRows(page, scope, query.trim().toLowerCase()) : [];
+        const bulkRows = page ? bulkTargets(page, scope, query.trim().toLowerCase()) : [];
         return (
           <div className="skill-toolbar">
             {page ? (
@@ -748,7 +759,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
               {page?.switchesAvailable && bulkRows.length > 0
                 ? <BulkToggles
                   busy={busy || bulkPending}
-                  onAll={(next) => void setAll(next, bulkRows.map((row) => row.skill))}
+                  onAll={(next) => void setAll(next, bulkRows)}
                   variant="toolbar"
                 />
                 : null}
@@ -829,6 +840,24 @@ export function SkillsSettings({ client, onConfirm }: Props) {
             const renderCatalog = (skill: SkillDescriptor) => {
               const key = catalogKey(skill.id);
               const on = intent[key] ?? page.enabled.includes(skill.id);
+              // A bundled package the loader skipped has no package behind it:
+              // switching, opening or exporting it would only reach a route that
+              // answers 404. Show why the row is there instead.
+              if (skill.loadFailure) {
+                return (
+                  <article className="settings-card skill-card" key={skill.id}>
+                    <div className="skill-card-head">
+                      {markFor(skill)}
+                      <div className="settings-card-main is-failed">
+                        <strong>{markedName(skill.name, term)}</strong>
+                        <span className="skill-card-tag">{tagFor(skill)}</span>
+                      </div>
+                    </div>
+                    <p className="row-note is-error">{TEXT.settings.skills.loadFailure}</p>
+                    <p className="skill-card-desc">{skill.loadFailure.message}</p>
+                  </article>
+                );
+              }
               return (
                 <article className="settings-card skill-card" key={skill.id}>
                   <div className="skill-card-head">

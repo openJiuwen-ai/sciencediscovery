@@ -417,6 +417,10 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
       </div>
 
       {picking === undefined ? null : (
+        // The picker is the one layer that drops a capability the service can
+        // no longer resolve, so it gets the raw list and filters its own
+        // selection. The form's chips above still show a saved id the catalog
+        // reports as failed, so that it can be removed here.
         <AbilityPicker
           connectors={connectors}
           initialTab={picking}

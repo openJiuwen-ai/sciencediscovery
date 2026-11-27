@@ -83,6 +83,9 @@ export interface ApiServerDependencies {
   mcpTransport?: McpTransportClient;
   /** Test seam: exercise remote-host HTTP flows without connecting to a real SSH machine. */
   remoteCompute?: RemoteComputeClient;
+  /** Test/embedding seam: read bundled Skill packages from this repository root
+   *  instead of the running checkout. */
+  repositoryRoot?: string;
   /** Test seam: keep package HTTP tests independent of the host volume's free space.
    *  A case can also swap it to prove which routes charge disk and which only write
    *  the response. */
@@ -672,6 +675,13 @@ export async function initializePlatformServices(
     for (const source of contribution.sources) mcpRegistry.register(source);
   }
   await initializeComponent("skill_catalog", () => skillCatalog.load());
+  for (const failure of skillCatalog.loadFailures()) {
+    apiLog.warn("built_in_skill_package_skipped", {
+      code: failure.code,
+      errorMessage: failure.message,
+      skillId: failure.id,
+    });
+  }
   store.setAvailableSkillIds(skillCatalog.ids());
   await initializeComponent("custom_mcp_servers", () => services.customMcpServers.load());
   await initializeComponent("session_store", () => store.load());

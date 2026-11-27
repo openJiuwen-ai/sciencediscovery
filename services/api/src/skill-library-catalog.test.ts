@@ -15,7 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { fileURLToPath } from "node:url";
@@ -513,6 +513,160 @@ test("skill library catalog seeds bundled skills into a stable built-in library"
     assert.equal((await catalog.listVersions(BUILT_IN_SKILL_LIBRARY_ID)).length, 1);
   } finally {
     await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
+test("an invalid bundled package is skipped and reported while the built-in library still seeds", async () => {
+  const dataDir = await temporaryDataDir();
+  const repository = await mkdtemp(resolve(process.cwd(), ".tmp", "built-in-seed-failure-"));
+  try {
+    await mkdir(resolve(repository, "skills", "idea-tree-team"), { recursive: true });
+    await writeFile(resolve(repository, "skills", "idea-tree-team", "SKILL.md"), [
+      "---",
+      "name: idea-tree-team",
+      "description: Use when the user asks for autonomous Idea Tree research: prepare the inputs.",
+      "---",
+      "",
+    ].join("\n"));
+    await mkdir(resolve(repository, "skills", "literature-searcher"), { recursive: true });
+    await writeFile(resolve(repository, "skills", "literature-searcher", "SKILL.md"), [
+      "---",
+      "name: literature-searcher",
+      "description: Search the literature for evidence.",
+      "---",
+      "",
+    ].join("\n"));
+
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    const seeded = await catalog.seedBuiltInSkillLibrary(repository);
+    assert.equal(seeded.id, BUILT_IN_SKILL_LIBRARY_ID);
+    assert.ok(seeded.headVersionId, "the valid bundled skill still produced a version");
+    const version = await catalog.getVersion(seeded.id, seeded.headVersionId!);
+    assert.deepEqual(version.skills.map((skill) => skill.id), ["literature-searcher"]);
+    const failed = catalog.builtInSeedFailures().find((failure) => failure.id === "idea-tree-team");
+    assert.ok(failed, "the skipped package is reported");
+    assert.equal(failed.code, "SKILL_VALIDATION");
+
+    // A second startup with the same broken file must not fail either.
+    await catalog.seedBuiltInSkillLibrary(repository);
+    assert.equal((await catalog.listVersions(BUILT_IN_SKILL_LIBRARY_ID)).length, 1);
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+    await rm(repository, { force: true, recursive: true });
+  }
+});
+
+test("a bundled package whose frontmatter name disagrees with its directory fails both surfaces", async () => {
+  // The catalog validates a bundled package against its directory name, so a
+  // package written under `skills/literature-searcher` with `name:
+  // literature-search` is reported as failed. The built-in library seed has to
+  // reach the same verdict, or it would install `literature-search` while the
+  // catalog reports `literature-searcher` as broken and the two surfaces would
+  // disagree about the same package.
+  const dataDir = await temporaryDataDir();
+  const repository = await mkdtemp(resolve(process.cwd(), ".tmp", "built-in-seed-name-mismatch-"));
+  const writePackage = async (directory: string, name: string) => {
+    await mkdir(resolve(repository, "skills", directory), { recursive: true });
+    await writeFile(resolve(repository, "skills", directory, "SKILL.md"), [
+      "---",
+      `name: ${name}`,
+      `description: A valid ${name} package.`,
+      "---",
+      "",
+    ].join("\n"));
+  };
+  try {
+    await writePackage("idea-tree-team", "idea-tree-team");
+    await writePackage("literature-searcher", "literature-search");
+
+    const catalog = new SkillCatalog(dataDir, repository);
+    await catalog.load();
+    // The fixture repository ships only the two packages, so every other
+    // bundled id is reported as missing; what matters is the verdict on these.
+    const catalogFailures = catalog.loadFailures();
+    assert.equal(
+      catalogFailures.find((failure) => failure.id === "literature-searcher")?.code,
+      "SKILL_VALIDATION",
+      "the catalog validates the package against its directory name",
+    );
+    assert.ok(
+      !catalogFailures.some((failure) => failure.id === "idea-tree-team"),
+      "the agreeing package failed to load",
+    );
+    assert.equal(catalog.get("literature-search"), undefined, "the catalog installed the frontmatter name");
+
+    const libraries = new SkillLibraryCatalog(dataDir);
+    await libraries.load();
+    const seeded = await libraries.seedBuiltInSkillLibrary(repository);
+    assert.ok(seeded.headVersionId, "the agreeing package still seeded a version");
+    const version = await libraries.getVersion(seeded.id, seeded.headVersionId!);
+    assert.deepEqual(
+      version.skills.map((skill) => skill.id),
+      ["idea-tree-team"],
+      "the library seeded a package the catalog reports as failed",
+    );
+    assert.deepEqual(
+      version.skills.map((skill) => skill.id),
+      catalog.ids(),
+      "the library head and the catalog disagree about the same bundled packages",
+    );
+    const failure = libraries.builtInSeedFailures().find((entry) => entry.id === "literature-searcher");
+    assert.ok(failure, "the mismatched package is not reported");
+    assert.equal(failure.code, "SKILL_VALIDATION");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+    await rm(repository, { force: true, recursive: true });
+  }
+});
+
+test("a bundled package that breaks after seeding leaves the built-in library head too", async () => {
+  const dataDir = await temporaryDataDir();
+  const repository = await mkdtemp(resolve(process.cwd(), ".tmp", "built-in-seed-upgrade-"));
+  const valid = (name: string) => [
+    "---",
+    `name: ${name}`,
+    `description: A valid ${name} package.`,
+    "---",
+    "",
+  ].join("\n");
+  const writePackage = async (name: string, markdown: string) => {
+    await mkdir(resolve(repository, "skills", name), { recursive: true });
+    await writeFile(resolve(repository, "skills", name, "SKILL.md"), markdown);
+  };
+  try {
+    await writePackage("idea-tree-team", valid("idea-tree-team"));
+    await writePackage("literature-searcher", valid("literature-searcher"));
+
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    const first = await catalog.seedBuiltInSkillLibrary(repository);
+    const firstVersion = await catalog.getVersion(first.id, first.headVersionId!);
+    assert.deepEqual(firstVersion.skills.map((skill) => skill.id), ["idea-tree-team", "literature-searcher"]);
+
+    // The upgrade: one of the already-seeded packages is now malformed.
+    await writePackage("idea-tree-team", [
+      "---",
+      "name: idea-tree-team",
+      "description: Use when the user asks for autonomous Idea Tree research: prepare the inputs.",
+      "---",
+      "",
+    ].join("\n"));
+
+    const upgraded = await catalog.seedBuiltInSkillLibrary(repository);
+    assert.notEqual(upgraded.headVersionId, first.headVersionId, "the stale package stayed in the head version");
+    const upgradedVersion = await catalog.getVersion(upgraded.id, upgraded.headVersionId!);
+    assert.deepEqual(
+      upgradedVersion.skills.map((skill) => skill.id),
+      ["literature-searcher"],
+      "the built-in library still resolves the package the catalog reports as failed",
+    );
+    const failure = catalog.builtInSeedFailures().find((entry) => entry.id === "idea-tree-team");
+    assert.ok(failure, "the skipped package is reported");
+    assert.equal(failure.code, "SKILL_VALIDATION");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+    await rm(repository, { force: true, recursive: true });
   }
 });
 

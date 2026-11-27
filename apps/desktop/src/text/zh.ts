@@ -1130,6 +1130,7 @@ export const ZH = {
       /** The × inside the search field that puts the whole list back. */
       clearSearch: "清空搜索",
       noMatches: "没有匹配的技能。",
+      loadFailure: "内置技能加载失败",
 
       heading: "技能",
       jiuwenSwarmOnly: "当前执行器不是 JiuwenSwarm，技能开关不可用。",

@@ -40,6 +40,17 @@ function skillDetail(skill: SkillDescriptor): string {
 }
 
 /**
+ * The capabilities this picker may offer. A bundled package that failed to load
+ * is listed in 设置 › 技能 so the broken file stays visible, but it carries no
+ * package: offering it here could only store an id the service refuses to
+ * resolve, and saving the specialist would answer
+ * `Specialist skills are unavailable: <id>`.
+ */
+export function selectableSkills(skills: SkillDescriptor[]): SkillDescriptor[] {
+  return skills.filter((skill) => skill.loadFailure === undefined);
+}
+
+/**
  * The modal behind 添加技能 / 添加连接器.
  *
  * It lists every capability the machine knows about, not only the ones the
@@ -57,7 +68,15 @@ export function AbilityPicker({
   skills,
 }: Props) {
   const [tab, setTab] = useState<AbilityTab>(initialTab);
-  const [skillIds, setSkillIds] = useState(selectedSkillIds);
+  const choices = selectableSkills(skills);
+  // This is the one layer that filters: the form hands the raw catalog list
+  // over, so a saved id the catalog reports as failed leaves the selection
+  // here. The 技能 count then reflects only what can be applied, 添加 cannot
+  // write the stale id back, and the form's own chip still shows it so that it
+  // can be removed.
+  const [skillIds, setSkillIds] = useState(
+    selectedSkillIds.filter((id) => !skills.some((skill) => skill.id === id && skill.loadFailure !== undefined)),
+  );
   const [connectorIds, setConnectorIds] = useState(selectedConnectorIds);
 
   const toggle = (ids: string[], setIds: (next: string[]) => void, id: string, picked: boolean) => {
@@ -91,11 +110,11 @@ export function AbilityPicker({
         </div>
 
         {tab === "skills" ? (
-          skills.length === 0 ? (
+          choices.length === 0 ? (
             <p className="settings-picker-empty">{TEXT.settings.system.specialists.pickerEmptySkills}</p>
           ) : (
             <div className="settings-picker-list">
-              {skills.map((skill) => (
+              {choices.map((skill) => (
                 <label className="settings-picker-option" key={skill.id}>
                   <input
                     checked={skillIds.includes(skill.id)}

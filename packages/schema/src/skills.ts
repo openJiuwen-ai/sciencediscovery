@@ -87,6 +87,14 @@ export interface SkillDescriptor {
   };
   /** Normalized metadata from SKILL.md frontmatter; values may be nested objects, arrays, or strings (relaxed in https://gitcode.com/openJiuwen/sciencediscovery/pull/127 to admit SAS skill openclaw declarations). */
   metadata?: Record<string, unknown>;
+  /** Set only on a bundled package the loader skipped because it failed
+   *  validation: the entry reports the failure instead of disappearing. Such a
+   *  descriptor carries no package (`hash` is empty, no resources) and cannot
+   *  be selected, edited or exported. */
+  loadFailure?: {
+    code: string;
+    message: string;
+  };
   name: string;
   readOnly: boolean;
   resourceSummary: SkillResourceSummary;

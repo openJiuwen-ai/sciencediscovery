@@ -66,6 +66,24 @@ async function temporaryDataDir(): Promise<string> {
   return await mkdtemp(resolve(root, "skill-catalog-test-"));
 }
 
+test("every bundled package in this checkout still validates", async () => {
+  // `SkillCatalog.load` contains a broken package so startup survives one, which
+  // would otherwise also hide a malformed `skills/*/SKILL.md` from this suite.
+  // Asserting the real checkout has no failures keeps that defect a CI failure
+  // while a deployment stays tolerant of it.
+  const dataDir = await temporaryDataDir();
+  try {
+    const catalog = new SkillCatalog(dataDir, repositoryRoot);
+    await catalog.load();
+    assert.deepEqual(catalog.loadFailures(), [], "a shipped bundled Skill package failed to load");
+    for (const id of BUNDLED_SKILL_IDS) {
+      assert.ok(catalog.get(id), `the bundled Skill ${id} is missing from the loaded catalog`);
+    }
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("parses Agent Skills frontmatter and rejects invalid metadata", () => {
   const parsed = parseSkillMarkdown(markdown());
   assert.equal(parsed.frontmatter.name, "portable-skill");

@@ -43,6 +43,8 @@ import { BUILT_IN_SKILL_LIBRARY_ID } from "@sciencediscovery/schema";
 import { BUNDLED_SKILL_IDS, validateSkillPackage } from "@sciencediscovery/specialist";
 import type { RuntimeSkillSnapshot } from "@sciencediscovery/specialist";
 
+import { apiLog } from "./logging.js";
+
 const LIBRARY_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DEFAULT_LIBRARY_RECALL_LIMIT = 12;
 
@@ -59,6 +61,14 @@ export class SkillLibraryCatalogError extends Error {
     super(message);
     this.code = code;
   }
+}
+
+/** A bundled package skipped while seeding the built-in library, kept so
+ *  startup can report the broken file instead of it vanishing. */
+export interface BuiltInSkillSeedFailure {
+  code: string;
+  id: string;
+  message: string;
 }
 
 function validationError(message: string): SkillLibraryCatalogError {
@@ -178,6 +188,7 @@ function diffCount(diff: SkillLibraryDiff): number {
 }
 
 export class SkillLibraryCatalog {
+  private seedFailuresBySkillId = new Map<string, BuiltInSkillSeedFailure>();
   private index: CatalogIndex = { libraries: {}, schemaVersion: 1 };
   private loaded = false;
   private mutationQueue: Promise<void> = Promise.resolve();
@@ -299,19 +310,49 @@ export class SkillLibraryCatalog {
 
   async seedBuiltInSkillLibrary(repositoryRoot: string): Promise<SkillLibrary> {
     this.assertLoaded();
+    this.seedFailuresBySkillId.clear();
     const library = this.get(BUILT_IN_SKILL_LIBRARY_ID)
       ?? await this.create({ id: BUILT_IN_SKILL_LIBRARY_ID, name: "Built-in Skills" });
     const current = library.headVersionId ? await this.getVersion(library.id, library.headVersionId) : undefined;
     const bundledIds = new Set<string>(BUNDLED_SKILL_IDS);
     const operations: CommitSkillLibraryVersionRequest["operations"] = [];
     for (const id of BUNDLED_SKILL_IDS) {
-      operations.push({
-        package: packageInputFromFiles(await readPackageDirectory(resolve(repositoryRoot, "skills", id))),
-        type: "upsert",
-      });
+      try {
+        const files = await readPackageDirectory(resolve(repositoryRoot, "skills", id));
+        // Validate here, one package at a time: `commitVersion` refuses its
+        // whole batch on one bad package because a caller's package is caller
+        // input, but a bundled file on disk is not. Skipping the broken one
+        // leaves the other built-ins seeded and keeps startup alive. The
+        // directory name is part of the check, exactly as the catalog checks a
+        // bundled package: a frontmatter name that disagrees with `skills/<id>`
+        // must fail both surfaces rather than seed a library skill under a
+        // name the catalog reports as broken.
+        validateSkillPackage(files, { directoryName: id });
+        operations.push({ package: packageInputFromFiles(files), type: "upsert" });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        this.seedFailuresBySkillId.set(id, {
+          code: error instanceof SkillLibraryCatalogError ? error.code : typeof code === "string" ? code : "SKILL_LOAD_FAILED",
+          id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        apiLog.warn("built_in_skill_library_package_skipped", {
+          errorMessage: error instanceof Error ? error.message : String(error),
+          skillId: id,
+        });
+      }
     }
+    // Keep the built-in library describing the packages this load could
+    // actually install. A bundled id that was seeded from an earlier, good
+    // package and now fails validation is dropped from the head too: leaving
+    // it would let library recall resolve a package the catalog reports as
+    // broken, and would make the same skill behave differently on a machine
+    // that upgraded from one that installed it fresh.
+    const failedIds = new Set(this.seedFailuresBySkillId.keys());
     for (const skill of current?.skills ?? []) {
-      if (!bundledIds.has(skill.id)) operations.push({ skillId: skill.id, type: "delete" });
+      if (!bundledIds.has(skill.id) || failedIds.has(skill.id)) {
+        operations.push({ skillId: skill.id, type: "delete" });
+      }
     }
     const preview = await this.commitVersion(library.id, {
       author: { kind: "system", name: "Built-in skill catalog" },
@@ -329,6 +370,13 @@ export class SkillLibraryCatalog {
       throw validationError(committed.conflicts.map((conflict) => conflict.message).join(" "));
     }
     return this.get(library.id)!;
+  }
+
+  /** Built-in packages skipped during the last seed, for startup reporting. */
+  builtInSeedFailures(): BuiltInSkillSeedFailure[] {
+    return [...this.seedFailuresBySkillId.values()]
+      .map((failure) => ({ ...failure }))
+      .toSorted((left, right) => left.id.localeCompare(right.id));
   }
 
   async getVersion(libraryId: string, versionId: string): Promise<SkillLibraryVersion> {
