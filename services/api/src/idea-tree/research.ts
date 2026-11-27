@@ -37,6 +37,20 @@ function terminal(status: unknown): boolean {
   return typeof status === "string" && status !== "running" && status !== "pausing";
 }
 
+/**
+ * Whether a read-back shows a resume took effect even though the research comes
+ * back in the state the command found.
+ *
+ * `continue` on an interrupted research can start a run that dies again on the
+ * same cause: the name is unchanged, but the attempt left a mark — another
+ * round, another round's usage, or the engine's own reason for stopping. With
+ * none of them moved, nothing ran.
+ */
+function movedPast(previous: IdeaResearchView["research"] | undefined, next: IdeaResearchView["research"]): boolean {
+  if (!previous) return false;
+  return next.round !== previous.round || next.tokens !== previous.tokens || next.reason !== previous.reason;
+}
+
 /** Only transport and credentials live here. Python owns research state and scheduling. */
 export function createIdeaResearchClient(options: {
   url: string; token?: string; connection?: () => Promise<{ url: string; internalToken: string }>; apiOrigin: string; store: SessionStore; tokens: RunTokenRegistry;
@@ -84,6 +98,9 @@ export function createIdeaResearchClient(options: {
     /** The status a `continue` found before sending, so a read-back can tell a
      *  run that started from a research that never left where it was. */
     let before: string | undefined;
+    /** That same view: a resumed run can end where it started and still have run,
+     *  which the state's name alone cannot show. */
+    let beforeState: IdeaResearchView["research"] | undefined;
     if (operation === "create" || operation === "continue") {
       if (operation === "create" && typeof input.content === "string") {
         const objective = input.content.replace(/^\/idea-tree(?:-team)?(?:\s+|$)/u, "").trim();
@@ -100,6 +117,7 @@ export function createIdeaResearchClient(options: {
       }
       if (previous && !["paused", "interrupted"].includes(previous.research.status)) throw new Error("Research is not resumable");
       before = previous?.research.status;
+      beforeState = previous?.research;
       const modelId = previous?.research.modelId ?? options.store.resolveRuntimeSettings(sessionId).effective.modelId;
       const model = options.store.getModel(modelId);
       if (!model || !options.store.getModelApiToken(model.id)) throw new Error("Configure a model with an API token before starting research");
@@ -163,11 +181,12 @@ export function createIdeaResearchClient(options: {
           // state the engine reports instead of an error about a lost answer.
           return known.view;
         }
-        if (operation === "create" || status !== before) {
+        if (operation === "create" || status !== before || movedPast(beforeState, known.view.research)) {
           // It took effect and has already ended — a research the engine knows,
-          // in a state that is not where this command found the research. Retire
-          // the grant and report the view: telling the caller it failed would
-          // invite a retry, and a retried create makes a second research.
+          // in a state that is not where this command found the research, or in
+          // that same state carrying the mark of a run that started and stopped
+          // again. Retire the grant and report the view: telling the caller it
+          // failed would invite a retry, and a retried create makes a second one.
           retire(issued);
           return known.view;
         }

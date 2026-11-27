@@ -646,6 +646,62 @@ test("a create whose research already ended still reports the research it made",
   }
 });
 
+test("a resumed run that ends where it started is still reported as having run", async () => {
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  let resumed = false;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "continue") {
+      resumed = true;
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }
+    const view = researchView("interrupted");
+    if (!resumed) return { ok: true, json: async () => view } as never;
+    // The resumed run started and died again on the same cause: the state's name
+    // comes back the same, but the attempt left another round, its usage and the
+    // engine's own reason behind it.
+    return { ok: true, json: async () => ({ ...view,
+      research: { ...view.research, round: 1, tokens: 40, reason: "the run was interrupted again" } }) } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.deepEqual(operations, ["get", "continue", "get"], "the lost answer took the read-back path");
+    assert.equal(view.research.status, "interrupted", "the caller gets the state the engine reports");
+    assert.equal(view.research.reason, "the run was interrupted again",
+      "the engine's reason for the second stop reaches the caller instead of a timeout");
+    assert.equal(tokens.last("research-1"), undefined, "the run ended, so its grant is retired");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a continue whose read-back leaves everything where it was reports the failure", async () => {
+  const tokens = recordingTokens();
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    if (payload.operation === "continue") {
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }
+    // Nothing moved: no round, no usage, no reason. Nothing ran, so the command
+    // failed and the grant it was issued goes back.
+    return { ok: true, json: async () => researchView("interrupted") } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(client.command("s1", "continue", { researchId: "research-1" }), /aborted due to timeout/);
+    assert.equal(tokens.last("research-1"), undefined, "nothing ran, so the grant goes back");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
 test("a non-JSON answer that refuses the command is still a refusal", async () => {
   const tokens = recordingTokens();
   const operations: string[] = [];
