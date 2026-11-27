@@ -451,7 +451,7 @@ function recordingTokens() {
  * a later read-back finds. `after: "lost"` makes the read-back fail too, which is
  * the case where nothing at all is known.
  */
-function losingEngine(options: { before?: string; after: "running" | "paused" | "lost" }) {
+function losingEngine(options: { before?: string; after: "running" | "paused" | "completed" | "failed" | "lost" }) {
   const operations: string[] = [];
   const timeout = () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
   let lost = false;
@@ -569,5 +569,102 @@ test("a command nobody can be asked about keeps its grant and says so", async ()
   } finally {
     client.close();
     engine.restore();
+  }
+});
+
+test("a research the engine never created gives its grant back when it says it does not know it", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  const timeout = () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  // The command and its read-back both lose their answers; later reads reach an
+  // engine that answers. The research was never created, so its `get` is a 404.
+  let reachable = false;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (!reachable) throw timeout();
+    return { ok: false, status: 404, json: async () => ({ detail: "Research not found" }) } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(
+      client.command("s1", "create", { objective: "Compare treatments" }),
+      /could not be read back/,
+    );
+    const researchId = tokens.ids()[0];
+    assert.ok(tokens.last(researchId), "nothing is known yet, so the grant waits for the engine");
+    reachable = true;
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(operations, ["create", "get", "get"], "the fallback sweep asks once");
+    assert.equal(tokens.last(researchId), undefined,
+      "a research the engine does not know will never report a terminal state, so the 404 retires the grant");
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(operations, ["create", "get", "get"], "a retired grant is not read again");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a command that took effect and already ended reports the research instead of failing", async () => {
+  const tokens = recordingTokens();
+  // The command found the research paused and the read-back finds it completed:
+  // the resumed run happened and is over, so the caller is not told it failed.
+  const engine = losingEngine({ before: "paused", after: "completed" });
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.equal(view.research.status, "completed");
+    assert.deepEqual(engine.operations, ["get", "continue", "get"],
+      "the read-back is what reports the run that happened");
+    assert.equal(tokens.last("research-1"), undefined, "the research ended, so its grant is retired");
+  } finally {
+    client.close();
+    engine.restore();
+  }
+});
+
+test("a create whose research already ended still reports the research it made", async () => {
+  const tokens = recordingTokens();
+  const engine = losingEngine({ after: "failed" });
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "create", { objective: "Compare treatments" });
+    assert.equal(view.research.status, "failed");
+    const researchId = tokens.ids()[0];
+    assert.ok(researchId, "the create issued a grant for the research it started");
+    assert.equal(tokens.last(researchId), undefined,
+      "the research exists and has ended, so retrying would only make a second one");
+  } finally {
+    client.close();
+    engine.restore();
+  }
+});
+
+test("a proxy's HTML error is the engine's refusal, not a lost answer", async () => {
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "create") {
+      // A gateway in front of the engine answers with a page, not with JSON.
+      return { ok: false, status: 502, json: async () => { throw new SyntaxError("Unexpected token '<'"); } } as never;
+    }
+    return { ok: true, json: async () => researchView("paused") } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(client.command("s1", "create", { objective: "Compare treatments" }), /HTTP 502/);
+    assert.deepEqual(operations, ["create"], "an answered refusal needs no read-back");
+    assert.equal(tokens.last(tokens.ids()[0]), undefined, "nothing started, so the grant goes back");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
   }
 });
