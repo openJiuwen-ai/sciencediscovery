@@ -501,12 +501,13 @@ repository:
   reaches one and misses the other unless both are captured; the pair is what
   proves it did not.
 - **Outside the repository.** Frames are review evidence, not artifacts, so they
-  are not committed: host them on a branch in your own fork, or anywhere that
-  serves a stable URL, and embed them in the body from URLs pinned to a commit
-  SHA — a branch name moves and the body silently starts showing something else.
-  Ten directories under `docs/screenshots/` did commit theirs; that is history,
-  not the rule, and a frame committed by mistake stays in the repository's
-  history after the pull request is reverted.
+  are not committed: host them on a branch in your own fork, or at another URL
+  that does not change, and embed them in the body from there. When that URL
+  comes from a git branch, pin it to a commit SHA rather than the branch name —
+  a branch moves and the body silently starts showing something else. Some
+  directories under `docs/screenshots/` still hold frames committed by earlier
+  changes; that is history, not the rule, and a frame committed by mistake stays
+  in the repository's history after the pull request is reverted.
 - **Self-describing.** Under each frame, say what it shows, the viewport and
   device scale, the harness, what is mocked, and which part of the copy on
   screen comes from this diff rather than from a fixture. Those older
