@@ -16,7 +16,6 @@ import {
   accountsConfigured,
   defaultAccountName,
   type AccountSession,
-  describeDevice,
   exchangeTicket,
   fetchAccountMe,
   huaweiSignInUrl,
@@ -76,7 +75,7 @@ export async function settleAuthCallback(
   const ticket = readAuthTicket(hash);
   if (!ticket) return undefined;
   window.history.replaceState(null, "", window.location.pathname);
-  const account = await exchangeTicket(ticket, describeDevice());
+  const account = await exchangeTicket(ticket);
   const next = accountSessionToUserSession(account, readSession(), defaultAccountName());
   const localToken = await acquireLocalAccessToken(account.accessToken);
   saveSession(next);
