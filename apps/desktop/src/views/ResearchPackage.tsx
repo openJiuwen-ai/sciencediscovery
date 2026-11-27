@@ -196,6 +196,16 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [file, setFile] = useState<File>(), [inspection, setInspection] = useState<PackageInspection>();
   const [inspectedProject, setInspectedProject] = useState<string>();
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  /** Whether a dialog is on screen, for a callback that settles after it left. */
+  const dialogRef = useRef(dialog);
+  dialogRef.current = dialog;
+  /**
+   * Closing is the user abandoning what the dialog was doing. Whatever it was
+   * still holding — an inspection that failed, a preview that never came back —
+   * belongs to that dialog: left in `error`, it is drawn on the page once the
+   * dialog is gone, which reads as the cancel itself having failed.
+   */
+  function close() { setError(""); setDialog(undefined); }
   const [copy, setCopy] = useState<CopyOperation>();
   const [exports, setExports] = useState<ExportRecord[]>([]);
   const [progressExpanded, setProgressExpanded] = useState(false);
@@ -395,7 +405,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     panel?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled), select")?.focus();
     const onKey = (event: KeyboardEvent) => {
       if ([...document.querySelectorAll('[role="dialog"]')].at(-1) !== panel) return;
-      if (claimsEscape(event)) { event.preventDefault(); if (!busyRef.current) setDialog(undefined); }
+      if (claimsEscape(event)) { event.preventDefault(); if (!busyRef.current) close(); }
       if (event.key !== "Tab" || !panel) return;
       const items = [...panel.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), summary")];
       const first = items[0], last = items.at(-1);
@@ -475,10 +485,13 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     }); };
     timer = setTimeout(poll, 1000); return () => { active = false; clearTimeout(timer); };
   }, [client, copy?.id, copy?.state]);
-  async function perform(action: () => Promise<void>) {
+  async function perform(action: () => Promise<void>, quietAfterClose = false) {
     busyRef.current = true; setBusy(true); setError("");
     try { await action(); }
     catch (reason) {
+      // A failure that lands after the dialog closed is one the user abandoned
+      // with the dialog; it has no place on the page.
+      if (quietAfterClose && !dialogRef.current) return;
       // Both refusals carry a code; their server sentences are English and must not
       // reach a localized dialog. This is the one path every refused action passes.
       const code = (reason as { code?: string } | undefined)?.code;
@@ -593,8 +606,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
       <button aria-label={t.close} className="research-toast-close" onClick={() => dismissFlash(flash.id)} type="button">×</button>
     </div>)}</div> : null}
     {!dialog && (error || exportNotice) ? <p role="alert" className="research-package-error">{error || exportNotice}</p> : null}
-    {dialog ? <div className="modal-backdrop" onClick={() => !busy && setDialog(undefined)}><section className={`modal-panel research-package-dialog${dialog === "import" ? " is-import" : ""}`} role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
-      <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools"><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => setDialog(undefined)} type="button">×</button></div></header>
+    {dialog ? <div className="modal-backdrop" onClick={() => !busy && close()}><section className={`modal-panel research-package-dialog${dialog === "import" ? " is-import" : ""}`} role="dialog" aria-modal="true" aria-labelledby="research-package-title" onClick={event => event.stopPropagation()}>
+      <header className="modal-header"><h2 id="research-package-title">{dialog === "export" ? t.export : dialog === "import" ? t.import : t.branch}</h2><div className="research-dialog-tools"><button className="modal-close" aria-label={t.close} disabled={busy} onClick={() => close()} type="button">×</button></div></header>
       <div className="modal-body">
         {dialog === "export" ? <>
           <p className="research-dialog-lede">{t.evidenceOnly}</p>
@@ -647,7 +660,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
               <div className="research-file-card-header">
                 <span aria-hidden="true" className="research-file-card-icon"><svg fill="none" height="20" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" viewBox="0 0 24 24" width="20"><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v5h4" /></svg></span>
                 <span className="research-file-card-body"><b>{file.name}</b><span>{formatBytes(file.size)}</span></span>
-                <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+                <label className="research-file-card-reselect">{t.reselect}<input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }, true); }} /></label>
               </div>
               {inspection ? <>
                 <p className="research-import-meta">{inspection.manifest.source.title ? <><b>{inspection.manifest.source.title}</b> · </> : null}{inspection.objectCount} {t.objects} · {t.recordsBytes} {formatBytes(inspection.recordsBytes)}</p>
@@ -666,12 +679,12 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
 
             </div>
           ) : (
-            <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }}><svg aria-hidden="true" className="research-upload-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11a3 3 0 0 1 3-3h8l4 4h12a3 3 0 0 1 3 3v16a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><circle cx="31" cy="13" r="7" fill="white"/><path d="M31 9v8m-4-4h8"/></svg><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }); }} /></label>
+            <label className={`research-package-upload${dragging ? " is-dragging" : ""}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); const selected = event.dataTransfer.files[0]; if (!selected || busy) return; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }, true); }}><svg aria-hidden="true" className="research-upload-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 11a3 3 0 0 1 3-3h8l4 4h12a3 3 0 0 1 3 3v16a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z"/><circle cx="31" cy="13" r="7" fill="white"/><path d="M31 9v8m-4-4h8"/></svg><strong>{t.choose}</strong><span>{t.dropHint}</span><input className="research-package-upload-input" type="file" accept=".sdresearch" disabled={busy} onChange={event => { const selected = event.target.files?.[0]; setFile(selected); setInspection(undefined); setInspectedProject(undefined); if (selected && projectId) void perform(async () => { setInspection(await inspectPackage(client, projectId, selected)); setInspectedProject(projectId); }, true); }} /></label>
           )}
         </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
-      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => setDialog(undefined)} type="button">{dialog === "branch" ? t.close : t.cancelAction}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
+      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => close()} type="button">{dialog === "branch" ? t.close : t.cancelAction}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
         else if (dialog === "export" && detail && projectId && preview?.revision) void perform(async () => {
           // Choose the destination first; cancelling the dialog aborts the
