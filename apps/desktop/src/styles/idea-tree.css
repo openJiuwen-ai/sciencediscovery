@@ -236,7 +236,7 @@
 
 .idea-tree-zoom-level {
   min-width: 38px;
-  color: var(--muted);
+  color: var(--text-secondary);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -247,7 +247,7 @@
   border-left: 1px solid var(--border);
   background: none;
   padding: 0 7px;
-  color: var(--muted);
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 11px;
 }

@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create } from "react-test-renderer";
@@ -279,6 +280,89 @@ test("the tree can be zoomed by hand and keeps that scale when new nodes arrive"
   });
   assert.match(planeScale(view), /scale\(1\)/);
   view.unmount();
+});
+
+/** The declarations of one CSS rule, e.g. `.idea-tree-zoom-level { ... }`. */
+function cssRule(css: string, selector: string): string {
+  const start = css.indexOf(`${selector} {`);
+  assert.notEqual(start, -1, `${selector} is declared`);
+  const end = css.indexOf("}", start);
+  assert.notEqual(end, -1, `${selector} is closed`);
+  return css.slice(start, end);
+}
+
+/** The token map of a `:root { ... }` block, name to literal value. */
+function cssTokens(css: string): Map<string, string> {
+  const tokens = new Map<string, string>();
+  for (const [, name, value] of css.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    tokens.set(name!, value!.trim());
+  }
+  return tokens;
+}
+
+/** Resolve one `var(--token)` chain against the token map, failing when it dangles. */
+function cssValue(rule: string, property: string, tokens: Map<string, string>): string {
+  const declared = new RegExp(`(?:^|[;{])\\s*${property}\\s*:\\s*([^;]+);`).exec(rule);
+  assert.ok(declared, `${property} is declared in the rule`);
+  let value = declared![1]!.trim();
+  for (let hop = 0; hop < 8 && value.startsWith("var("); hop += 1) {
+    const token = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value);
+    assert.ok(token, `${value} is a plain var() reference, so it resolves without a fallback`);
+    const resolved = tokens.get(token![1]!);
+    assert.ok(resolved, `${token![1]} is defined in tokens.css on this branch`);
+    value = resolved!;
+  }
+  return value.toLowerCase();
+}
+
+/** WCAG 2.x relative luminance of a `#rgb`/`#rrggbb` colour. */
+function luminance(hex: string): number {
+  assert.match(hex, /^#[0-9a-f]{6}$/, `${hex} is a six-digit hex colour`);
+  const channels = [1, 3, 5].map((offset) => {
+    const byte = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return byte <= 0.03928 ? byte / 12.92 : ((byte + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+}
+
+function contrastText(foreground: string, background: string): number {
+  const [light, dark] = [luminance(foreground), luminance(background)].sort((a, b) => b - a) as [number, number];
+  return (light + 0.05) / (dark + 0.05);
+}
+
+test("the zoom bar's readout and fit label paint the AA-legible text colour, not --muted", async () => {
+  const [tokensCss, treeCss] = await Promise.all([
+    readFile(new URL("../src/styles/tokens.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/styles/idea-tree.css", import.meta.url), "utf8"),
+  ]);
+  const tokens = cssTokens(tokensCss);
+  const secondary = tokens.get("--text-secondary");
+  const muted = tokens.get("--muted");
+  assert.equal(secondary, "#4d4d4d", "--text-secondary is the documented AA-legible grey");
+  assert.equal(muted, "#777777", "--muted is the lighter grey this rule must not use");
+
+  // Both labels sit inside the bar, so the pair that is actually painted is the
+  // label's colour on the bar's own background.
+  const bar = cssRule(treeCss, ".idea-tree-zoom");
+  const background = cssValue(bar, "background", tokens);
+
+  for (const selector of [".idea-tree-zoom-level", ".idea-tree-zoom-fit"]) {
+    const colour = cssValue(cssRule(treeCss, selector), "color", tokens);
+    assert.equal(colour, secondary, `${selector} uses --text-secondary, so its 11px text reads as ${secondary}`);
+    assert.notEqual(colour, muted, `${selector} does not fall back to --muted`);
+    // 11px text is normal text, so the floor is 4.5:1.
+    assert.ok(
+      contrastText(colour, background) >= 4.5,
+      `${colour} on ${background} is ${contrastText(colour, background).toFixed(3)}:1, at or above the 4.5:1 floor`,
+    );
+  }
+  // The buttons the labels sit next to keep the same tone, so the bar reads as
+  // one control rather than two greys.
+  assert.equal(
+    cssValue(cssRule(treeCss, ".idea-tree-zoom-button"), "color", tokens),
+    secondary,
+    "the −/＋ buttons already use the same colour as the readout and fit label",
+  );
 });
 
 /**
