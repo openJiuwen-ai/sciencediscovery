@@ -2648,6 +2648,12 @@ export const ZH = {
       empty: "这棵研究树还没有节点。",
       unavailable: "不可用",
       notPruned: "未被剪枝",
+      zoom: {
+        aria: "画布缩放",
+        in: "放大画布",
+        out: "缩小画布",
+        fit: "适应宽度",
+      },
       statusLabel: "状态",
       searchLabel: "检索",
       score: "评分",

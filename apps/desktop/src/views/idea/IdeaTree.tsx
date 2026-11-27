@@ -31,7 +31,7 @@
  * - `pruneReason === null` means "not pruned", which is not the same as "no reason".
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { IdeaTreeNode, IdeaTreeGraph } from "@sciencediscovery/schema";
 import { TEXT } from "../../text.js";
@@ -94,6 +94,46 @@ const GAP_Y = 58;
 const PAD = 18;
 /** Below this the text stops being readable: past it the drawing scrolls instead. */
 const MIN_SCALE = 0.6;
+/** How far the reader can zoom by hand. The automatic fit stays inside the
+ *  narrower readable range above and never grows past 1; a hand zoom is the
+ *  only way past the column's width, and the fit control brings it back. */
+export const IDEA_TREE_ZOOM_MIN = 0.4;
+export const IDEA_TREE_ZOOM_MAX = 2;
+const ZOOM_STEP = 1.2;
+const WHEEL_STEP = 0.0015;
+
+/** The scale that fits the drawing into the column, kept readable and never
+ *  magnified. Pure, so the arithmetic is testable without a DOM. */
+export function ideaTreeFitScale(layoutWidth: number, available: number): number {
+  return Math.max(MIN_SCALE, Math.min(1, (available - 10) / layoutWidth));
+}
+
+/** One zoom step, kept inside the hand-zoom range. */
+export function ideaTreeZoomScale(scale: number, factor: number): number {
+  return Math.min(IDEA_TREE_ZOOM_MAX, Math.max(IDEA_TREE_ZOOM_MIN, scale * factor));
+}
+
+/** What an automatic fit may do to the scale. `undefined` means "leave the
+ *  reader's scale alone": once the scale is set by hand, new data and a resize
+ *  must not take it back, or a tree that is still growing cannot be zoomed. */
+export function ideaTreeAutoFit(manual: boolean, fitted: number | undefined): number | undefined {
+  if (manual) return undefined;
+  return fitted;
+}
+
+/** The scroll that keeps the middle of the viewport over the same part of the
+ *  drawing after the scale changes by `ratio`: without it the drawing would
+ *  grow away from whatever the reader was looking at. */
+export function ideaTreeScrollAfterZoom(
+  scroll: { left: number; top: number },
+  area: { height: number; width: number },
+  ratio: number,
+): { left: number; top: number } {
+  return {
+    left: Math.max(0, (scroll.left + area.width / 2) * ratio - area.width / 2),
+    top: Math.max(0, (scroll.top + area.height / 2) * ratio - area.height / 2),
+  };
+}
 
 export interface IdeaPlacedNode {
   node: IdeaTreeNode;
@@ -187,26 +227,130 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
   const layout = ideaTreeLayout(graph);
   const box = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
+  /** The scale the next zoom step multiplies, read by the wheel listener and
+   *  the buttons, which are attached once and must not close over a stale one. */
+  const scaleRef = useRef(1);
+  /** Once the reader sets the scale by hand, neither new data nor a resize
+   *  takes it back; a new tree and the fit control do. */
+  const manual = useRef(false);
+  /** A zoom changes the scale and the scroll in the same breath, but the scroll
+   *  range only exists after the new size is laid out. */
+  const pendingScroll = useRef<{ left: number; top: number } | null>(null);
+
+  const fitScale = (): number | undefined => {
+    const element = box.current;
+    if (element === null) return undefined;
+    const width = element.clientWidth;
+    if (!Number.isFinite(width) || width <= 0) return undefined;
+    return ideaTreeFitScale(layout.width, width);
+  };
+
+  const applyScale = useCallback((next: number) => {
+    const element = box.current;
+    const current = scaleRef.current;
+    if (next === current) return;
+    manual.current = true;
+    if (element !== null) {
+      pendingScroll.current = ideaTreeScrollAfterZoom(
+        { left: element.scrollLeft, top: element.scrollTop },
+        { height: element.clientHeight, width: element.clientWidth },
+        next / current,
+      );
+    }
+    scaleRef.current = next;
+    setScale(next);
+  }, []);
+
+  const fit = (): void => {
+    manual.current = false;
+    pendingScroll.current = null;
+    const next = fitScale();
+    if (next === undefined) return;
+    scaleRef.current = next;
+    setScale(next);
+  };
+
+  // A new tree is a new drawing: it opens at the fit rather than at whatever
+  // scale the previous one was left at.
+  useEffect(() => {
+    manual.current = false;
+    const next = fitScale();
+    if (next !== undefined) {
+      scaleRef.current = next;
+      setScale(next);
+    } else {
+      scaleRef.current = 1;
+      setScale(1);
+    }
+  }, [graph.treeId]);
+
   /** The column is narrow and a tree grows sideways: shrink the drawing to the
    *  column while it stays readable, and let it scroll past that point rather
    *  than render text nobody can read. */
   useEffect(() => {
     const element = box.current;
     if (element === null) return undefined;
-    const fit = () => {
-      const width = element.clientWidth - 10;
-      if (!Number.isFinite(width) || width <= 0) return;
-      setScale(Math.max(MIN_SCALE, Math.min(1, width / layout.width)));
+    const update = () => {
+      const next = ideaTreeAutoFit(manual.current, ideaTreeFitScale(layout.width, element.clientWidth));
+      if (next === undefined || !Number.isFinite(next)) return;
+      scaleRef.current = next;
+      setScale(next);
     };
-    fit();
+    if (element.clientWidth > 0) update();
     if (typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(fit);
+    const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
   }, [layout.width]);
+
+  useLayoutEffect(() => {
+    const element = box.current;
+    const target = pendingScroll.current;
+    pendingScroll.current = null;
+    if (element === null || target === null) return;
+    element.scrollLeft = target.left;
+    element.scrollTop = target.top;
+  }, [scale]);
+
+  useEffect(() => {
+    const element = box.current;
+    if (element === null) return undefined;
+    const onWheel = (event: WheelEvent) => {
+      // Deltas arrive in pixels, lines or pages depending on the device.
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
+      const factor = Math.exp(-event.deltaY * unit * WHEEL_STEP);
+      if (factor === 1) return;
+      // The wheel zooms this drawing; React's wheel listener is passive, so the
+      // panel behind the tree has to be kept from scrolling by a native one.
+      event.preventDefault();
+      applyScale(ideaTreeZoomScale(scaleRef.current, factor));
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, [applyScale]);
   if (!layout.nodes.length) return <p className="idea-tree-empty">{t.empty}</p>;
   return (
     <div className="idea-tree" aria-label={t.tree} ref={box} role="group">
+      <div className="idea-tree-zoom" role="group" aria-label={t.zoom.aria}>
+        <button
+          aria-label={t.zoom.out}
+          className="idea-tree-zoom-button"
+          disabled={scale <= IDEA_TREE_ZOOM_MIN}
+          onClick={() => applyScale(ideaTreeZoomScale(scale, 1 / ZOOM_STEP))}
+          title={t.zoom.out}
+          type="button"
+        >−</button>
+        <output aria-live="off" className="idea-tree-zoom-level">{Math.round(scale * 100)}%</output>
+        <button
+          aria-label={t.zoom.in}
+          className="idea-tree-zoom-button"
+          disabled={scale >= IDEA_TREE_ZOOM_MAX}
+          onClick={() => applyScale(ideaTreeZoomScale(scale, ZOOM_STEP))}
+          title={t.zoom.in}
+          type="button"
+        >＋</button>
+        <button className="idea-tree-zoom-fit" onClick={fit} title={t.zoom.fit} type="button">{t.zoom.fit}</button>
+      </div>
       {/* The fit box takes the scaled size, so the scrollbars follow what is
           drawn; the plane inside keeps the layout's own coordinates. */}
       <div className="idea-tree-fit" style={{ height: layout.height * scale, width: layout.width * scale }}>

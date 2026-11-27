@@ -2604,6 +2604,12 @@ export const EN: Text = {
       empty: "This research tree has no nodes yet.",
       unavailable: "Unavailable",
       notPruned: "Not pruned",
+      zoom: {
+        aria: "Canvas zoom",
+        in: "Zoom in",
+        out: "Zoom out",
+        fit: "Fit width",
+      },
       statusLabel: "Status",
       searchLabel: "Search",
       score: "Score",

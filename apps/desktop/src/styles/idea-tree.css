@@ -159,6 +159,72 @@
   background-size: 14px 14px;
 }
 
+/* The zoom controls sit above the drawing and stay there while it scrolls, so
+ * they are reachable at any scale without taking a corner of the tree itself. */
+.idea-tree-zoom {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  width: fit-content;
+  margin: 0 0 4px auto;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  padding: 2px;
+}
+
+.idea-tree-zoom-button {
+  width: 24px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.idea-tree-zoom-button:hover:not(:disabled) {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.idea-tree-zoom-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.idea-tree-zoom-level {
+  min-width: 38px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.idea-tree-zoom-fit {
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: none;
+  padding: 0 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.idea-tree-zoom-fit:hover {
+  color: var(--text);
+}
+
+.idea-tree-zoom :focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 .idea-tree-fit {
   position: relative;
   margin: 0 auto;
