@@ -503,7 +503,7 @@ itself:
 - **Under `docs/screenshots/<topic>/`.** That is where review evidence already
   lives: ten directories, six of them (`1275`, `1305`, `1399`, `1401`, `1412`,
   `proxy-settings-ui`) with a `README.md` that records how the frames were
-  captured, what is mocked and what each one shows; the four older ones hold
+  captured, what is mocked and what each one shows; the other four hold
   images only and are not the model. New evidence follows that README shape
   rather than any older directory, and names its files for locale and state
   (`01-zh-<state>.png`, `05-en-<state>.png`) — the existing directories each
