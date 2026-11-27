@@ -762,3 +762,371 @@ test("a new export request starts with the payload switches off", async (context
       "choosing complete again shows the memory-graph switch off");
   });
 });
+
+/** An `EXPORT_PREVIEW_PENDING` refusal, shaped like the API client's error. */
+function pendingPreview(): Error & { code: string } {
+  const error = new Error("still computing") as Error & { code?: string };
+  error.code = "EXPORT_PREVIEW_PENDING";
+  return error as Error & { code: string };
+}
+
+/** True for the preview query the dialog sends after the file set changes. */
+function asksForCustomFiles(path: string): boolean {
+  return path.includes("/preview") && new URLSearchParams(path.slice(path.indexOf("?") + 1)).has("customFiles");
+}
+
+/** The footer's single primary action (Start export while the export dialog is open). */
+function exportAction(view: ReturnType<typeof create>) {
+  return view.root.findAllByType("button").find((button) => button.props.className === "primary-button");
+}
+
+/** The dialog's button carrying the given label. */
+function buttonWithText(view: ReturnType<typeof create>, text: string) {
+  return view.root.findAllByType("button").find((button) => button.props.children === text);
+}
+
+/** Untick the first workspace file in the previewed list. */
+async function untickFirstFile(view: ReturnType<typeof create>) {
+  const grid = view.root.findAllByProps({ className: "research-file-grid" })[0]!;
+  const box = grid.findAllByProps({ type: "checkbox" })[0]!;
+  await act(async () => {
+    (box.props.onChange as (event: unknown) => void)({ target: { checked: false } });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+/** Switch Select all off, which sends an explicit empty file list. */
+async function clearSelection(view: ReturnType<typeof create>) {
+  const selectAll = view.root.findAllByProps({ className: "research-select-all" })[0]!;
+  const all = selectAll.findAllByProps({ type: "checkbox" })[0]!;
+  await act(async () => {
+    (all.props.onChange as (event: unknown) => void)({ target: { checked: false } });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+/** Advance the preview's 1.5 s retry timer and let each answer settle. */
+async function tickPreviewRetries(context: { mock: { timers: { tick(ms: number): void } } }, times: number) {
+  for (let attempt = 0; attempt < times; attempt += 1) {
+    await act(async () => { context.mock.timers.tick(1_500); await Promise.resolve(); });
+  }
+}
+
+/** Press 仍要导出 and let the acknowledged state render. */
+async function acknowledgeOverCap(view: ReturnType<typeof create>) {
+  await act(async () => { (buttonWithText(view, t.exportAnyway)!.props.onClick as () => void)(); await Promise.resolve(); });
+}
+
+/** Press Start export and let the request settle. */
+async function pressStartExport(view: ReturnType<typeof create>) {
+  await act(async () => { (exportAction(view)!.props.onClick as () => void)(); await Promise.resolve(); await Promise.resolve(); });
+}
+
+/** A client for the export dialog whose previews behave as the case needs: the
+ *  named preview body, an optional custom-file preview refusal and an optional
+ *  over-cap answer, while recording the export request bodies. */
+function exportClient(options: {
+  bodies: Array<Record<string, unknown>>;
+  preview: PreviewBody;
+  customPreview?: () => Error;
+  overCap?: { archiveBytes: number; maxBytes: number };
+}) {
+  const inner = client({ preview: options.preview });
+  return {
+    ...inner,
+    request: async (path: string, init?: { body?: unknown }) => {
+      if (options.customPreview && asksForCustomFiles(path)) throw options.customPreview();
+      if (options.overCap && path.includes("/preview")) return { ...options.preview, ...options.overCap };
+      if (path.endsWith("/exports")) {
+        options.bodies.push(JSON.parse(String(init?.body ?? "{}")));
+        return { filename: "pkg.sdresearch", id: "task-1", status: "failed", error: "boom" };
+      }
+      return (inner.request as (path: string, init?: unknown) => Promise<unknown>)(path, init);
+    },
+  } as never;
+}
+
+test("a recalculation out of pending answers does not re-enable Start export", async (context) => {
+  // #1440 F1: the old estimate may stay on screen (#1057), but the previous
+  // preview's revision must not authorize a selection it never described.
+  const bodies: Array<Record<string, unknown>> = [];
+  const preview: PreviewBody = {
+    estimatedBytes: 100 * 1024,
+    files: [{ path: "a.csv", selected: true, size: 10 }, { path: "b.csv", selected: true, size: 20 }],
+    omissions: [],
+    revision: "r1",
+  };
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: exportClient({ bodies, customPreview: pendingPreview, preview }),
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    assert.equal(exportAction(view)!.props.disabled, false, "the first preview authorizes its own selection");
+
+    await untickFirstFile(view);
+    await tickPreviewRetries(context, 6);
+    const markup = rendered(view);
+    assert.ok(markup.includes(t.pendingLong), "the dialog says the recalculation is taking unusually long");
+    assert.ok(markup.includes("100.0 KB"), "the last known estimate is still visible");
+    assert.equal(exportAction(view)!.props.disabled, true,
+      "a selection whose preview never succeeded must not become export-ready");
+    assert.equal(bodies.length, 0, "no export request is built from the stale preview");
+  });
+});
+
+test("a failed recalculation does not re-enable Start export", async (context) => {
+  // The same hole as above on the non-pending branch: a 500 left `estimating`
+  // false while the previous preview still carried a revision (#1440 F1).
+  const bodies: Array<Record<string, unknown>> = [];
+  const preview: PreviewBody = {
+    estimatedBytes: 100 * 1024,
+    files: [{ path: "a.csv", selected: true, size: 10 }, { path: "b.csv", selected: true, size: 20 }],
+    omissions: [],
+    revision: "r1",
+  };
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: exportClient({
+      bodies,
+      customPreview: () => Object.assign(new Error("preview failed"), { status: 500 }),
+      preview,
+    }),
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    assert.equal(exportAction(view)!.props.disabled, false, "the first preview authorizes its own selection");
+
+    await untickFirstFile(view);
+    assert.ok(rendered(view).includes("preview failed"), "the refusal is reported");
+    assert.equal(exportAction(view)!.props.disabled, true,
+      "the failed recalculation does not authorize the previous preview's revision");
+    assert.equal(bodies.length, 0, "no export request is sent from the stale preview");
+  });
+});
+
+test("profile card previews stop at the pending budget and a manual retry restarts them", async (context) => {
+  // #1440 F2: the two profile cards used to retry forever, outliving the
+  // selected preview's six-answer budget.
+  const previews: string[] = [];
+  const allPending = {
+    request: async (path: string) => {
+      if (path.startsWith("/api/sessions/")) return { id: "s1", messages: [], title: "Session" };
+      if (path.includes("/preview")) { previews.push(path); throw pendingPreview(); }
+      return {};
+    },
+  } as never;
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: allPending,
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    const completeRequests = () => previews.filter((path) => path.includes("level=complete")).length;
+    await tickPreviewRetries(context, 6);
+    assert.equal(completeRequests(), 6, "the complete card spends exactly its pending budget");
+    const settled = previews.length;
+    assert.ok(rendered(view).includes(t.pendingLong), "the stalled sentence is shown");
+    await tickPreviewRetries(context, 4);
+    assert.equal(previews.length, settled, "no further preview requests once the budget is spent");
+
+    const retry = buttonWithText(view, t.retryPreview);
+    assert.ok(retry, "the stalled state offers the manual retry");
+    await act(async () => { (retry.props.onClick as () => void)(); await Promise.resolve(); });
+    assert.equal(completeRequests(), 7, "the manual retry asks the complete card once more");
+    assert.equal(previews.length, settled + 3,
+      "the retry starts one selected-preview attempt and one per profile card");
+  });
+});
+
+test("both revision-change failures reach the alert and the failed row", async (context) => {
+  // #1440 F3: both server sentences are the client's own actionable copy, not
+  // an unrecognized text behind 技术细节 under a generic 操作失败.
+  const serverSentences = [
+    "会话内容已更新，请使用最新大小预览重新导出。",
+    "导出期间会话内容发生变化，请基于最新内容重新导出。",
+  ];
+  for (const sentence of serverSentences) {
+    const preview: PreviewBody = { estimatedBytes: 100 * 1024, files: [], omissions: [], revision: "r1" };
+    const inner = client({ preview });
+    const revisionClient = {
+      ...inner,
+      request: async (path: string, init?: { body?: unknown }) => {
+        if (path.endsWith("/exports")) return { filename: "pkg.sdresearch", id: "task-1", status: "queued" };
+        if (path.includes("/exports/")) return { filename: "pkg.sdresearch", id: "task-1", status: "failed", error: sentence };
+        return (inner.request as (path: string, init?: unknown) => Promise<unknown>)(path, init);
+      },
+    };
+    function Harness() {
+      const [request, setRequest] = React.useState<unknown>({ kind: "export", projectId: "p1", sessionId: "s1" });
+      return React.createElement(React.Fragment, null,
+        React.createElement(ResearchPackage, { ...props, client: revisionClient as never, request: request as never }),
+        React.createElement("button", {
+          id: "reopen",
+          onClick: () => setRequest({ kind: "export", projectId: "p1", sessionId: "s1" }),
+          type: "button",
+        }, "reopen"));
+    }
+    await withView(context, React.createElement(Harness), async (view) => {
+      assert.equal(exportAction(view)!.props.disabled, false, "the successful preview authorizes the export");
+      await act(async () => { (exportAction(view)!.props.onClick as () => void)(); await Promise.resolve(); });
+      // The dialog closes and the poll settles the queued task as failed.
+      await act(async () => {
+        context.mock.timers.tick(1_000);
+        for (let flush = 0; flush < 6; flush += 1) await Promise.resolve();
+      });
+      const toast = rendered(view);
+      assert.ok(toast.includes(t.taskRevisionChanged), `the alert carries the localized sentence: ${sentence}`);
+      assert.equal(toast.includes(t.failed), false, "the alert is not the generic 操作失败");
+
+      const reopen = view.root.findAllByProps({ id: "reopen" })[0]!;
+      await act(async () => { (reopen.props.onClick as () => void)(); await Promise.resolve(); });
+      assert.ok(rendered(view).includes(t.taskRevisionChanged), "the failed row leads with the localized sentence");
+      const rawRows = view.root.findAllByProps({ className: "research-package-raw" });
+      assert.equal(rawRows.length, 1, "the server's own wording is still reachable");
+      const raw = rawRows[0]!.findAllByType("code")[0]!;
+      assert.equal(String(raw.props.children), sentence, "the server sentence stays under 技术细节");
+    });
+  }
+});
+
+test("over-cap acknowledgment does not carry over to another selection", async (context) => {
+  // #1440 F4: with the same revision and byte count, a changed file set must be
+  // warned again; the acknowledgment belongs to the selection it was given for.
+  const CAP = 512 * 1024 * 1024;
+  const bodies: Array<Record<string, unknown>> = [];
+  const preview: PreviewBody = {
+    estimatedBytes: CAP + 1,
+    files: [{ path: "a.csv", selected: true, size: 10 }, { path: "b.csv", selected: true, size: 20 }],
+    omissions: [],
+    revision: "r1",
+  };
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: exportClient({ bodies, overCap: { archiveBytes: CAP + 1, maxBytes: CAP }, preview }),
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    assert.equal(exportAction(view)!.props.disabled, true, "the unacknowledged over-cap selection is gated");
+    await acknowledgeOverCap(view);
+    assert.equal(exportAction(view)!.props.disabled, false, "acknowledging this selection unblocks it");
+
+    await untickFirstFile(view);
+    const markup = rendered(view);
+    assert.equal(markup.includes(t.overLimitConfirmed), false,
+      "the previous selection's confirmation is not shown as if it covered this one");
+    assert.ok(buttonWithText(view, t.exportAnyway), "the changed selection is warned about again");
+    assert.equal(exportAction(view)!.props.disabled, true, "and is gated until it is acknowledged");
+    assert.equal(bodies.length, 0, "no over-cap export is sent for a selection the user was not warned about");
+
+    await acknowledgeOverCap(view);
+    await pressStartExport(view);
+    assert.equal(bodies.length, 1, "the acknowledged selection can export");
+    assert.equal(bodies[0]!.allowOverCap, true, "only this selection's acknowledgment travels");
+  });
+});
+
+test("revision-change server sentences map to the localized sentence", () => {
+  // Both sentences fail the task in services/api/src/research-package-exports.ts.
+  assert.equal(taskErrorMessage("会话内容已更新，请使用最新大小预览重新导出。"),
+    "会话内容已更新，请先重新计算大小预览，再重新导出。");
+  assert.equal(taskErrorMessage("导出期间会话内容发生变化，请基于最新内容重新导出。"),
+    "会话内容已更新，请先重新计算大小预览，再重新导出。");
+  assert.equal(taskErrorMessage("socket hang up"), undefined,
+    "an unrecognized server text still stays in the details block");
+});
+
+test("a pending empty-selection preview does not re-enable Start export from the default preview", async (context) => {
+  // `Select all` off sends `filePaths: []`, which is not the default selection
+  // (`filePaths` omitted). They must not share a selection key: otherwise the
+  // first preview keeps authorizing an export of no files (#1440 repair).
+  const bodies: Array<Record<string, unknown>> = [];
+  const preview: PreviewBody = {
+    estimatedBytes: 100 * 1024,
+    files: [{ path: "a.csv", selected: true, size: 10 }, { path: "b.csv", selected: true, size: 20 }],
+    omissions: [],
+    revision: "r1",
+  };
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: exportClient({ bodies, customPreview: pendingPreview, preview }),
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    assert.equal(exportAction(view)!.props.disabled, false, "the default selection is authorized by its preview");
+
+    await clearSelection(view);
+    const grid = view.root.findAllByProps({ className: "research-file-grid" })[0]!;
+    assert.equal(grid.findAllByProps({ type: "checkbox" }).every((row) => row.props.checked === false), true,
+      "the empty selection is on screen");
+    await tickPreviewRetries(context, 6);
+    const markup = rendered(view);
+    assert.ok(markup.includes(t.pendingLong), "the empty selection's preview stalled");
+    assert.ok(markup.includes("100.0 KB"), "the previous estimate stays visible (#1057)");
+    assert.equal(exportAction(view)!.props.disabled, true,
+      "the default preview must not authorize the empty selection");
+    assert.equal(bodies.length, 0, "no export request is built for the unverified empty selection");
+  });
+});
+
+test("a failed empty-selection preview does not re-enable Start export from the default preview", async (context) => {
+  // The same collision on the non-pending branch (#1440 repair).
+  const bodies: Array<Record<string, unknown>> = [];
+  const preview: PreviewBody = {
+    estimatedBytes: 100 * 1024,
+    files: [{ path: "a.csv", selected: true, size: 10 }, { path: "b.csv", selected: true, size: 20 }],
+    omissions: [],
+    revision: "r1",
+  };
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: exportClient({
+      bodies,
+      customPreview: () => Object.assign(new Error("preview failed"), { status: 500 }),
+      preview,
+    }),
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    assert.equal(exportAction(view)!.props.disabled, false, "the default selection is authorized by its preview");
+
+    await clearSelection(view);
+    assert.ok(rendered(view).includes("preview failed"), "the empty selection's refusal is reported");
+    assert.equal(exportAction(view)!.props.disabled, true,
+      "the default preview must not authorize the empty selection");
+    assert.equal(bodies.length, 0, "no export request is built for the unverified empty selection");
+  });
+});
+
+test("an over-cap acknowledgment for the default selection does not cover the empty selection", async (context) => {
+  // `files === undefined` and `files === []` collided in the acknowledgment key
+  // too, so switching Select all off kept `allowOverCap: true` for a file set
+  // the user was never warned about (#1440 repair).
+  const CAP = 512 * 1024 * 1024;
+  const bodies: Array<Record<string, unknown>> = [];
+  const preview: PreviewBody = {
+    estimatedBytes: CAP + 1,
+    files: [{ path: "a.csv", selected: true, size: 10 }, { path: "b.csv", selected: true, size: 20 }],
+    omissions: [],
+    revision: "r1",
+  };
+  await withView(context, React.createElement(ResearchPackage, {
+    ...props,
+    client: exportClient({ bodies, overCap: { archiveBytes: CAP + 1, maxBytes: CAP }, preview }),
+    request: { kind: "export", projectId: "p1", sessionId: "s1" },
+  }), async (view) => {
+    assert.equal(exportAction(view)!.props.disabled, true, "the unacknowledged over-cap default selection is gated");
+    await acknowledgeOverCap(view);
+    assert.equal(exportAction(view)!.props.disabled, false, "acknowledging the default selection unblocks it");
+
+    await clearSelection(view);
+    const markup = rendered(view);
+    assert.equal(markup.includes(t.overLimitConfirmed), false,
+      "the default selection's confirmation is not shown as if it covered the empty one");
+    assert.ok(buttonWithText(view, t.exportAnyway), "the empty selection is warned about again");
+    assert.equal(exportAction(view)!.props.disabled, true, "and is gated until it is acknowledged");
+    assert.equal(bodies.length, 0, "no over-cap export is sent for the unacknowledged empty selection");
+
+    await acknowledgeOverCap(view);
+    await pressStartExport(view);
+    assert.equal(bodies.length, 1, "the acknowledged empty selection can export");
+    assert.equal(bodies[0]!.allowOverCap, true, "only this selection's acknowledgment travels");
+    assert.deepEqual(bodies[0]!.filePaths, [], "and the request packages the empty file set it was acknowledged for");
+  });
+});

@@ -69,6 +69,23 @@ interface ExportRecord {
 
 const EXPORT_STATUS_REQUEST_TIMEOUT_MS = 15_000;
 const EXPORT_DOWNLOAD_RETRY_DELAYS_MS = [500, 1_500] as const;
+/** How many `EXPORT_PREVIEW_PENDING` answers one preview waits through before it
+ *  stops retrying. The selection's own preview and each profile card keep their
+ *  own budget, so a permanently pending server cannot keep the dialog requesting
+ *  forever (#1440 F2). */
+const PREVIEW_PENDING_LIMIT = 6;
+const PREVIEW_PENDING_RETRY_MS = 1_500;
+
+/** Identity of an export selection. A successful preview authorizes an export
+ *  only for the exact selection it was computed for (#1440 F1), and an over-cap
+ *  acknowledgment belongs to that selection too (#1440 F4). `undefined` is the
+ *  default selection (whatever the preview marks selected) and `[]` is Select
+ *  all switched off: they are different selections, so the default gets its own
+ *  sentinel instead of sharing the empty suffix with the empty file list. Array
+ *  paths are JSON-encoded so a path containing "," cannot collide either. */
+function previewSelectionKey(sessionId: string, level: string, graph: boolean, files?: string[]): string {
+  return `${sessionId}|${level}|${graph}|${files === undefined ? "default" : JSON.stringify(files)}`;
+}
 
 function isRetryableExportReadError(reason: unknown): boolean {
   if (reason instanceof ApiRequestError) return reason.status === 502 || reason.status === 503 || reason.status === 504;
@@ -148,6 +165,11 @@ export function taskErrorMessage(error?: string): string | undefined {
   if (/^(Export task not found|Completed export not found)$/i.test(trimmed)) return t.taskMissing;
   if (/导出文件已过期|export (file )?(has )?expired/i.test(error)) return t.taskExpired;
   if (/服务重启时导出尚未完成/i.test(error)) return t.taskRestarted;
+  // The export task fails with one of these when the session moved on after the
+  // preview or while the archive was being written. Both mean "recalculate and
+  // export again", so they share one localized sentence instead of collapsing
+  // into 操作失败 with the server's wording behind 技术细节 (#1440 F3).
+  if (/会话内容已更新|导出期间会话内容发生变化/.test(error)) return t.taskRevisionChanged;
   // The poll settles its own terminal answers with sentences from these same
   // dictionaries (a deleted task, the retry limit). Those are already the copy
   // the user must read, so they pass through instead of collapsing into 操作失败
@@ -174,7 +196,12 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   // The export dialog offers both optional payloads the API understands. The
   const [graph, setGraph] = useState(false);
   const [preview, setPreview] = useState<PackagePreview>();
-  // Keyed by revision + size: a new selection has to be confirmed again.
+  /** The selection the visible preview was successfully computed for. The
+   *  estimate may stay on screen while a new one is calculated (#1057), but
+   *  only a preview whose selection still matches may authorize the export. */
+  const [previewSelection, setPreviewSelection] = useState<string>();
+  // Keyed by revision + size + selection: a new selection has to be confirmed
+  // again, even when the reported size happens to be unchanged.
   const [acknowledgedLimitKey, setAcknowledgedLimitKey] = useState<string>();
   const [profiles, setProfiles] = useState<Record<string, PackagePreview>>({});
   const [files, setFiles] = useState<string[]>();
@@ -390,7 +417,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     if (!request) return;
     let active = true;
     setImportProjectId(""); setInspectedProject(undefined);
-    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setAcknowledgedLimitKey(undefined); setMessageId(request.messageId ?? "");
+    setDialog(request.kind); setDetail(undefined); setPreview(undefined); setPreviewSelection(undefined); setEstimating(false); previewScope.current = ""; setProfiles({}); setError(""); setFiles(undefined); setFile(undefined); setInspection(undefined); setLevel("necessary"); setGraph(false); setAcknowledgedLimitKey(undefined); setMessageId(request.messageId ?? "");
     // Every open starts a fresh bounded wait: a stalled preview from the previous
     // open must not greet the user as already exhausted (#1235 review 2, F11).
     pendingTries.current = 0; pendingScope.current = ""; setPreviewStalled(false);
@@ -424,12 +451,26 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   useEffect(() => {
     if (dialog !== "export" || !detail || !projectId) return;
     let active = true;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    for (const value of ["necessary", "complete"]) {
-      const load = () => { void packagePreview(client, projectId, detail.id, value, false, false).then(result => { if (active) setProfiles(current => ({ ...current, [value]: result })); }).catch(reason => { if (active && reason?.code === "EXPORT_PREVIEW_PENDING") timers.push(setTimeout(load, 1500)); }); }; load();
-    }
-    return () => { active = false; timers.forEach(clearTimeout); };
-  }, [client, dialog, detail?.id, projectId]);
+    // Each card waits through its own bounded number of pending answers and
+    // keeps exactly one timer, so a permanently pending preview stops asking
+    // instead of outliving the selected preview's budget (#1440 F2). The manual
+    // retry bumps previewNonce, which restarts both cards with a fresh budget.
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const tries = new Map<string, number>([["necessary", 0], ["complete", 0]]);
+    const load = (value: string) => {
+      void packagePreview(client, projectId, detail.id, value, false, false).then(result => {
+        if (active) setProfiles(current => ({ ...current, [value]: result }));
+      }).catch(reason => {
+        if (!active || reason?.code !== "EXPORT_PREVIEW_PENDING") return;
+        const tried = (tries.get(value) ?? 0) + 1;
+        tries.set(value, tried);
+        if (tried >= PREVIEW_PENDING_LIMIT) return;
+        timers.set(value, setTimeout(() => load(value), PREVIEW_PENDING_RETRY_MS));
+      });
+    };
+    for (const value of ["necessary", "complete"]) load(value);
+    return () => { active = false; for (const timer of timers.values()) clearTimeout(timer); };
+  }, [client, dialog, detail?.id, projectId, previewNonce]);
   useEffect(() => {
     if (dialog !== "export" || !detail || !projectId) return;
     let active = true; let timer: ReturnType<typeof setTimeout>;
@@ -441,8 +482,9 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     if (previewScope.current !== scope) {
       previewScope.current = scope;
       setPreview(undefined);
+      setPreviewSelection(undefined);
     }
-    const selection = `${detail.id}|${scope}|${files?.join(",") ?? ""}`;
+    const selection = previewSelectionKey(detail.id, level, graph, files);
     if (pendingScope.current !== selection) {
       pendingScope.current = selection;
       pendingTries.current = 0;
@@ -452,7 +494,9 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     const load = () => { void packagePreview(client, projectId, detail.id, level, false, graph && level === "complete", files).then(value => {
       if (!active) return;
       pendingTries.current = 0; setPreviewStalled(false);
-      setPreview(value); setEstimating(false);
+      // Record what this successful answer describes. A later failure keeps the
+      // estimate on screen, but the stale selection no longer authorizes export.
+      setPreview(value); setPreviewSelection(selection); setEstimating(false);
     }).catch(reason => {
       if (!active) return;
       if (reason?.code === "EXPORT_PREVIEW_PENDING") {
@@ -460,8 +504,8 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         // bounded wait, then stop and say so: a permanently disabled button with no
         // status line is what #1024 reports.
         pendingTries.current += 1;
-        if (pendingTries.current >= 6) { setPreviewStalled(true); setEstimating(false); }
-        else { setEstimating(true); timer = setTimeout(load, 1500); }
+        if (pendingTries.current >= PREVIEW_PENDING_LIMIT) { setPreviewStalled(true); setEstimating(false); }
+        else { setEstimating(true); timer = setTimeout(load, PREVIEW_PENDING_RETRY_MS); }
       } else { setEstimating(false); setError(reason?.status === 404 ? t.sourceUnavailable : String(reason.message ?? reason)); }
     }); }; load();
     return () => { active = false; clearTimeout(timer); };
@@ -584,7 +628,12 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const limitBytes = preview?.maxBytes;
   const archiveBytes = preview?.archiveBytes ?? preview?.estimatedBytes;
   const overLimit = limitBytes !== undefined && archiveBytes !== undefined && archiveBytes > limitBytes;
-  const limitKey = overLimit ? `${preview?.revision ?? ""}:${archiveBytes}` : undefined;
+  const selectionKey = previewSelectionKey(detail?.id ?? "", level, graph, files);
+  const previewMatchesSelection = preview !== undefined && previewSelection === selectionKey;
+  // The acknowledgment belongs to the selection as well as to the size: an
+  // over-cap confirmation for one file set must not authorize a different one
+  // the user has never seen warned about (#1440 F4).
+  const limitKey = overLimit ? `${preview?.revision ?? ""}:${archiveBytes}:${selectionKey}` : undefined;
   const overLimitAcknowledged = limitKey !== undefined && acknowledgedLimitKey === limitKey;
   const blockedByLimit = overLimit && !overLimitAcknowledged;
   const formatLimit = (bytes: number) => formatBytes(bytes);
@@ -684,7 +733,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
         </> : <p>{t.branchHint}</p>}
         {error ? <p role="alert" className="research-package-error">{error}</p> : null}
       </div>
-      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => close()} type="button">{dialog === "branch" ? t.close : t.cancelAction}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
+      <footer className="modal-footer"><button className="secondary-button" disabled={busy} onClick={() => close()} type="button">{dialog === "branch" ? t.close : t.cancelAction}</button><button className="primary-button" disabled={busy || (dialog === "export" ? !preview?.revision || estimating || blockedByLimit || !previewMatchesSelection : dialog === "import" ? !inspection : !messageId || !detail || isEvidenceSessionReadOnly(detail) || copy?.state === "copying")} type="button" onClick={() => {
         if (dialog === "branch") void copyResearch(messageId);
         else if (dialog === "export" && detail && projectId && preview?.revision) void perform(async () => {
           // Choose the destination first; cancelling the dialog aborts the
