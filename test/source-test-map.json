@@ -2585,6 +2585,18 @@
       ]
     },
     {
+      "source": "apps/desktop/src/views/settings/system/SpecialistParts.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/e2e/settings-interactions.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/settings/system/Specialists.tsx",
       "risk": "P1",
       "owner": "desktop",

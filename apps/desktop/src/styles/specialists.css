@@ -1,0 +1,127 @@
+/* Copyright (C) 2026 Huawei Technologies Co., Ltd
+ * SPDX-License-Identifier: Apache-2.0 */
+
+.specialist-page { padding: 38px 48px 56px; container: specialists / inline-size; }
+.specialist-page-heading h2 { margin: 0; font-size: 26px; font-weight: 650; color: #191919; }
+.specialist-page-heading p { margin: 9px 0 30px; color: #8c8c8c; font-size: 14px; line-height: 1.6; }
+.specialist-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-bottom: 28px; }
+.specialist-source-tabs { display: flex; gap: 26px; min-width: 0; }
+.specialist-source-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 12px 0; color: #484848; white-space: nowrap; font-size: 14px; }
+.specialist-source-tabs button[aria-selected="true"] { border-color: #191919; color: #191919; font-weight: 650; }
+.specialist-toolbar-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.specialist-toolbar-actions .settings-bulk { margin: 0; border: 0; gap: 10px; }
+.specialist-toolbar-actions .bulk-button { border: 0; padding: 6px 0; background: transparent; color: #444; }
+.specialist-toolbar .pill-button { white-space: nowrap; }
+.specialist-search { display: flex; align-items: center; gap: 7px; border: 1px solid #ccc; border-radius: 8px; min-width: 160px; padding: 0 10px; width: 240px; height: 34px; color: #bfbfbf; }
+.specialist-search input { min-width: 0; width: 100%; border: 0; outline: 0; color: #191919; font: inherit; font-size: 13px; background: transparent; }
+.specialist-search:focus-within { border-color: #1677ff; box-shadow: 0 0 0 2px #1677ff1a; }
+.specialist-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.specialist-card.settings-card { display: block; position: relative; padding: 0; border: 1px solid #e5e5e5; border-radius: 16px; background: #fff; min-width: 0; transition: box-shadow .15s; }
+.specialist-card:hover { box-shadow: 0 6px 18px #0000000b; }
+.specialist-card:focus-within { z-index: 2; }
+.specialist-card:has(.specialist-action-menu) { z-index: 3; }
+.specialist-card-open { display: block; width: 100%; height: 100%; min-height: 160px; padding: 24px; text-align: left; border: 0; background: transparent; color: inherit; border-radius: inherit; }
+.specialist-card-open:focus-visible { outline: 2px solid #1677ff; outline-offset: 2px; }
+.specialist-identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.specialist-card .specialist-identity { padding-right: 82px; }
+.specialist-identity > span:last-child, .specialist-identity > div { min-width: 0; }
+.specialist-identity strong { display: block; font-size: 17px; line-height: 1.5; color: #202020; overflow-wrap: anywhere; }
+.specialist-mark { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 10px; flex: 0 0 48px; font-size: 23px; font-weight: 650; border: 1px solid; }
+.specialist-mark.is-small { width: 26px; height: 26px; flex-basis: 26px; font-size: 13px; border-radius: 5px; }
+.specialist-mark.is-blue { background: #e8efff; color: #155eef; border-color: #a7c3ff; }
+.specialist-mark.is-green { background: #e8faf2; color: #00956b; border-color: #8de1c5; }
+.specialist-mark.is-purple { background: #f5edff; color: #952ee0; border-color: #dcb5ff; }
+.specialist-mark.is-pink { background: #fff0f6; color: #e50066; border-color: #ffafd0; }
+.specialist-mark.is-orange { background: #fff6e9; color: #d76c00; border-color: #ffcea0; }
+.specialist-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.specialist-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #f5f5f5; color: #555; font-size: 12px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
+.specialist-card-description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 20px; font-size: 14px; line-height: 1.75; color: #8c8c8c; overflow-wrap: anywhere; }
+.specialist-card-controls { position: absolute; right: 18px; top: 30px; display: flex; align-items: center; gap: 10px; }
+.specialist-actions { position: relative; }
+.specialist-more { display: grid; place-items: center; width: 26px; height: 28px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #333; }
+.specialist-more:hover, .specialist-more[aria-expanded="true"] { background: #f2f2f2; }
+.specialist-action-menu { position: absolute; z-index: 10; top: calc(100% + 5px); right: 0; width: 160px; padding: 6px; border: 1px solid #eee; border-radius: 10px; background: #fff; box-shadow: 0 8px 25px #0002; }
+.specialist-action-menu.is-up { top: auto; bottom: calc(100% + 5px); }
+.specialist-action-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 6px; background: transparent; color: #333; font: inherit; text-align: left; }
+.specialist-action-menu button:hover:not(:disabled) { background: #f5f5f5; }
+.specialist-action-menu button.is-danger { color: #d93025; }
+.specialist-action-menu button:disabled { color: #bbb; cursor: default; }
+.specialist-reviewer-note { margin: 24px 0 0; color: #8c8c8c; font-size: 12px; }
+.specialist-empty { padding: 28px 0; color: #8c8c8c; font-size: 14px; }
+.specialist-empty.is-inline { padding: 8px 0 0 18px; margin: 0; }
+.config-panel.is-specialist-subpage { grid-template-columns: minmax(0, 1fr); }
+.config-panel.is-specialist-subpage .settings-group-nav, .config-panel.is-specialist-subpage .settings-main-fold { display: none; }
+.specialist-subpage { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.specialist-subpage-content { width: 100%; max-width: 1500px; margin: 0 auto; padding: 32px 48px 48px; min-height: 0; flex: 1; overflow-y: auto; }
+.specialist-back { display: inline-flex; align-items: center; gap: 4px; margin-bottom: 36px; padding: 2px 0; border: 0; background: transparent; color: #444; font-size: 14px; }
+.specialist-subpage-content > h2 { font-size: 21px; margin: 0 0 24px; }
+.specialist-editor { display: grid; gap: 22px; }
+.specialist-editor h3 { margin: 12px 0 0; font-size: 19px; color: #222; }
+.specialist-field { display: flex; flex-direction: column; gap: 10px; color: #444; font-size: 14px; }
+.specialist-input-wrap { position: relative; display: block; }
+.specialist-input-wrap textarea { width: 100%; margin: 0; padding: 12px 14px 28px; line-height: 1.65; border: 1px solid #ccc; border-radius: 6px; resize: vertical; }
+.specialist-description { min-height: 74px; }
+.specialist-instructions { min-height: 210px; }
+.specialist-input-wrap > small { position: absolute; bottom: 8px; right: 14px; font-size: 12px; color: #999; pointer-events: none; }
+.specialist-runtime { max-width: 470px; }
+.specialist-runtime select { width: 100%; height: 34px; border: 1px solid #ccc; border-radius: 6px; background: #fff; padding: 4px 12px; color: #333; }
+.specialist-runtime small { color: #999; font-size: 13px; }
+.specialist-access { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 940px; gap: 14px; }
+.specialist-access > button { display: flex; flex-direction: column; gap: 12px; padding: 22px; border: 1px solid #ccc; border-radius: 9px; background: #fff; text-align: left; color: #222; }
+.specialist-access > button.is-selected { border-color: #1677ff; box-shadow: 0 0 0 1px #1677ff; background: #f0f7ff; }
+.specialist-access strong { font-size: 17px; }
+.specialist-access > button > span { color: #909090; font-size: 13px; line-height: 1.7; }
+.specialist-config-section { position: relative; margin-top: 8px; padding-top: 2px; }
+.specialist-config-section > summary { padding: 8px 200px 12px 0; color: #333; font-weight: 600; font-size: 14px; cursor: pointer; }
+.specialist-section-add { position: absolute; top: 4px; right: 0; padding: 4px 0; border: 0; background: transparent; color: #444; font-size: 14px; }
+.specialist-selected-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.specialist-capability-card { min-width: 0; display: block; padding: 20px; border: 1px solid #e5e5e5; border-radius: 13px; background: #fff; }
+.specialist-capability-card.is-selected { border-color: #1677ff; }
+.specialist-capability-card.is-missing { border-color: #e0a09a; }
+.specialist-capability-top { display: flex; align-items: center; gap: 14px; }
+.specialist-capability-top > div { min-width: 0; flex: 1; }
+.specialist-capability-top strong { display: block; font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+.specialist-capability-top input[type="checkbox"] { align-self: flex-start; width: 16px; height: 16px; margin-top: 4px; accent-color: #1677ff; }
+.specialist-capability-card p { margin: 16px 0 0; color: #999; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.specialist-remove { display: grid; place-items: center; border: 0; background: transparent; color: #8c8c8c; padding: 4px; }
+.specialist-example-field { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.specialist-example-field .field-input { min-width: 0; flex: 1; }
+.specialist-example-field > button { border: 1px solid #ddd; border-radius: 4px; width: 20px; height: 20px; background: #fff; color: #999; padding: 0; }
+.specialist-editor-footer { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 10px; padding: 20px max(32px, calc((100% - 1404px) / 2)); border-top: 1px solid #eee; background: #fff; box-shadow: 0 -4px 14px #00000005; }
+.specialist-editor-footer .pill-button { min-width: 100px; }
+.specialist-detail-head { display: flex; align-items: center; gap: 20px; justify-content: space-between; flex-wrap: wrap; margin-bottom: 36px; }
+.specialist-detail-head h2 { font-size: 24px; margin: 0; overflow-wrap: anywhere; }
+.specialist-detail-actions { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.specialist-enabled { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.specialist-text-button { border: 0; background: transparent; color: #333; font-size: 14px; }
+.specialist-detail-body { display: grid; gap: 24px; }
+.specialist-detail-body h3 { margin: 0 0 12px; font-size: 17px; }
+.specialist-detail-body p { margin: 0; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.specialist-full-instructions { white-space: pre-wrap; }
+.specialist-capability-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.specialist-capability-chip { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #e5e5e5; border-radius: 7px; font-size: 13px; overflow-wrap: anywhere; max-width: 100%; }
+.specialist-example-list { display: grid; gap: 10px; max-width: 760px; }
+.specialist-example-list button { display: flex; align-items: center; justify-content: space-between; gap: 18px; text-align: left; background: #fafafa; border: 1px solid #f0f0f0; border-radius: 8px; padding: 10px 14px; color: #666; font-size: 14px; line-height: 1.7; }
+.specialist-example-list button span { min-width: 0; overflow-wrap: anywhere; }
+.specialist-example-list button:hover:not(:disabled) { background: #e8f2ff; color: #1677ff; }
+.specialist-example-list button:disabled { color: #aaa; cursor: default; }
+.specialist-notice { position: fixed; top: 24px; right: 28px; z-index: 1250; display: flex; align-items: flex-start; gap: 20px; max-width: min(520px, calc(100vw - 100px)); padding: 12px 16px; border-radius: 8px; box-shadow: 0 2px 12px #0001; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.specialist-notice.is-success { background: #edf7df; color: #477c17; }
+.specialist-notice.is-error, .specialist-feedback.is-error { background: #fff0ef; color: #c62828; }
+.specialist-notice > span { min-width: 0; flex: 1; }
+.specialist-notice button { padding: 0; border: 0; background: transparent; color: inherit; font-size: 18px; }
+.specialist-validation { color: #b54708; font-size: 13px; }
+.specialist-feedback { padding: 12px; border-radius: 6px; overflow-wrap: anywhere; }
+.specialist-feedback button { color: #1677ff; background: transparent; border: 0; }
+.specialist-drawer-scrim { display: flex; justify-content: flex-end; align-items: stretch; padding: 0; z-index: 1400; }
+.settings-modal.specialist-drawer { width: min(900px, calc(100vw - 64px)); max-width: none; height: 100%; max-height: 100%; border-radius: 0; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.specialist-drawer .settings-modal-head { padding: 24px 28px 12px; margin: 0; flex: 0 0 auto; }
+.specialist-drawer-body { padding: 0 28px 28px; overflow-y: auto; flex: 1; min-height: 0; }
+.specialist-drawer-body .specialist-search { width: 100%; margin: 14px 0 18px; }
+.specialist-picker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.specialist-drawer-footer { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px; border-top: 1px solid #eee; font-size: 14px; }
+.specialist-drawer-footer > div { display: flex; gap: 10px; }
+@container specialists (max-width: 1100px) { .specialist-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .specialist-toolbar-actions { flex: 1; } }
+@container specialists (max-width: 700px) { .specialist-grid { grid-template-columns: minmax(0, 1fr); } .specialist-source-tabs { gap: 18px; } }
+@media (max-width: 1100px) { .specialist-page { padding: 28px; } .specialist-subpage-content { padding: 26px 32px 40px; } .specialist-selected-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .specialist-page { padding: 22px 18px; } .specialist-toolbar-actions { gap: 12px; } .specialist-search { width: 100%; } .specialist-access, .specialist-selected-grid, .specialist-picker-grid { grid-template-columns: minmax(0, 1fr); } .specialist-subpage-content { padding: 24px 20px 36px; } .specialist-detail-actions { gap: 12px; } .specialist-card-open { padding: 18px; } .specialist-source-tabs { gap: 14px; } }

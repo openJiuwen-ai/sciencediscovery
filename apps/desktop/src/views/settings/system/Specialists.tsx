@@ -1,217 +1,119 @@
-// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-import { useState } from "react";
-
+// Copyright (C) 2026 Huawei Technologies Co., Ltd
+// SPDX-License-Identifier: Apache-2.0
+import { useEffect, useState } from "react";
 import type { ApiClient } from "../../../api/client.js";
-import {
-  deleteSpecialist,
-  listConnectors,
-  listSkills,
-  listSpecialists,
-  updateSpecialist,
-} from "../../../api/settings.js";
-import type {
-  ConnectorManifest,
-  SkillDescriptor,
-  Specialist,
-} from "../../../api/types.js";
+import { deleteSpecialist, listConnectors, listSkills, listSpecialists, updateSpecialist } from "../../../api/settings.js";
+import type { ConnectorManifest, SkillDescriptor, Specialist } from "../../../api/types.js";
 import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
-import { BulkToggles, Group, LoadGate, Switch, Tag } from "../rows.js";
-import { SkillRowMenu } from "../SkillRowMenu.js";
+import { useTopmostEscape } from "../../use-dialog-escape.js";
+import { BulkToggles, LoadGate, Switch } from "../rows.js";
 import { SpecialistForm } from "./SpecialistForm.js";
+import { SpecialistActions, SpecialistGlyph, SpecialistMark, SpecialistSearch, SpecialistSourceTabs, type SpecialistSource } from "./SpecialistParts.js";
 
 interface Props {
   client: ApiClient;
-  /** Present while the settings header's create action is open. */
-  onCancelCreate?: () => void;
   onConfirm: (request: ConfirmRequest) => void;
+  onSubpageChange?: (open: boolean) => void;
+  onTry?: (specialist: Specialist, prompt?: string) => Promise<void>;
+}
+interface Page { connectors: ConnectorManifest[]; skills: SkillDescriptor[]; specialists: Specialist[] }
+type View = { kind: "list" } | { kind: "create" } | { kind: "detail" | "edit"; specialist: Specialist };
+
+function Badges({ specialist }: { specialist: Specialist }) {
+  const labels = TEXT.settings.system.specialists;
+  const all = specialist.enabledSkillIds.length + specialist.connectorIds.length === 0;
+  return <span className="specialist-badges"><span className="specialist-badge">{specialist.builtIn ? labels.builtIn : labels.external}</span>
+    {all ? <span className="specialist-badge">{labels.allCapabilities}</span> : <><span className="specialist-badge">ϟ {labels.skills} {specialist.enabledSkillIds.length}</span><span className="specialist-badge">▧ MCP {specialist.connectorIds.length}</span></>}
+  </span>;
 }
 
-interface Page {
-  connectors: ConnectorManifest[];
-  skills: SkillDescriptor[];
-  specialists: Specialist[];
+function SpecialistDetail({ specialist, page, busy, onBack, onEdit, onToggle, onDelete, onTry }: {
+  specialist: Specialist; page: Page; busy: boolean; onBack: () => void; onEdit: () => void;
+  onToggle: (next: boolean) => void; onDelete: () => void; onTry: (prompt?: string) => void;
+}) {
+  const labels = TEXT.settings.system.specialists, enabled = specialist.enabled !== false;
+  useTopmostEscape(() => { if (!busy) onBack(); });
+  return <section className="specialist-subpage" role="region" aria-label={labels.details}>
+    <div className="specialist-subpage-content">
+      <button className="specialist-back" type="button" disabled={busy} onClick={onBack}><SpecialistGlyph kind="back" />{labels.back}</button>
+      <header className="specialist-detail-head"><div className="specialist-identity"><SpecialistMark name={specialist.name} /><div><h2>{specialist.name}</h2><Badges specialist={specialist} /></div></div>
+        <div className="specialist-detail-actions">
+          {!specialist.builtIn ? <button className="specialist-text-button" type="button" disabled={busy} onClick={onEdit}>{TEXT.settings.skills.rowMenu.edit}</button> : null}
+          <label className="specialist-enabled"><Switch label={`${specialist.name} · ${labels.enabled}`} disabled={busy} value={enabled} onChange={onToggle} /><span>{enabled ? labels.enabled : labels.disabled}</span></label>
+          <button className="pill-button" type="button" disabled={busy || !enabled} title={!enabled ? labels.tryDisabled : undefined} onClick={() => onTry()}>{labels.try}</button>
+          <SpecialistActions name={specialist.name} enabled={enabled} canDelete={!specialist.builtIn} busy={busy} onTry={() => onTry()} onDelete={onDelete} />
+        </div>
+      </header>
+      <div className="specialist-detail-body">
+        <section><h3>{labels.description}</h3><p>{specialist.description}</p></section>
+        <section><h3>{labels.instructions}</h3><p className="specialist-full-instructions">{specialist.instructions}</p></section>
+        <section><h3>{labels.runtime}</h3><span className="specialist-badge">{!specialist.runtime || specialist.runtime.kind === "native" ? labels.runtimeNative : specialist.runtime.kind}</span>{specialist.runtime && specialist.runtime.kind !== "native" && specialist.runtime.model ? <p>{specialist.runtime.model}</p> : null}</section>
+        {specialist.enabledSkillIds.length + specialist.connectorIds.length === 0 ? <section><h3>{labels.capabilities}</h3><p>{labels.fullAccessHint}</p></section> : <>
+          <section><h3>{labels.skills}</h3><div className="specialist-capability-chips">{specialist.enabledSkillIds.map(id => { const skill = page.skills.find(s => s.id === id); return <span className="specialist-capability-chip" key={id}><SpecialistMark small name={skill?.name ?? id} />{skill?.name ?? labels.unavailableSkill(id)}</span>; })}</div></section>
+          <section><h3>{labels.mcpConfiguration}</h3><div className="specialist-capability-chips">{specialist.connectorIds.map(id => { const connector = page.connectors.find(c => c.id === id); return <span className="specialist-capability-chip" key={id}><SpecialistMark small name={connector?.displayName ?? id} />{connector?.displayName ?? id}</span>; })}</div></section>
+        </>}
+        {(specialist.promptExamples?.length ?? 0) > 0 ? <section><h3>{labels.promptExamples}</h3><div className="specialist-example-list">{specialist.promptExamples!.map((example, index) => <button type="button" key={index} disabled={busy || !enabled} title={!enabled ? labels.tryDisabled : labels.exampleTry} onClick={() => onTry(example)}><span>“{example}”</span><SpecialistGlyph kind="try" /></button>)}</div></section> : null}
+      </div>
+    </div>
+  </section>;
 }
 
-/**
- * 设置 › 专家: the reusable instruction-and-tool bundles a run can dispatch to.
- *
- * The Review Specialist is not one of those rows. It ships with the
- * application, every session's automatic review is what uses it, and nothing
- * on this page can take it away — the reference client draws it as a fixed
- * built-in card with no switch, and this page does the same. Whether a
- * session reviews automatically is that session's own 自动审阅 choice.
- *
- * Built-ins the server seeds as specialist records are read-only; their one
- * editable field is whether they appear in the task tool's enum at all. A
- * user-created specialist has the same enabled switch, alongside edit/delete.
- *
- * The new action and each custom row share a form over the list.
- */
-export function SpecialistsSettings({ client, onCancelCreate, onConfirm }: Props) {
-  const loaded = useLoaded<Page>(async () => {
-    const [specialists, connectors, skills] = await Promise.all([
-      listSpecialists(client),
-      listConnectors(client),
-      listSkills(client),
-    ]);
-    return { connectors, skills, specialists };
-  }, { client, key: "specialists" });
-  const [editing, setEditing] = useState<Specialist>();
+export function SpecialistsSettings({ client, onConfirm, onSubpageChange, onTry }: Props) {
+  const loaded = useLoaded<Page>(async () => { const [specialists, connectors, skills] = await Promise.all([listSpecialists(client), listConnectors(client), listSkills(client)]); return { specialists, connectors, skills }; }, { client, key: "specialists" });
+  const [view, setView] = useState<View>({ kind: "list" });
+  const [source, setSource] = useState<SpecialistSource>("all");
+  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<string>();
-
-  const creating = onCancelCreate !== undefined;
-  const close = () => {
-    setEditing(undefined);
-    onCancelCreate?.();
-  };
-
+  const [notice, setNotice] = useState<{ message: string; error: boolean }>();
+  const labels = TEXT.settings.system.specialists;
+  useEffect(() => { onSubpageChange?.(view.kind !== "list"); }, [view.kind, onSubpageChange]);
+  const report = (reason: unknown) => setNotice({ error: true, message: reason instanceof Error ? reason.message : TEXT.settings.saveFailed });
   const toggle = async (specialist: Specialist, next: boolean) => {
-    setBusy(true);
-    setFailure(undefined);
+    setBusy(true); setNotice(undefined);
     try {
-      await updateSpecialist(client, specialist.id, { enabled: next });
+      const saved = await updateSpecialist(client, specialist.id, { enabled: next });
+      setView(current => current.kind === "detail" && current.specialist.id === saved.id ? { kind: "detail", specialist: saved } : current);
       loaded.reload();
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      setBusy(false);
-    }
+    } catch (reason) { report(reason); } finally { setBusy(false); }
   };
-
-  /** 一键启用 / 一键关闭 covers every dispatchable specialist, including custom ones. */
   const setAll = async (next: boolean) => {
-    const page = loaded.value;
-    if (!page) return;
-    setBusy(true);
-    setFailure(undefined);
-    try {
-      for (const specialist of page.specialists) {
-        if ((specialist.enabled !== false) === next) continue;
-        await updateSpecialist(client, specialist.id, { enabled: next });
-      }
-    } catch (reason) {
-      setFailure(reason instanceof Error ? reason.message : TEXT.settings.saveFailed);
-    } finally {
-      // Earlier rows may already have been saved when a later request failed.
-      loaded.reload();
-      setBusy(false);
-    }
+    if (!loaded.value) return;
+    setBusy(true); setNotice(undefined);
+    try { for (const specialist of loaded.value.specialists) if ((specialist.enabled !== false) !== next) await updateSpecialist(client, specialist.id, { enabled: next }); }
+    catch (reason) { report(reason); } finally { loaded.reload(); setBusy(false); }
   };
-
-  return (
-    <LoadGate loaded={loaded}>
-      {(page) => (
-        <>
-          <Group>
-            <p className="settings-note">{TEXT.settings.system.specialists.help}</p>
-            <div className="settings-list">
-              {/* The Review Specialist is part of the application. It has no
-                  switch here, and no description of its own beyond what uses
-                  it: 自动审阅 is chosen per session, and nothing on this page
-                  can take the reviewer away from a session that wants it. */}
-              <div className="settings-card" data-testid="built-in-reviewer">
-                <span aria-hidden="true" className="settings-card-mark">
-                  {TEXT.reviewer.title.slice(0, 1)}
-                </span>
-                <div className="settings-card-main">
-                  <strong>{TEXT.reviewer.title}</strong>
-                  <small>{TEXT.settings.system.specialists.reviewerUse}</small>
-                </div>
-              </div>
-              {page.specialists.length === 0 ? null : (
-                <>
-                  <BulkToggles busy={busy} onAll={(next) => void setAll(next)} />
-                  {page.specialists.map((specialist) => {
-                    const on = specialist.enabled !== false;
-                    return (
-                      <div className={`settings-card is-expandable${on ? "" : " is-off"}`} key={specialist.id}>
-                        <span className="settings-card-mark">{specialist.name.slice(0, 1).toUpperCase()}</span>
-                        <div className="settings-card-main">
-                          <strong>
-                            {specialist.name}
-                            {specialist.builtIn ? (
-                              <Tag tone="off">{TEXT.settings.system.specialists.builtIn}</Tag>
-                            ) : null}
-                            <Tag tone={on ? "ok" : "off"}>
-                              {on ? TEXT.settings.system.specialists.enabled : TEXT.settings.system.specialists.disabled}
-                            </Tag>
-                          </strong>
-                          <small>{specialist.description}</small>
-                        </div>
-                        <div className="settings-card-actions">
-                          {specialist.builtIn ? null : (
-                            <SkillRowMenu
-                              canEdit
-                              canExport={false}
-                              disabled={busy}
-                              name={specialist.name}
-                              onAction={(action) => {
-                                if (action === "edit") setEditing(specialist);
-                                if (action === "delete") onConfirm({
-                                  accept: TEXT.menu.delete,
-                                  body: TEXT.settings.system.specialists.deleteBody(specialist.name),
-                                  eyebrow: TEXT.settings.system.specialists.heading,
-                                  onAccept: () => {
-                                    void deleteSpecialist(client, specialist.id)
-                                      .then(() => loaded.reload())
-                                      .catch((reason: unknown) => {
-                                        setFailure(reason instanceof Error ? reason.message : TEXT.errors.generic);
-                                      });
-                                  },
-                                  title: TEXT.settings.system.specialists.deleteTitle(specialist.name),
-                                });
-                              }}
-                            />
-                          )}
-                          <Switch
-                            disabled={busy}
-                            label={`${specialist.name} · ${TEXT.settings.system.specialists.enabled}`}
-                            onChange={(next) => void toggle(specialist, next)}
-                            value={on}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </>
-              )}
-            </div>
-          </Group>
-
-          {creating || editing !== undefined ? (
-            <SpecialistForm
-              client={client}
-              connectors={page.connectors}
-              key={creating ? "create" : editing?.id}
-              onCancel={close}
-              onSaved={() => {
-                close();
-                loaded.reload();
-              }}
-              specialist={creating ? undefined : editing}
-              skills={page.skills}
-            />
-          ) : null}
-
-          {failure ? <small className="row-note is-error">{failure}</small> : null}
-        </>
-      )}
-    </LoadGate>
-  );
+  const remove = (specialist: Specialist) => onConfirm({ accept: TEXT.menu.delete, body: labels.deleteBody(specialist.name), eyebrow: labels.heading, title: labels.deleteTitle(specialist.name), onAccept: () => {
+    setBusy(true); setNotice(undefined);
+    void deleteSpecialist(client, specialist.id).then(() => { setView({ kind: "list" }); setNotice({ error: false, message: labels.deleted }); loaded.reload(); }).catch(report).finally(() => setBusy(false));
+  } });
+  const tryRole = async (specialist: Specialist, prompt?: string) => {
+    if (busy || specialist.enabled === false || !onTry) return;
+    setBusy(true); setNotice(undefined);
+    try { await onTry(specialist, prompt); } catch (reason) { report(reason); } finally { setBusy(false); }
+  };
+  return <LoadGate loaded={loaded}>{page => <>
+    {view.kind === "create" || view.kind === "edit" ? <SpecialistForm client={client} connectors={page.connectors} skills={page.skills} specialist={view.kind === "edit" ? view.specialist : undefined}
+      onCancel={() => setView(view.kind === "edit" ? { kind: "detail", specialist: view.specialist } : { kind: "list" })}
+      onSaved={saved => { setNotice({ error: false, message: view.kind === "create" ? labels.created : labels.updated }); setView({ kind: "detail", specialist: saved }); loaded.reload(); }} />
+      : view.kind === "detail" ? <SpecialistDetail specialist={view.specialist} page={page} busy={busy} onBack={() => setView({ kind: "list" })} onEdit={() => setView({ kind: "edit", specialist: view.specialist })} onToggle={next => void toggle(view.specialist, next)} onDelete={() => remove(view.specialist)} onTry={prompt => void tryRole(view.specialist, prompt)} />
+        : <div className="specialist-page">
+          <header className="specialist-page-heading"><h2>{labels.heading}</h2><p>{labels.help}</p></header>
+          <div className="specialist-toolbar"><SpecialistSourceTabs value={source} onChange={setSource} counts={{ all: page.specialists.length, mine: page.specialists.filter(s => !s.builtIn).length, official: page.specialists.filter(s => s.builtIn).length }} />
+            <div className="specialist-toolbar-actions"><BulkToggles busy={busy || page.specialists.length === 0} onAll={next => void setAll(next)} /><SpecialistSearch value={query} onChange={setQuery} /><button className="pill-button is-dark" disabled={busy} type="button" onClick={() => { setNotice(undefined); setView({ kind: "create" }); }}>{labels.add}</button></div>
+          </div>
+          <div className="specialist-grid">
+            {page.specialists.filter(s => (source === "all" || Boolean(s.builtIn) === (source === "official")) && `${s.name} ${s.description}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map(specialist => <article className="specialist-card settings-card" key={specialist.id}>
+              <button className="specialist-card-open" type="button" aria-label={labels.view(specialist.name)} onClick={() => { setNotice(undefined); setView({ kind: "detail", specialist }); }}>
+                <span className="specialist-identity"><SpecialistMark name={specialist.name} /><span><strong>{specialist.name}</strong><Badges specialist={specialist} /></span></span><span className="specialist-card-description">{specialist.description}</span>
+              </button>
+              <div className="specialist-card-controls"><Switch disabled={busy} label={`${specialist.name} · ${labels.enabled}`} value={specialist.enabled !== false} onChange={next => void toggle(specialist, next)} /><SpecialistActions name={specialist.name} enabled={specialist.enabled !== false} canDelete={!specialist.builtIn} busy={busy} onTry={() => void tryRole(specialist)} onDelete={() => remove(specialist)} /></div>
+            </article>)}
+          </div>
+          {page.specialists.filter(s => (source === "all" || Boolean(s.builtIn) === (source === "official")) && `${s.name} ${s.description}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).length === 0 ? <p className="specialist-empty">{labels.noResults}</p> : null}
+          <p className="specialist-reviewer-note" data-testid="built-in-reviewer">{TEXT.reviewer.title} · {labels.reviewerUse}</p>
+        </div>}
+    {notice ? <div className={`specialist-notice${notice.error ? " is-error row-note" : " is-success"}`} role={notice.error ? "alert" : "status"}><span>{notice.message}</span><button type="button" aria-label={TEXT.settings.close} onClick={() => setNotice(undefined)}>×</button></div> : null}
+  </>}</LoadGate>;
 }

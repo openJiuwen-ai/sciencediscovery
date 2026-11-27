@@ -140,6 +140,39 @@ describe("the Specialist routes answer a rejected input as a client error", () =
   });
 
   // One declaration per rejection the settings pane can provoke, driven through
+  test("session creation rejects a Specialist disabled after selection and preserves earlier bindings", async () => {
+    const specialist = await request("POST", "/api/specialists", { name: "Session binding subject", description: "d", instructions: "i" });
+    assert.equal(specialist.status, 201);
+    const project = await request("POST", "/api/projects", { name: "Specialist binding workspace" });
+    assert.equal(project.status, 201);
+    const path = `/api/projects/${project.body.id}/sessions`;
+    const binding = { title: "Bound session", specialistId: specialist.body.id };
+    const first = await request("POST", path, binding);
+    assert.equal(first.status, 201);
+    assert.equal(first.body.specialistId, specialist.body.id);
+    const before = await request("GET", path);
+    assert.equal((await request("PUT", `/api/specialists/${specialist.body.id}`, { enabled: false })).status, 200);
+    const refused = await request("POST", path, binding);
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.code, "SPECIALIST_DISABLED");
+    assert.deepEqual((await request("GET", path)).body, before.body);
+    assert.equal((await request("GET", `/api/sessions/${first.body.id}`)).body.specialistId, specialist.body.id);
+  });
+
+  test("prompt examples round-trip through the API and invalid examples are client errors", async () => {
+    const created = await request("POST", "/api/specialists", { name: "Example HTTP author", description: "d", instructions: "i", promptExamples: ["Check a dataset"] });
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.body.promptExamples, ["Check a dataset"]);
+    const path = `/api/specialists/${created.body.id}`;
+    for (const examples of ["not-an-array", [12], [""], ["x".repeat(1001)], Array(11).fill("example")]) {
+      assert.equal((await request("PUT", path, { promptExamples: examples })).status, 400);
+    }
+    assert.equal((await request("PUT", "/api/specialists/builtin-assessment-screener", { promptExamples: ["change"] })).status, 400);
+    assert.deepEqual((await request("PUT", path, { description: "updated" })).body.promptExamples, ["Check a dataset"]);
+    assert.deepEqual((await request("PUT", path, { promptExamples: [] })).body.promptExamples, []);
+  });
+
+  // One declaration per rejection the settings pane can provoke, driven through
   // the real store: the wording lives in services/api/src/store.ts, so a change
   // there fails this route test instead of only a hand-copied helper list.
   const specialist: (name: string, extra?: Record<string, unknown>) => Record<string, unknown> =
@@ -248,6 +281,7 @@ test("every rejection the Specialist store raises is still a client error", () =
     "Specialist description is required",
     "Specialist description must be 1-500 characters",
     "Specialist instructions must be 1-20000 characters",
+    "Specialist prompt examples must contain at most 10 nonempty strings of 1-1000 characters",
     "Specialist name already exists",
     "Specialist skills are unavailable: nope",
     "Specialist connectors are unavailable: nope",

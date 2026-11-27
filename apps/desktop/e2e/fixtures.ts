@@ -885,10 +885,12 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
           return json(route, 200, state.sessions.filter((entry) => entry.projectId === projectId));
         }
         if (method === "POST") {
+          const input = JSON.parse(body ?? "{}") as Partial<SessionRecord>;
           const created = makeSession({
+            ...input,
             id: `session-${state.sessions.length + 1}`,
             projectId,
-            title: UNTITLED_TITLE,
+            title: input.title ?? UNTITLED_TITLE,
           });
           state.sessions.push(created);
           return json(route, 201, created);

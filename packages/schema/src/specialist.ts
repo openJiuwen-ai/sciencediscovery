@@ -19,6 +19,8 @@ export type ExternalSpecialistRuntimeKind = "codex" | "claude-code" | "acp";
 export type SpecialistRuntime = { kind: "native" } | { [K in ExternalSpecialistRuntimeKind]: { kind: K; model?: string; fallback?: boolean; execution?: "sandbox" | "direct"; timeoutSeconds?: number; reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" } }[ExternalSpecialistRuntimeKind];
 
 export interface Specialist {
+  /** Optional conversation starters, never automatically included in system instructions. */
+  promptExamples?: string[];
   runtime?: SpecialistRuntime;
   /** Optional one-line summary shown in settings and the task tool's specialist enum. */
   description: string;
@@ -40,6 +42,7 @@ export interface Specialist {
 }
 
 export interface CreateSpecialistRequest {
+  promptExamples?: string[];
   runtime?: SpecialistRuntime;
   connectorIds?: ConnectorId[];
   description: string;
