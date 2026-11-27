@@ -504,10 +504,13 @@ itself:
   lives: ten directories, six of them (`1275`, `1305`, `1399`, `1401`, `1412`,
   `proxy-settings-ui`) with a `README.md` that records how the frames were
   captured, what is mocked and what each one shows; the four older ones hold
-  images only and are not the model. Follow the README shape, name the files for
-  locale and state (`01-zh-….png`, `05-en-….png`), and embed them in the body
-  from `raw.githubusercontent.com` URLs pinned to a commit SHA — not to a
-  branch, which moves.
+  images only and are not the model. New evidence follows that README shape
+  rather than any older directory, and names its files for locale and state
+  (`01-zh-<state>.png`, `05-en-<state>.png`) — the existing directories each
+  number and order theirs differently, so the naming is a rule for new evidence
+  and not a description of the old. Embed the frames in the body from
+  `raw.githubusercontent.com` URLs pinned to a commit SHA — not to a branch,
+  which moves.
 - **Redacted.** A frame of a real stack shows what the stack shows: keys on the
   settings page, bearer tokens in a log panel, `/home/<user>` and
   `C:\Users\<name>` paths, hostnames, other people's session titles. Journey
