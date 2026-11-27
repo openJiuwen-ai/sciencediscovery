@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RunnerClient, RemoteComputeClient } from "@sciencediscovery/executor";
 import type { ExecutionBlockDecision } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
+import { decodePathParam } from "./path-params.js";
 
 /** Called only behind the normal control-plane bearer-token check. */
 export async function handleExecutionReadiness(
@@ -16,7 +17,7 @@ export async function handleExecutionReadiness(
   if (!probe && !decision) return false;
   const send = (status: number, value: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
   if (probe && ["GET", "POST"].includes(request.method ?? "")) {
-    const runnerId = decodeURIComponent(probe[1]!);
+    const runnerId = decodePathParam(probe[1]!, "runnerId");
     try {
       const client = runnerId === "local" ? local : remote.runnerClient(runnerId);
       // Never substitute a local probe for an unavailable remote Runner.
@@ -28,7 +29,11 @@ export async function handleExecutionReadiness(
     return true;
   }
   if (decision) {
-    const sessionId = decodeURIComponent(decision[1]!);
+    const sessionId = decodePathParam(decision[1]!, "sessionId");
+    // Decoded here, beside the session id: a malformed decision segment is the
+    // caller's input, and the branch below has its own 409 catch for a decision it
+    // refuses — which must not be the answer to a bad path.
+    const decisionId = decision[2] === undefined ? undefined : decodePathParam(decision[2], "decisionId");
     if (!store.getSession(sessionId)) { send(404, { error: "Session not found" }); return true; }
     if (request.method === "GET" && !decision[2]) {
       send(200, store.executionBlocks.list(sessionId)); return true;
@@ -41,7 +46,7 @@ export async function handleExecutionReadiness(
       try {
         store.assertSessionWritable(sessionId);
         if (choice.action === "switch") store.assertSessionAllowsRunner(sessionId, choice.runnerId);
-        store.executionBlocks.decide(sessionId, decodeURIComponent(decision[2]), choice);
+        store.executionBlocks.decide(sessionId, decisionId!, choice);
         send(200, { resolved: true });
       } catch (error) { send(409, { error: String(error) }); }
       return true;

@@ -102,6 +102,22 @@ async def test_legacy_down_is_a_502_with_a_json_body():
     assert json.loads(response.text)["error"] == "legacy_unavailable"
 
 
+async def test_a_nul_in_the_path_is_the_client_mistake_not_a_500():
+    """A `%00` cannot be an upstream URL; httpx raises `InvalidURL`, which is not
+    an `httpx.HTTPError`, so the adapter has to answer it itself."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("a malformed path must never reach the upstream")
+
+    response = await call(handler, url="/api/models/id-%00")
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_request"
+    assert body["message"] == "Malformed request path"
+    assert len(body["requestId"]) == 32
+
+
 async def test_retries_transient_transport_errors_for_safe_reads():
     calls = 0
 
