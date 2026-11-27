@@ -84,6 +84,12 @@ test("the legacy panel draws the tree with no lifecycle controls", async () => {
   const text = JSON.stringify(renderer.toJSON());
   assert.match(text, /旧版目标/);
   assert.match(text, /旧版根节点/);
-  assert.equal(renderer.root.findAll((node) => node.type === "button").length, 2, "only the tree's own node buttons");
+  // Scope the count to the tree's own node buttons: the zoom controls in the
+  // tree's header are buttons too, and this case is about lifecycle controls.
+  assert.equal(
+    renderer.root.findAll((node) => node.type === "button" && String(node.props.className).includes("idea-tree-node-button")).length,
+    2,
+    "only the tree's own node buttons",
+  );
   renderer.unmount();
 });

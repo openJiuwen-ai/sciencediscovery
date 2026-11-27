@@ -101,7 +101,10 @@ const PAD = 18;
 const MIN_SCALE = 0.6;
 /** How far the reader can zoom by hand. The automatic fit stays inside the
  *  narrower readable range above and never grows past 1; a hand zoom is the
- *  only way past the column's width, and the fit control brings it back. */
+ *  only way past the column's width, and the fit control brings it back.
+ *  The lower end, 0.4, is deliberately below `MIN_SCALE`: that is the scale
+ *  text stops being readable at, and shrinking past it is the reader's own
+ *  choice to see the shape of a wide drawing, not something the fit does. */
 export const IDEA_TREE_ZOOM_MIN = 0.4;
 export const IDEA_TREE_ZOOM_MAX = 2;
 const ZOOM_STEP = 1.2;
@@ -109,6 +112,9 @@ const ZOOM_STEP = 1.2;
  *  its own rather than a slower way to press ＋ twice. */
 const DOUBLE_CLICK_STEP = 1.5;
 const WHEEL_STEP = 0.0015;
+/** A press only becomes a drag after the pointer has moved this far, so a
+ *  click on a node is still that node's click. */
+const DRAG_THRESHOLD = 4;
 
 /** The scale that fits the drawing into the column, kept readable and never
  *  magnified. Pure, so the arithmetic is testable without a DOM. */
@@ -121,6 +127,15 @@ export function ideaTreeZoomScale(scale: number, factor: number): number {
   return Math.min(IDEA_TREE_ZOOM_MAX, Math.max(IDEA_TREE_ZOOM_MIN, scale * factor));
 }
 
+/** The scale one wheel event asks for. Deltas arrive in pixels, lines or pages
+ *  depending on the device, so the unit is resolved here; the clamped result is
+ *  what lets the listener tell a wheel that still zooms from one at the end of
+ *  the range, which must be left to the panel instead of being swallowed. Pure. */
+export function ideaTreeWheelScale(scale: number, deltaY: number, deltaMode: number, viewportHeight: number): number {
+  const unit = deltaMode === 1 ? 16 : deltaMode === 2 ? viewportHeight : 1;
+  return ideaTreeZoomScale(scale, Math.exp(-deltaY * unit * WHEEL_STEP));
+}
+
 /** What an automatic fit may do to the scale. `undefined` means "leave the
  *  reader's scale alone": once the scale is set by hand, new data and a resize
  *  must not take it back, or a tree that is still growing cannot be zoomed. */
@@ -129,17 +144,26 @@ export function ideaTreeAutoFit(manual: boolean, fitted: number | undefined): nu
   return fitted;
 }
 
-/** The scroll that keeps the middle of the viewport over the same part of the
- *  drawing after the scale changes by `ratio`: without it the drawing would
- *  grow away from whatever the reader was looking at. */
+/** A point inside the viewport, in its own pixels from the top-left corner. */
+export interface IdeaTreeAnchor { x: number; y: number; }
+
+/** The scroll that keeps one point of the drawing under the same viewport
+ *  point after the scale changes by `ratio`: without it the drawing would grow
+ *  away from whatever the reader was looking at. The default anchor is the
+ *  middle of the viewport, which is what the buttons and the keyboard use; the
+ *  wheel and a double click pass the pointer, as `EvolveTree` does, so the part
+ *  of the drawing under the cursor stays under the cursor. */
 export function ideaTreeScrollAfterZoom(
   scroll: { left: number; top: number },
   area: { height: number; width: number },
   ratio: number,
+  anchor?: IdeaTreeAnchor,
 ): { left: number; top: number } {
+  const x = anchor?.x ?? area.width / 2;
+  const y = anchor?.y ?? area.height / 2;
   return {
-    left: Math.max(0, (scroll.left + area.width / 2) * ratio - area.width / 2),
-    top: Math.max(0, (scroll.top + area.height / 2) * ratio - area.height / 2),
+    left: Math.max(0, (scroll.left + x) * ratio - x),
+    top: Math.max(0, (scroll.top + y) * ratio - y),
   };
 }
 
@@ -247,6 +271,9 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
   /** A drag pans by scrolling; the press position and the scroll it started
    *  from are what make the drag follow the pointer exactly. */
   const drag = useRef<{ left: number; pointerId: number; top: number; x: number; y: number } | null>(null);
+  /** Only a pointer that actually moved is a pan; a click on a node stays that
+   *  node's click. The flag also swallows the click a finished drag produces. */
+  const moved = useRef(false);
   const [dragging, setDragging] = useState(false);
   /** The drawing is only draggable when it is bigger than the column: the grab
    *  cursor says so, and nothing pretends to move when everything already fits. */
@@ -260,21 +287,32 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
     return ideaTreeFitScale(layout.width, width);
   };
 
-  const applyScale = useCallback((next: number) => {
+  const applyScale = useCallback((next: number, anchor?: IdeaTreeAnchor) => {
     const element = box.current;
     const current = scaleRef.current;
     if (next === current) return;
     manual.current = true;
     if (element !== null) {
-      pendingScroll.current = ideaTreeScrollAfterZoom(
-        { left: element.scrollLeft, top: element.scrollTop },
-        { height: element.clientHeight, width: element.clientWidth },
-        next / current,
-      );
+      const area = { height: element.clientHeight, width: element.clientWidth };
+      // A burst of wheel events can arrive before the scroll set by the first
+      // one is painted; composing onto the pending target keeps the anchor
+      // where the reader put it instead of drifting with each event.
+      const base = pendingScroll.current ?? { left: element.scrollLeft, top: element.scrollTop };
+      pendingScroll.current = ideaTreeScrollAfterZoom(base, area, next / current, anchor);
     }
     scaleRef.current = next;
     setScale(next);
   }, []);
+
+  /** Where the pointer sits inside the viewport. `undefined` when the event
+   *  carries no coordinates (a keyboard-driven zoom, or a test), which falls
+   *  back to the viewport's middle. */
+  const anchorOf = (clientX?: number, clientY?: number): IdeaTreeAnchor | undefined => {
+    const element = box.current;
+    if (element === null || typeof clientX !== "number" || typeof clientY !== "number") return undefined;
+    const rect = element.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  };
 
   const fit = (): void => {
     manual.current = false;
@@ -332,14 +370,18 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
     const element = box.current;
     if (element === null) return undefined;
     const onWheel = (event: WheelEvent) => {
-      // Deltas arrive in pixels, lines or pages depending on the device.
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? element.clientHeight : 1;
-      const factor = Math.exp(-event.deltaY * unit * WHEEL_STEP);
-      if (factor === 1) return;
+      const next = ideaTreeWheelScale(scaleRef.current, event.deltaY, event.deltaMode, element.clientHeight);
+      // At the end of the range the wheel asks for no change: leave it to the
+      // panel rather than swallowing a gesture that would do nothing here.
+      if (next === scaleRef.current) return;
       // The wheel zooms this drawing; React's wheel listener is passive, so the
       // panel behind the tree has to be kept from scrolling by a native one.
       event.preventDefault();
-      applyScale(ideaTreeZoomScale(scaleRef.current, factor));
+      const rect = element.getBoundingClientRect();
+      applyScale(next, {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      });
     };
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
@@ -353,8 +395,6 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    // A press on a node belongs to that node's own click, not to the pan.
-    if ((event.target as HTMLElement).closest(".idea-tree-node-button") !== null) return;
     const element = box.current;
     if (element === null) return;
     drag.current = {
@@ -364,7 +404,10 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
       x: event.clientX,
       y: event.clientY,
     };
-    element.setPointerCapture(event.pointerId);
+    moved.current = false;
+    // The press itself does not capture the pointer: capturing here retargets
+    // the click to the viewport, so the node under the pointer would never be
+    // selected. The first real move takes the capture instead.
     setDragging(true);
   };
 
@@ -372,8 +415,13 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
     const current = drag.current;
     const element = box.current;
     if (current === null || element === null || current.pointerId !== event.pointerId) return;
-    element.scrollLeft = current.left - (event.clientX - current.x);
-    element.scrollTop = current.top - (event.clientY - current.y);
+    const dx = event.clientX - current.x;
+    const dy = event.clientY - current.y;
+    if (!moved.current && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    if (!moved.current) element.setPointerCapture(event.pointerId);
+    moved.current = true;
+    element.scrollLeft = Math.max(0, current.left - dx);
+    element.scrollTop = Math.max(0, current.top - dy);
   };
 
   const endDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -381,6 +429,12 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
     drag.current = null;
     if (element !== null && element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId);
     setDragging(false);
+  };
+
+  const cancelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // A cancelled pointer never produces a click, so nothing is left to swallow.
+    moved.current = false;
+    endDrag(event);
   };
 
   const onDoubleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -391,7 +445,7 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
       fit();
       return;
     }
-    applyScale(ideaTreeZoomScale(scaleRef.current, DOUBLE_CLICK_STEP));
+    applyScale(ideaTreeZoomScale(scaleRef.current, DOUBLE_CLICK_STEP), anchorOf(event.clientX, event.clientY));
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -411,109 +465,124 @@ export function IdeaTreeView({ graph, selectedId, onSelect }: { graph: IdeaTreeG
 
   if (!layout.nodes.length) return <p className="idea-tree-empty">{t.empty}</p>;
   return (
-    <div
-      aria-keyshortcuts="+ - 0"
-      aria-label={t.tree}
-      className={`idea-tree${dragging ? " is-dragging" : ""}${pannable ? " is-pannable" : ""}`}
-      onDoubleClick={onDoubleClick}
-      onKeyDown={onKeyDown}
-      onPointerCancel={endDrag}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      ref={box}
-      role="group"
-      tabIndex={0}
-    >
-      <div className="idea-tree-zoom" role="group" aria-label={t.zoom.aria}>
-        <button
-          aria-label={t.zoom.out}
-          className="idea-tree-zoom-button"
-          disabled={scale <= IDEA_TREE_ZOOM_MIN}
-          onClick={() => applyScale(ideaTreeZoomScale(scale, 1 / ZOOM_STEP))}
-          title={t.zoom.out}
-          type="button"
-        >−</button>
-        <output aria-live="off" className="idea-tree-zoom-level">{Math.round(scale * 100)}%</output>
-        <button
-          aria-label={t.zoom.in}
-          className="idea-tree-zoom-button"
-          disabled={scale >= IDEA_TREE_ZOOM_MAX}
-          onClick={() => applyScale(ideaTreeZoomScale(scale, ZOOM_STEP))}
-          title={t.zoom.in}
-          type="button"
-        >＋</button>
-        <button className="idea-tree-zoom-fit" onClick={fit} title={t.zoom.fit} type="button">{t.zoom.fit}</button>
+    <div className="idea-tree-shell">
+      {/* The bar is a sibling of the scroll container, in the shell's own
+          header: inside `.idea-tree` a sticky bar would be pinned vertically
+          but would scroll away sideways with the drawing. */}
+      <div className="idea-tree-head">
+        <div className="idea-tree-zoom" role="group" aria-label={t.zoom.aria}>
+          <button
+            aria-label={t.zoom.out}
+            className="idea-tree-zoom-button"
+            disabled={scale <= IDEA_TREE_ZOOM_MIN}
+            onClick={() => applyScale(ideaTreeZoomScale(scale, 1 / ZOOM_STEP))}
+            title={t.zoom.out}
+            type="button"
+          >−</button>
+          <output aria-live="off" className="idea-tree-zoom-level">{Math.round(scale * 100)}%</output>
+          <button
+            aria-label={t.zoom.in}
+            className="idea-tree-zoom-button"
+            disabled={scale >= IDEA_TREE_ZOOM_MAX}
+            onClick={() => applyScale(ideaTreeZoomScale(scale, ZOOM_STEP))}
+            title={t.zoom.in}
+            type="button"
+          >＋</button>
+          <button className="idea-tree-zoom-fit" onClick={fit} title={t.zoom.fit} type="button">{t.zoom.fit}</button>
+        </div>
       </div>
-      {/* The fit box takes the scaled size, so the scrollbars follow what is
-          drawn; the plane inside keeps the layout's own coordinates. */}
-      <div className="idea-tree-fit" style={{ height: layout.height * scale, width: layout.width * scale }}>
-        <div
-          className="idea-tree-plane"
-          style={{ height: layout.height, transform: `scale(${scale})`, width: layout.width }}
-        >
-          {/* The edges are drawn first and the nodes sit over them, so a
-              selection ring is never cut by a line that arrives at the same
-              corner. */}
-          <svg aria-hidden="true" className="idea-tree-edges" height={layout.height} width={layout.width}>
-            <defs>
-              <marker id="idea-tree-arrow" markerHeight="6" markerUnits="userSpaceOnUse" markerWidth="6" orient="auto" refX="5" refY="3" viewBox="0 0 6 6">
-                <path className="idea-tree-arrowhead" d="M0 0 6 3 0 6Z" />
-              </marker>
-            </defs>
-            {layout.edges.map(({ from, to }) => {
-              const x1 = from.x;
-              const y1 = from.y + NODE_H / 2;
-              const x2 = to.x;
-              const y2 = to.y - NODE_H / 2 - 3;
-              // A pruned branch is a branch the engine stopped following: the
-              // line says so before the node's own badge does.
-              const pruned = to.node.searchStatus === "pruned";
+      <div
+        aria-keyshortcuts="+ - 0"
+        aria-label={t.tree}
+        className={`idea-tree${dragging ? " is-dragging" : ""}${pannable ? " is-pannable" : ""}`}
+        onClickCapture={(event) => {
+          // The pointer-up that ends a drag still produces a click on whatever
+          // is underneath it; swallow that one so panning never selects a node.
+          if (!moved.current) return;
+          moved.current = false;
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        onDoubleClick={onDoubleClick}
+        onKeyDown={onKeyDown}
+        onPointerCancel={cancelDrag}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        ref={box}
+        role="group"
+        tabIndex={0}
+      >
+        {/* The fit box takes the scaled size, so the scrollbars follow what is
+            drawn; the plane inside keeps the layout's own coordinates. */}
+        <div className="idea-tree-fit" style={{ height: layout.height * scale, width: layout.width * scale }}>
+          <div
+            className="idea-tree-plane"
+            style={{ height: layout.height, transform: `scale(${scale})`, width: layout.width }}
+          >
+            {/* The edges are drawn first and the nodes sit over them, so a
+                selection ring is never cut by a line that arrives at the same
+                corner. */}
+            <svg aria-hidden="true" className="idea-tree-edges" height={layout.height} width={layout.width}>
+              <defs>
+                <marker id="idea-tree-arrow" markerHeight="6" markerUnits="userSpaceOnUse" markerWidth="6" orient="auto" refX="5" refY="3" viewBox="0 0 6 6">
+                  <path className="idea-tree-arrowhead" d="M0 0 6 3 0 6Z" />
+                </marker>
+              </defs>
+              {layout.edges.map(({ from, to }) => {
+                const x1 = from.x;
+                const y1 = from.y + NODE_H / 2;
+                const x2 = to.x;
+                const y2 = to.y - NODE_H / 2 - 3;
+                // A pruned branch is a branch the engine stopped following: the
+                // line says so before the node's own badge does.
+                const pruned = to.node.searchStatus === "pruned";
+                return (
+                  <path
+                    className={`idea-tree-edge${pruned ? " is-pruned" : ""}`}
+                    d={`M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`}
+                    key={`${from.node.id}-${to.node.id}`}
+                    markerEnd="url(#idea-tree-arrow)"
+                  />
+                );
+              })}
+            </svg>
+            {layout.nodes.map((placed) => {
+              const current = placed.node;
+              const kind = current.kind ? (t.kind[current.kind] ?? current.kind) : undefined;
+              const live = current.status === "running";
+              const classes = [
+                "idea-tree-node",
+                "idea-tree-node-button",
+                `is-${current.status}`,
+                `is-search-${current.searchStatus}`,
+                current.kind ? `is-kind-${current.kind}` : "",
+                selectedId === current.id ? "is-selected" : "",
+              ].filter(Boolean).join(" ");
               return (
-                <path
-                  className={`idea-tree-edge${pruned ? " is-pruned" : ""}`}
-                  d={`M ${x1} ${y1} C ${x1} ${(y1 + y2) / 2}, ${x2} ${(y1 + y2) / 2}, ${x2} ${y2}`}
-                  key={`${from.node.id}-${to.node.id}`}
-                  markerEnd="url(#idea-tree-arrow)"
-                />
+                <button
+                  aria-pressed={selectedId === current.id}
+                  className={classes}
+                  key={current.id}
+                  onClick={() => onSelect?.(current)}
+                  style={{ height: NODE_H, left: placed.x - NODE_W / 2, top: placed.y - NODE_H / 2, width: NODE_W }}
+                  title={current.hypothesis}
+                  type="button"
+                >
+                  <span className="idea-tree-node-head">
+                    {kind ? <span className="idea-tree-kind">{kind}</span> : null}
+                    {current.searchStatus === "pruned" ? <span className="idea-tree-pruned">{t.search.pruned}</span> : null}
+                  </span>
+                  <span className="idea-tree-hypothesis">{current.hypothesis}</span>
+                  <span className="idea-tree-node-foot">
+                    <span className={`idea-tree-dot${live ? " is-live" : ""}`} />
+                    <span>{t.status[current.status] ?? current.status}</span>
+                    <span className="idea-tree-node-score">{ideaScoreText(current.score)}</span>
+                  </span>
+                </button>
               );
             })}
-          </svg>
-          {layout.nodes.map((placed) => {
-            const current = placed.node;
-            const kind = current.kind ? (t.kind[current.kind] ?? current.kind) : undefined;
-            const live = current.status === "running";
-            const classes = [
-              "idea-tree-node",
-              "idea-tree-node-button",
-              `is-${current.status}`,
-              `is-search-${current.searchStatus}`,
-              current.kind ? `is-kind-${current.kind}` : "",
-              selectedId === current.id ? "is-selected" : "",
-            ].filter(Boolean).join(" ");
-            return (
-              <button
-                aria-pressed={selectedId === current.id}
-                className={classes}
-                key={current.id}
-                onClick={() => onSelect?.(current)}
-                style={{ height: NODE_H, left: placed.x - NODE_W / 2, top: placed.y - NODE_H / 2, width: NODE_W }}
-                title={current.hypothesis}
-                type="button"
-              >
-                <span className="idea-tree-node-head">
-                  {kind ? <span className="idea-tree-kind">{kind}</span> : null}
-                  {current.searchStatus === "pruned" ? <span className="idea-tree-pruned">{t.search.pruned}</span> : null}
-                </span>
-                <span className="idea-tree-hypothesis">{current.hypothesis}</span>
-                <span className="idea-tree-node-foot">
-                  <span className={`idea-tree-dot${live ? " is-live" : ""}`} />
-                  <span>{t.status[current.status] ?? current.status}</span>
-                  <span className="idea-tree-node-score">{ideaScoreText(current.score)}</span>
-                </span>
-              </button>
-            );
-          })}
+          </div>
         </div>
       </div>
     </div>

@@ -146,6 +146,26 @@
 
 /* ── the tree ──────────────────────────────────────────────────────────────── */
 
+/* The shell stacks the control bar over the drawing in the column: the bar is
+ * the shell's header, so it is outside whatever the drawing scrolls. A sticky
+ * bar inside `.idea-tree` is pinned only on the vertical axis and disappears
+ * off the left edge as soon as a wide drawing is scrolled sideways. */
+.idea-tree-shell {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* The header does not scroll and does not overlay the drawing: the bar keeps
+ * its corner whether the tree is at 40% or 200% and however far it is scrolled,
+ * and it never covers a node. */
+.idea-tree-head {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 0 4px;
+}
+
 .idea-tree {
   position: relative;
   flex: 0 0 auto;
@@ -179,15 +199,11 @@
   outline-offset: -2px;
 }
 
-/* The zoom controls sit above the drawing and stay there while it scrolls, so
- * they are reachable at any scale without taking a corner of the tree itself. */
+/* The zoom controls sit in the shell's header, outside the scroll container,
+ * so they stay reachable on both axes at any scale without taking a corner of
+ * the drawing itself. */
 .idea-tree-zoom {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
-  width: fit-content;
-  margin: 0 0 4px auto;
   align-items: center;
   gap: 2px;
   border: 1px solid var(--border);
