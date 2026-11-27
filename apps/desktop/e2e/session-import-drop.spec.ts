@@ -106,6 +106,26 @@ test("a package the dialog could not read leaves no error behind when the import
   await expect(page.locator(".research-package-error")).toHaveCount(0);
 });
 
+test("a drag over an open palette promises nothing, and releasing uploads nothing", async ({ page }) => {
+  const mock = await installMockApi(page, { sessions: [makeSession()] });
+  await page.goto("/");
+  await expect(page.locator(".side-row.is-active .side-session-name")).toHaveCount(1);
+
+  // 搜索 is the one modal that paints under the drop overlay, so a drag over it
+  // used to raise "松开即上传" and then discard the drop.
+  await page.keyboard.press("Control+k");
+  const palette = page.locator(".search-panel");
+  await expect(palette).toBeVisible();
+
+  const dragged = await transfer(page, "over-palette.csv", "text/csv");
+  await palette.dispatchEvent("dragenter", { dataTransfer: dragged });
+  await expect(page.locator(".drop-overlay")).toHaveCount(0);
+
+  await palette.dispatchEvent("drop", { dataTransfer: dragged });
+  expect(mock.state.files).toHaveLength(0);
+  await expect(page.locator(".attach-card")).toHaveCount(0);
+});
+
 test("a package dropped on the import dialog and then cancelled leaves the composer empty", async ({ page }) => {
   const mock = await installMockApi(page, { sessions: [makeSession()] });
   await page.goto("/");
