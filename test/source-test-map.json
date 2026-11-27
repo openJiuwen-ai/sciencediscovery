@@ -4044,6 +4044,18 @@
           "source": "apps/desktop/e2e/search-dialog.spec.ts"
         }
       ]
+    },
+    {
+      "owner": "desktop",
+      "risk": "P1",
+      "source": "apps/desktop/src/views/search-hit-icons.tsx",
+      "tests": [
+        {
+          "complexity": "C2",
+          "layer": "ut",
+          "source": "apps/desktop/tests/search-hit-icons.test.tsx"
+        }
+      ]
     }
   ]
 }

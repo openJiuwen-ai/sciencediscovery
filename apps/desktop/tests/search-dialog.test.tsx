@@ -102,6 +102,17 @@ test("全部 groups the hits under three headings, and 项目 shows only Project
   assert.doesNotMatch(onlyProjects, /figure\.png/u, "a kind shows only its own hits");
 });
 
+test("every hit carries the mark of its kind", () => {
+  const markup = render({
+    results: answer([
+      hit("project", "材料研究", "2026-10-06T00:00:00.000Z"),
+      hit("session", "probe run", "2026-10-05T00:00:00.000Z"),
+      hit("artifact", "probe-figure.png", "2026-10-04T00:00:00.000Z", { path: "out/probe-figure.png" }),
+    ]),
+  });
+  assert.equal((markup.match(/class="search-hit-icon"/gu) ?? []).length, 3);
+});
+
 test("the footer is the only filter, and it offers 全部 / 项目 / 会话 / 产物", () => {
   const markup = render({ results: answer([hit("project", "材料", "2026-01-02T00:00:00.000Z")]) });
   const foot = markup.slice(markup.indexOf('class="search-panel-foot"'));
