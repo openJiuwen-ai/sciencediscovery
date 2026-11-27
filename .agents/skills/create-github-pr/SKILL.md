@@ -58,6 +58,9 @@ assign you.
    publish a release.
 7. **The title and the body are English.** See [github](../github/SKILL.md).
    Write Chinese only when the person who asked explicitly wants Chinese.
+8. **A user-visible change carries before/after screenshots in the body, in
+   both locales.** A diff cannot show a label, a layout or a colour, so the
+   frames are the evidence: same view, same viewport, linked from a commit.
 
 ## Run the layers first
 
@@ -168,6 +171,11 @@ original meaning of its title — never flatten it to `Sync from GitCode`.
 scenario → expected outcome → actual outcome; commands; passed / failed /
 blocked / skipped counts and failure attribution.>
 
+## UI screenshots
+<Required when the change is visible to a user. Before and after frames of the
+same view, zh-CN and en, each linked from a commit SHA; name the surface, the
+viewport, how the state was produced, and what the frames do not cover.>
+
 ## Release
 Release category: <one release:* label>
 User impact: <what a user notices; or the internal scope if none>
@@ -177,6 +185,15 @@ Compatibility and migration: <none; or the incompatibility and the steps>
 The body's `Release category:` is this project's own convention for carrying
 the intent — it is not a GitHub instruction and it does not label anything. The
 label on the pull request is what the release note reads.
+
+For a user-visible change the `UI screenshots` section is not decorative: a
+renamed string, a moved control or a new empty state is invisible in the diff,
+and one locale can carry a rename the other one missed. Take both frames from
+the same viewport and the same crop so the only difference between them is the
+change; push them to a separate branch of your own fork, link the **commit**
+SHA rather than the branch, and open every link once before you request review.
+[CONTRIBUTING.md](../../../CONTRIBUTING.md#ui-changes-need-screenshots) states
+the same rule for people who do not work through this skill.
 
 Only a change with no user-observable product path (a comment, a pure doc edit)
 may write **not applicable** in the E2E section, with a concrete reason.
