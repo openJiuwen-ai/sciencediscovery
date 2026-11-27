@@ -141,8 +141,16 @@ test("Escape 关闭设置后焦点回到打开它的「设置」按钮", async (
   await installMockApi(page, { sessions: [] });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "设置", exact: true }).click();
+  // Opened from the keyboard, and the focus is put inside the panel by hand
+  // before Escape: a case that only opened by click would pass on a build that
+  // never moves the focus at all, because the click leaves it on 设置 already.
+  await page.locator('[data-guide="settings"]').focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
+  await page.locator(".config-panel .settings-nav-head button").first().focus();
+  const inside = await focused(page);
+  expect(inside.inDialog, `the focus was not in the dialog before Escape (${inside.key})`).toBe(true);
+
   await page.keyboard.press("Escape");
   await expect(page.locator(".config-panel")).toHaveCount(0);
 
