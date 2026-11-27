@@ -120,16 +120,22 @@ export function createIdeaResearchClient(options: {
         method: "POST", headers: { "content-type": "application/json", ...(target.internalToken ? { authorization: `Bearer ${target.internalToken}` } : {}) },
         body: JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs),
       });
-      // A refusal is judged by the status, not by the body. A gateway's HTML 502
-      // is still an answer, and nothing started behind it; asking the body to be
-      // JSON first would turn it into a lost answer and rethrow a parse error
-      // instead of the status that was actually given.
+      // A refusal is judged by the status, not by the body. A gateway's HTML page
+      // is still an answer, and asking it to be JSON first would rethrow a parse
+      // error instead of the status that was actually given.
       let body: any;
       try { body = await response.json(); } catch { body = undefined; }
       if (!response.ok) {
         const detail = body === undefined ? undefined
           : typeof body?.detail === "string" ? body.detail : JSON.stringify(body?.detail);
-        throw new CommandRefused(detail || `HTTP ${response.status}`, response.status);
+        const message = detail || `HTTP ${response.status}`;
+        // The engine's own answer is a verdict: it replied, so nothing started.
+        // A 5xx is not a verdict. The engine saves `running` and schedules the run
+        // before it builds its answer, so an error while producing that answer
+        // arrives with the run already going — the same case as a lost answer, and
+        // it takes the read-back below.
+        if (response.status < 500) throw new CommandRefused(message, response.status);
+        throw new Error(message);
       }
       if (body === undefined) throw new Error(`The answer to the ${operation} command could not be read.`);
       const views: IdeaResearchView[] = body.items ?? (body.research ? [body] : []);

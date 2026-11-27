@@ -523,7 +523,7 @@ test("a command the engine refused gives its grant back", async () => {
     const payload = JSON.parse(init.body) as { operation: string };
     operations.push(payload.operation);
     if (payload.operation === "continue") {
-      return { ok: false, json: async () => ({ detail: "Research is not resumable" }) } as never;
+      return { ok: false, status: 409, json: async () => ({ detail: "Research is not resumable" }) } as never;
     }
     return { ok: true, json: async () => researchView("paused") } as never;
   }) as never;
@@ -645,7 +645,7 @@ test("a create whose research already ended still reports the research it made",
   }
 });
 
-test("a proxy's HTML error is the engine's refusal, not a lost answer", async () => {
+test("a non-JSON answer that refuses the command is still a refusal", async () => {
   const tokens = recordingTokens();
   const operations: string[] = [];
   const original = globalThis.fetch;
@@ -653,16 +653,73 @@ test("a proxy's HTML error is the engine's refusal, not a lost answer", async ()
     const payload = JSON.parse(init.body) as { operation: string };
     operations.push(payload.operation);
     if (payload.operation === "create") {
-      // A gateway in front of the engine answers with a page, not with JSON.
-      return { ok: false, status: 502, json: async () => { throw new SyntaxError("Unexpected token '<'"); } } as never;
+      // The engine refuses with a page, not with JSON: the status decides, not the body.
+      return { ok: false, status: 409, json: async () => { throw new SyntaxError("Unexpected token '<'"); } } as never;
     }
     return { ok: true, json: async () => researchView("paused") } as never;
   }) as never;
   const client = clientWith(tokens);
   try {
-    await assert.rejects(client.command("s1", "create", { objective: "Compare treatments" }), /HTTP 502/);
+    await assert.rejects(client.command("s1", "create", { objective: "Compare treatments" }), /HTTP 409/);
     assert.deepEqual(operations, ["create"], "an answered refusal needs no read-back");
     assert.equal(tokens.last(tokens.ids()[0]), undefined, "nothing started, so the grant goes back");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a 5xx is a lost answer, not a refusal", async () => {
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "continue") {
+      return { ok: false, status: 503, json: async () => ({ detail: "engine busy" }) } as never;
+    }
+    return { ok: true, json: async () => researchView(reads++ === 0 ? "paused" : "running") } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    // The engine saves `running` and schedules the run before it builds its answer,
+    // so a 503 arrives with the run already going: that is a lost answer, and the
+    // read-back decides before any credential is taken away.
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.equal(view.research.status, "running");
+    assert.deepEqual(operations, ["get", "continue", "get"], "the 5xx took the read-back path");
+    assert.ok(tokens.last("research-1"), "the run that started keeps its credential");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a read-back that itself answers 5xx keeps the grant", async () => {
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "continue") {
+      return { ok: false, status: 503, json: async () => ({ detail: "engine busy" }) } as never;
+    }
+    // The resumability read answers; the read-back after the lost command does not.
+    if (reads++ === 0) return { ok: true, json: async () => researchView("paused") } as never;
+    return { ok: false, status: 503, json: async () => ({ detail: "engine busy" }) } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(
+      client.command("s1", "continue", { researchId: "research-1" }),
+      /could not be read back.*credential was kept/s,
+    );
+    assert.deepEqual(operations, ["get", "continue", "get"], "the read-back is made, and it failed");
+    assert.ok(tokens.last("research-1"), "a 5xx read-back says nothing about whether the run is live");
   } finally {
     client.close();
     globalThis.fetch = original;
