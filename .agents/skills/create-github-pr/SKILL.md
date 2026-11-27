@@ -60,8 +60,8 @@ assign you.
    Write Chinese only when the person who asked explicitly wants Chinese.
 8. **A user-visible change carries before/after screenshots in the body, in
    both locales.** A diff cannot show a label, a layout or a colour, so the
-   frames are the evidence: same view, same viewport, committed under
-   `docs/screenshots/<topic>/`, redacted before they are published.
+   frames are the evidence: same view, same viewport, hosted outside the
+   repository and pinned to a commit, redacted before they are published.
 
 ## Run the layers first
 
@@ -174,9 +174,9 @@ blocked / skipped counts and failure attribution.>
 
 ## UI screenshots
 <Required when the change is visible to a user. Before and after frames of the
-same view, in zh-CN and en, committed under `docs/screenshots/<topic>/` with a
-README that says how they were captured, what is mocked and what each frame
-shows; embed them here from a commit SHA.>
+same view, in zh-CN and en, hosted outside the repository and embedded here
+from a commit SHA, each with a caption naming the surface, the viewport, the
+harness, what is mocked and what it shows. Do not commit the images.>
 
 ## Release
 Release category: <one release:* label>
@@ -192,10 +192,11 @@ For a user-visible change the `UI screenshots` section is not decorative: a
 renamed string, a moved control or a new empty state is invisible in the diff,
 and one locale can carry a rename the other one missed. Capture before and after
 from the same viewport and the same crop so the change is the only difference,
-commit them under `docs/screenshots/<topic>/` with a `README.md` that says how
-they were taken and what is mocked, and embed them in the body from a commit SHA
-— a branch moves and the body silently starts showing something else. Redact
-keys, tokens and absolute paths first.
+host them outside the repository — a branch in your own fork is the usual place
+— and embed them from a commit SHA: a branch moves and the body silently starts
+showing something else, and a frame committed to the repository stays in its
+history after the pull request is reverted. Redact keys, tokens and absolute
+paths before publishing.
 [CONTRIBUTING.md](../../../CONTRIBUTING.md#ui-changes-need-screenshots) states
 the same rule for people who do not work through this skill, and is the wording
 of record: this copy exists because an agent reads this file and not the guide,
