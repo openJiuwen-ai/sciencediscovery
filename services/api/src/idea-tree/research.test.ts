@@ -17,6 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 import { createIdeaResearchClient } from "./research.js";
+import { RunTokenRegistry } from "../evolution/llm-proxy.js";
 
 const GLOBAL = {
   templateId: "scientific-hypothesis-general/v1",
@@ -318,5 +319,106 @@ test("a stream the consumer throws away stops counting as a listener", async (t)
   } finally {
     client.close();
     engine.restore();
+  }
+});
+
+/** A store whose Session can be deleted, so `getSession` can answer nothing. */
+function deletableStore() {
+  let session: { id: string; projectId: string } | undefined = { id: "s1", projectId: "p1" };
+  return {
+    ...storeWith({}),
+    getSession: () => session,
+    assertSessionWritable: () => {
+      if (!session) throw new Error("Session not found");
+      return session;
+    },
+    deleteSessionRecord: () => { session = undefined; },
+  };
+}
+
+/**
+ * A client that created a research with a real `RunTokenRegistry` grant for one
+ * Session, plus the two failures a Session delete can hit on the way to the
+ * engine.
+ */
+async function startedGrant() {
+  const sent: Array<{ operation: string; researchId?: string; llm?: { token: string } }> = [];
+  let cleanupFailure: { status: number } | { transport: true } | undefined;
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as (typeof sent)[number];
+    sent.push(payload);
+    if (cleanupFailure && "transport" in cleanupFailure) throw new TypeError("fetch failed");
+    if (cleanupFailure) {
+      return { ok: false, status: cleanupFailure.status, json: async () => ({ detail: "engine unavailable" }) } as never;
+    }
+    return { ok: true, json: async () => researchView("running", payload.researchId) } as never;
+  }) as never;
+  const store = deletableStore();
+  const tokens = new RunTokenRegistry();
+  const client = createIdeaResearchClient({
+    url: "http://127.0.0.1:1",
+    apiOrigin: "http://127.0.0.1:2",
+    store: store as never,
+    tokens,
+  });
+  const created = await client.command("s1", "create", { objective: "Compare treatments" });
+  return {
+    client, store, tokens,
+    id: created.research.id as string,
+    token: sent[0]!.llm!.token,
+    operations: () => sent.map((payload) => payload.operation),
+    failCleanup: (failure: { status: number } | { transport: true }) => { cleanupFailure = failure; },
+    restore: () => { globalThis.fetch = original; },
+  };
+}
+
+test("a Session delete the sidecar rejects still retires that Session's research grants", async () => {
+  const run = await startedGrant();
+  try {
+    assert.ok(run.tokens.resolve(run.id, run.token), "the live research's grant answers before the delete");
+    run.failCleanup({ status: 503 });
+    await assert.rejects(run.client.cleanup("p1", "s1"), /Research cleanup failed: HTTP 503/,
+      "the engine-side cleanup failure still surfaces");
+    assert.deepEqual(run.operations(), ["create", "delete"], "the sidecar delete was still attempted");
+    assert.equal(run.tokens.resolve(run.id, run.token), undefined,
+      "the credential of a deleted Session does not outlive it");
+  } finally {
+    run.client.close();
+    run.restore();
+  }
+});
+
+test("a Session delete that never reaches the sidecar still retires its research grants", async () => {
+  const run = await startedGrant();
+  try {
+    assert.ok(run.tokens.resolve(run.id, run.token), "the live research's grant answers before the delete");
+    run.failCleanup({ transport: true });
+    await assert.rejects(run.client.cleanup("p1", "s1"), /fetch failed/);
+    assert.equal(run.tokens.resolve(run.id, run.token), undefined,
+      "a transport error must not leak the credential either");
+  } finally {
+    run.client.close();
+    run.restore();
+  }
+});
+
+test("a grant whose Session record is gone is retired by the sweep instead of re-read", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const run = await startedGrant();
+  try {
+    assert.ok(run.tokens.resolve(run.id, run.token), "the live research's grant answers before the delete");
+    run.store.deleteSessionRecord();
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.equal(run.tokens.resolve(run.id, run.token), undefined,
+      "a missing Session record is terminal, so the orphan grant is retired");
+    assert.deepEqual(run.operations(), ["create"], "no read is attempted for a Session that no longer exists");
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(run.operations(), ["create"], "the retired grant stops costing a wakeup every sweep");
+  } finally {
+    run.client.close();
+    run.restore();
   }
 });
