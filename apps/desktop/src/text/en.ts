@@ -1123,6 +1123,7 @@ export const EN: Text = {
       /** The × inside the search field that puts the whole list back. */
       clearSearch: "Clear search",
       noMatches: "No skills match your search.",
+      loadFailure: "This bundled skill failed to load",
 
       heading: "Skills",
       jiuwenSwarmOnly: "The current agent backend is not JiuwenSwarm, so skill switches are unavailable.",

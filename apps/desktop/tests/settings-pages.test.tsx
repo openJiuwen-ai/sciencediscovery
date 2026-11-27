@@ -48,7 +48,7 @@ import { RuntimeSettings } from "../src/views/settings/RuntimeSettings.js";
 import { SkillForm } from "../src/views/settings/SkillForm.js";
 import { SkillsSettings } from "../src/views/settings/SkillsSettings.js";
 import { skillMeta } from "../src/views/settings/skill-meta.js";
-import { AbilityPicker } from "../src/views/settings/system/AbilityPicker.js";
+import { AbilityPicker, selectableSkills } from "../src/views/settings/system/AbilityPicker.js";
 import { McpServers } from "../src/views/settings/system/McpServers.js";
 import { MemorySettings } from "../src/views/settings/system/MemorySettings.js";
 import { SpecialistForm } from "../src/views/settings/system/SpecialistForm.js";
@@ -798,6 +798,43 @@ describe("the specialist form", () => {
     const connectors = pick("connectors");
     assert.ok(connectors.includes("arXiv"), "the picker does not list the connector");
   });
+
+  it("offers no bundled package that failed to load in the specialist picker", () => {
+    const valid = skill("draft-review", "初稿审阅");
+    const failed = {
+      description: "Failed to load: SKILL.md frontmatter is invalid YAML",
+      hash: "",
+      id: "idea-tree-team",
+      loadFailure: { code: "SKILL_VALIDATION", message: "SKILL.md frontmatter is invalid YAML" },
+      name: "idea-tree-team",
+      readOnly: true,
+      source: "built-in",
+    } as unknown as SkillDescriptor;
+
+    assert.deepEqual(
+      selectableSkills([failed, valid]).map((entry) => entry.id),
+      ["draft-review"],
+      "the picker's input still offers a package the catalog reports as failed",
+    );
+
+    const markup = renderToStaticMarkup(
+      <AbilityPicker
+        connectors={[]}
+        initialTab="skills"
+        onApply={noConfirm}
+        onClose={noConfirm}
+        selectedConnectorIds={[]}
+        // A saved specialist may already name the now-broken package; it must
+        // not stay selected through the picker either.
+        selectedSkillIds={["idea-tree-team", "draft-review"]}
+        skills={[failed, valid]}
+      />,
+    );
+    assert.ok(markup.includes("初稿审阅"), "the valid skill is missing from the picker");
+    assert.ok(!markup.includes("idea-tree-team"), "the failed package is still listed in the picker");
+    assert.ok(!markup.includes("Failed to load"), "the server's English failure text reached the picker");
+    assert.equal(markup.match(/checked=""/gu)?.length, 1, "the failed package is still selected");
+  });
 });
 
 describe("the add-skill form", () => {
@@ -899,6 +936,29 @@ describe("the skill card", () => {
         assert.ok(markup.includes(TEXT.settings.skills.cardTag.external));
       }
     } finally { setLanguage(previous); }
+  });
+
+  it("shows a bundled package that failed to load without any switch, detail or row action", () => {
+    const failedClient = new StubClient().asClient();
+    writeSettingsCache(failedClient, "skills:jiuwenswarm", {
+      enabled: ["idea-tree-team"], native: false, switchesAvailable: true, jiuwenSwarmSkills: [],
+      skills: [skill({
+        description: "Failed to load: SKILL.md frontmatter is invalid YAML",
+        hash: "",
+        id: "idea-tree-team",
+        loadFailure: { code: "SKILL_VALIDATION", message: "SKILL.md frontmatter is invalid YAML" },
+        name: "idea-tree-team",
+        source: "built-in",
+      })],
+    });
+    const markup = renderToStaticMarkup(<SkillsSettings client={failedClient} />);
+    assert.ok(markup.includes(TEXT.settings.skills.loadFailure), "the failed row has no localized reason");
+    assert.ok(markup.includes("SKILL.md frontmatter is invalid YAML"), "the validator message is missing");
+    assert.ok(!markup.includes('role="switch"'), "a failed package still has a switch");
+    assert.ok(!markup.includes('<button class="settings-card-main"'), "a failed package still opens a detail view");
+    assert.ok(markup.includes("settings-card-main is-failed"), "the failed row is not marked as a failure");
+    assert.ok(!markup.includes(TEXT.settings.skills.rowMenu.actions("idea-tree-team")), "a failed package still has row actions");
+    assert.ok(!markup.includes(TEXT.settings.skills.toggle("idea-tree-team")), "a failed package still has a toggle");
   });
 
   it("names the revision a skill was installed at instead of the server's label", () => {

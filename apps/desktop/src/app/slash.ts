@@ -32,12 +32,16 @@ export function slashQuery(text: string): string | undefined {
 /** How many skills the palette shows at once; past this the list is a search. */
 const PALETTE_LIMIT = 8;
 
-/** The skills whose name or id matches what was typed after the slash. */
+/** The skills whose name or id matches what was typed after the slash. A
+ *  bundled package that failed to load is listed in settings so the broken file
+ *  is visible, but it has no prompt to expand: offering it here would only
+ *  write a command the service cannot resolve. */
 export function skillChoices(skills: SkillDescriptor[], query: string): SkillDescriptor[] {
+  const selectable = skills.filter((skill) => skill.loadFailure === undefined);
   const needle = query.trim().toLocaleLowerCase();
   const matches = needle === ""
-    ? skills
-    : skills.filter((skill) =>
+    ? selectable
+    : selectable.filter((skill) =>
       skill.name.toLocaleLowerCase().includes(needle)
       || skill.id.toLocaleLowerCase().includes(needle));
   return matches.slice(0, PALETTE_LIMIT);

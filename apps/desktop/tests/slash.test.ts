@@ -60,6 +60,21 @@ describe("the palette offers the skills the filter names", () => {
     const many = Array.from({ length: 40 }, (_, index) => ({ id: `s${index}`, name: `S${index}` })) as SkillDescriptor[];
     assert.equal(skillChoices(many, "").length, 8);
   });
+
+  it("leaves out a bundled skill whose package failed to load", () => {
+    const broken = {
+      description: "Failed to load: SKILL.md frontmatter is invalid YAML",
+      id: "idea-tree-team",
+      loadFailure: { code: "SKILL_VALIDATION", message: "SKILL.md frontmatter is invalid YAML" },
+      name: "idea-tree-team",
+    } as SkillDescriptor;
+    assert.deepEqual(skillChoices([...SKILLS, broken], "").map((skill) => skill.id), [
+      "skill-creator",
+      "distill-session",
+      "sepsis-endotyping",
+    ]);
+    assert.deepEqual(skillChoices([broken], "idea"), []);
+  });
 });
 
 describe("picking a skill writes the command, not the description", () => {
