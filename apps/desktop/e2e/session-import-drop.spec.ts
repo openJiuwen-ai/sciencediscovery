@@ -84,6 +84,28 @@ test("a package dropped on the dialog itself, not on its dashed zone, is not upl
   await expect(page.locator(".attach-card")).toHaveCount(0);
 });
 
+test("a package the dialog could not read leaves no error behind when the import is cancelled", async ({ page }) => {
+  await installMockApi(page, { sessions: [makeSession()] });
+  await page.goto("/");
+  await expect(page.locator(".side-row.is-active .side-session-name")).toHaveCount(1);
+  await page.getByRole("button", { name: "导入会话", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "导入会话" });
+  await expect(dialog).toBeVisible();
+
+  // This control plane does not answer the inspection route, so the dialog says
+  // it could not read the package — the red line the reader sees while it is open.
+  const dragged = await transfer(page, "not-a-package.sdresearch", "application/octet-stream");
+  await page.locator(".research-package-upload").dispatchEvent("dragenter", { dataTransfer: dragged });
+  await page.locator(".research-package-upload").dispatchEvent("drop", { dataTransfer: dragged });
+  await expect(dialog.locator(".research-package-error")).toBeVisible();
+
+  // Cancelling is the reader abandoning the import. Nothing of it may survive on
+  // the page: an error line under the conversation reads as the cancel failing.
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".research-package-error")).toHaveCount(0);
+});
+
 test("a package dropped on the import dialog and then cancelled leaves the composer empty", async ({ page }) => {
   const mock = await installMockApi(page, { sessions: [makeSession()] });
   await page.goto("/");
