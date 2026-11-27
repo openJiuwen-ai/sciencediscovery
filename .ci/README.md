@@ -333,6 +333,23 @@ immediately returns merge-queue runs to `ubuntu-latest`.
 GitHub's behavior is documented in
 [Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).
 
+#### Dedicated light runner slots for merge-queue control jobs
+
+When the repository variable `CI_SELF_HOSTED_MERGE_QUEUE` is set to `'true'`
+(default unset / off), the seven lightweight credential-free control, planning,
+accounting, and gate jobs (`policy`, `l1`, `e2e-plan`, `coverage`, and
+`merge-gate` in `ci.yml`, plus `real-plan` and `real-report` in `real-e2e.yml`)
+route `merge_group` runs to dedicated self-hosted light runner slots labelled
+`[self-hosted, Linux, X64, sciencediscovery-light]`. Keeping these slots
+separate from heavier test runners prevents short decision/gate jobs from
+waiting behind hosted runner capacity or long-running test shards. When routed
+to a light slot, `l1`, `e2e-plan`, and `real-plan` skip the remote
+`setup-node` `pnpm` cache and reuse the container's local cache volume
+directly. `pull_request` (including forks), `workflow_dispatch`, `schedule`,
+`push`, and all credentialed or heavy test/build jobs never match
+`sciencediscovery-light`. Clearing `CI_SELF_HOSTED_MERGE_QUEUE` immediately
+returns all seven jobs to `ubuntu-latest`.
+
 ### Isolated JiuwenSwarm state
 
 Every test entry sets `JIUWENSWARM_HOME` under its own `CI_RUNTIME_DIR`:

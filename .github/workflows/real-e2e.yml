@@ -31,7 +31,7 @@ jobs:
   real-plan:
     name: Freeze real E2E matrix
     if: ${{ !cancelled() && github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
     timeout-minutes: 10
     environment: nightly-research
     outputs:
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: pnpm
+          cache: ${{ !(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true') && 'pnpm' || '' }}
       - uses: actions/download-artifact@v4
         if: ${{ inputs.profile == 'merge' }}
         with:
@@ -259,7 +259,7 @@ jobs:
     name: Account for real cases
     needs: [real-plan, real-e2e]
     if: ${{ always() && github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
