@@ -83,7 +83,15 @@ export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean):
       const taken = event.defaultPrevented;
       event.preventDefault();
       reset();
-      if (taken) return;
+      // A dialog on screen owns the drag as well, and most of its surface has no
+      // handler of its own: a package dropped a few pixels off the dashed zone
+      // lands on the header, the footer, the scrim or the file card that replaces
+      // the zone. Uploading that would put a file the reader never imported into
+      // the conversation behind the dialog — the very symptom that started this.
+      const target = event.target;
+      const insideDialog = target instanceof Element
+        && target.closest('.modal-backdrop, .config-backdrop, [aria-modal="true"]') !== null;
+      if (taken || insideDialog) return;
       if (latest.current.enabled) latest.current.onFiles(files);
     };
     // Bind each handler once and keep its own unbind, so the four listeners

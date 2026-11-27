@@ -59,6 +59,31 @@ test("a package dropped on the import dialog is not also uploaded as an attachme
   });
 });
 
+test("a package dropped on the dialog itself, not on its dashed zone, is not uploaded either", async ({ page }) => {
+  const mock = await installMockApi(page, { sessions: [makeSession()] });
+  await page.goto("/");
+  await expect(page.locator(".side-row.is-active .side-session-name")).toHaveCount(1);
+  await page.getByRole("button", { name: "导入会话", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "导入会话" });
+  await expect(dialog).toBeVisible();
+
+  // Most of the dialog is not a drop zone: the header, the 项目 select, the footer
+  // and the scrim. A reader aiming for the dashed area and missing it must not
+  // end up with the package in the conversation behind the dialog.
+  const dragged = await transfer(page, "missed-zone.sdresearch", "application/octet-stream");
+  for (const selector of [".modal-panel", ".modal-backdrop"]) {
+    await page.locator(selector).first().dispatchEvent("dragenter", { dataTransfer: dragged });
+    await page.locator(selector).first().dispatchEvent("drop", { dataTransfer: dragged });
+  }
+  expect(mock.state.files).toHaveLength(0);
+  await expect(page.locator(".attach-card")).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".attach-card")).toHaveCount(0);
+});
+
 test("a package dropped on the import dialog and then cancelled leaves the composer empty", async ({ page }) => {
   const mock = await installMockApi(page, { sessions: [makeSession()] });
   await page.goto("/");
