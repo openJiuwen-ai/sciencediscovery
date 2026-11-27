@@ -258,7 +258,7 @@ body.is-resizing {
 
 .side-label {
   padding: 24px 12px 8px;
-  color: #777;
+  color: var(--text-hint);
   font-size: 12px;
   line-height: 1;
 }
@@ -320,7 +320,7 @@ body.is-resizing {
    with the Project's name or its `+`/`⋯` in the row above. */
 .side-project-rule {
   padding: 2px 12px 4px 32px;
-  color: #a6a6a6;
+  color: var(--text-hint);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -444,7 +444,7 @@ body.is-resizing {
 
 .side-session-time {
   flex: 0 0 auto;
-  color: #808080;
+  color: var(--text-hint);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -471,7 +471,7 @@ body.is-resizing {
 
 .side-empty {
   padding: 8px 12px;
-  color: #a6a6a6;
+  color: var(--text-hint);
   font-size: 13px;
 }
 
@@ -482,7 +482,7 @@ body.is-resizing {
   align-items: center;
   padding: 0 12px 0 32px;
   border-radius: 8px;
-  color: #777;
+  color: var(--text-hint);
   font-size: 13px;
   /* The count is the point of this row: keep it on one line rather than
      wrapping a second line out of a 34px row. */
