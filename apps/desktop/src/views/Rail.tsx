@@ -79,16 +79,17 @@ export function Rail({ account, accountOpen, onOpenAccount, onOpenSettings, onSe
       <div className="rail-nav">
         <button
           aria-current={onTask ? "page" : undefined}
+          aria-label={TEXT.rail.task}
           className={`rail-item${onTask ? " is-active" : ""}`}
           onClick={onSelectTask}
           title={TEXT.rail.task}
           type="button"
         >
           <TaskGlyph />
-          <span>{TEXT.rail.task}</span>
         </button>
         <button
           aria-current={settingsOpen ? "page" : undefined}
+          aria-label={TEXT.rail.settings}
           className={`rail-item${settingsOpen ? " is-active" : ""}`}
           data-guide="settings"
           onClick={onOpenSettings}
@@ -96,7 +97,6 @@ export function Rail({ account, accountOpen, onOpenAccount, onOpenSettings, onSe
           type="button"
         >
           <SettingsGlyph />
-          <span>{TEXT.rail.settings}</span>
         </button>
       </div>
       {onOpenAccount ? (

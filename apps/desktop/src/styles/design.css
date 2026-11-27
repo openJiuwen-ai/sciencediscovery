@@ -103,21 +103,18 @@ body.is-resizing {
   gap: 8px;
 }
 
+/* The glyph alone is the entry: the word under it repeated what the icon and
+   its hover title already say, so it is gone. The box keeps the 48px hit area
+   the label used to share. */
 .rail-item {
   width: 48px;
   height: 48px;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
   padding: 0;
   border-radius: 8px;
   color: #191919;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.1;
-  letter-spacing: 0.02em;
 }
 
 .rail-item svg {

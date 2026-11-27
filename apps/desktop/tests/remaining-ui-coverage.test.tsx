@@ -87,6 +87,20 @@ describe("desktop component coverage for failure and attachment surfaces", () =>
     assert.ok(html.includes("is-active"));
   });
 
+  it("draws the rail's two entries as glyphs, keeping their words for hover and screen readers", () => {
+    const html = markup(<Rail onOpenSettings={noop} onSelectTask={noop} settingsOpen={false} />);
+    for (const label of [TEXT.rail.task, TEXT.rail.settings]) {
+      assert.ok(html.includes(`aria-label="${label}"`), `${label} has no accessible name`);
+      assert.ok(html.includes(`title="${label}"`), `${label} has no hover hint`);
+      // The entry is the glyph alone: no word sits under it any more.
+      assert.match(
+        html,
+        new RegExp(`<button[^>]*aria-label="${label}"[^>]*><svg[\\s\\S]*?</svg></button>`, "u"),
+        `${label} still draws a label beside or under its glyph`,
+      );
+    }
+  });
+
   it("changes sidebar toggle label with its open state", () => {
     const open = markup(<SidebarToggle onClick={noop} open />);
     const closed = markup(<SidebarToggle onClick={noop} open={false} />);
