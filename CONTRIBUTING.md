@@ -501,13 +501,13 @@ itself:
   reaches one and misses the other unless both are captured; the pair is what
   proves it did not.
 - **Under `docs/screenshots/<topic>/`.** That is where review evidence already
-  lives: ten directories (`1266`, `1275`, `1302`, `1305`, `1349`, `1399`,
-  `1401`, `1412`, `proxy-settings-ui`, `setup-wizard-button-radius`), each with
-  its images and a `README.md` naming the surface, the viewport and device
-  scale, the harness, what is mocked, and what each frame shows. Follow that
-  shape, name the files for locale and state (`01-zh-….png`, `05-en-….png`), and
-  embed them in the body from `raw.githubusercontent.com` URLs pinned to a
-  commit SHA — not to a branch, which moves.
+  lives: ten directories, six of them (`1275`, `1305`, `1399`, `1401`, `1412`,
+  `proxy-settings-ui`) with a `README.md` that records how the frames were
+  captured, what is mocked and what each one shows; the four older ones hold
+  images only and are not the model. Follow the README shape, name the files for
+  locale and state (`01-zh-….png`, `05-en-….png`), and embed them in the body
+  from `raw.githubusercontent.com` URLs pinned to a commit SHA — not to a
+  branch, which moves.
 - **Redacted.** A frame of a real stack shows what the stack shows: keys on the
   settings page, bearer tokens in a log panel, `/home/<user>` and
   `C:\Users\<name>` paths, hostnames, other people's session titles. Journey
@@ -516,6 +516,9 @@ itself:
 
 Screenshots are evidence for review, not a CI gate: no check reads them. A
 change with no rendered surface states that in one line and skips the section.
+A state you cannot reproduce — someone else's data, a stack you do not have —
+is stated as such next to the frame you do have; a fixture-backed frame labelled
+as one is honest, an unlabelled one is not.
 
 ### From pull request to merge
 

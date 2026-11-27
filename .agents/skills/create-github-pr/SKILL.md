@@ -197,7 +197,9 @@ they were taken and what is mocked, and embed them in the body from a commit SHA
 — a branch moves and the body silently starts showing something else. Redact
 keys, tokens and absolute paths first.
 [CONTRIBUTING.md](../../../CONTRIBUTING.md#ui-changes-need-screenshots) states
-the same rule for people who do not work through this skill.
+the same rule for people who do not work through this skill, and is the wording
+of record: this copy exists because an agent reads this file and not the guide,
+so a change to one is a change to both.
 
 Only a change with no user-observable product path (a comment, a pure doc edit)
 may write **not applicable** in the E2E section, with a concrete reason.
