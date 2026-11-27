@@ -352,10 +352,14 @@ light pool (`sciencediscovery-light`) and heavy merge-queue pool share the same
 runners **before** setting `CI_SELF_HOSTED_MERGE_QUEUE=true`:
 
 1. **Container image and local cache environment**: Build a Linux x64 GitHub
-   Actions runner container image with `git`, Node.js `22.19.0` (pre-placed in
-   `/opt/hostedtoolcache/node/22.19.0/x64` or `PATH`), and `pnpm` `11.1.2`.
-   Mount a persistent host cache directory at `/ci-cache` and export
-   `pnpm_config_store_dir=/ci-cache/pnpm-store` and
+   Actions runner container image with `git` and `pnpm` `11.1.2`. To let
+   `actions/setup-node@v4` reuse a pre-installed Node.js `22.19.0` without
+   downloading it on every job, export `RUNNER_TOOL_CACHE=/opt/hostedtoolcache`
+   and populate `/opt/hostedtoolcache/node/22.19.0/x64` with its
+   `/opt/hostedtoolcache/node/22.19.0/x64.complete` marker (as GitHub-hosted
+   images do); otherwise ensure outbound egress so `setup-node` can download
+   the pinned version. Mount a persistent host cache directory at `/ci-cache`
+   and export `pnpm_config_store_dir=/ci-cache/pnpm-store` and
    `npm_config_cache=/ci-cache/npm-cache` inside the container.
 2. **Register dedicated light slots**: Obtain a repository runner registration
    token under **Settings → Actions → Runners → New self-hosted runner** and

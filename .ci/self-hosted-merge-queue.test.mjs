@@ -198,7 +198,14 @@ test('ci.yml wires merge-queue self-hosted routing, cache toggles and idempotent
   assert.match(jobs.e2e, /name: Cache the JiuwenSwarm install\n\s+if: \$\{\{ !matrix\.self_hosted \}\}/);
   assert.match(jobs.e2e, /name: Use local JiuwenSwarm cache\n\s+if: \$\{\{ matrix\.self_hosted \}\}[\s\S]*?run: bash \.ci\/use-local-swarm-cache\.sh/);
 
-  for (const jobName of ['l1', 'e2e-plan', 'st', 'desktop-mocked', 'docker']) {
+  for (const jobName of ['l1', 'e2e-plan', 'coverage', 'merge-gate']) {
+    assert.match(
+      jobs[jobName],
+      /runs-on: \$\{\{ fromJSON\(needs\.policy\.outputs\.self_hosted_merge_queue == 'true' && '\["self-hosted","Linux","X64","sciencediscovery-light"\]' \|\| '"ubuntu-latest"'\) \}\}/,
+      jobName,
+    );
+  }
+  for (const jobName of ['st', 'desktop-mocked', 'docker']) {
     assert.match(jobs[jobName], /runs-on: ubuntu-latest/, jobName);
   }
   assert.match(jobs.binary, /runner: ubuntu-latest/);

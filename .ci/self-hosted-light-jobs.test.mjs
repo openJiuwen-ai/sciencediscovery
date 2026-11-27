@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { createTest } from '../test/support/tagged/compat.mjs';
+import { route } from './tier-policy.mjs';
 
 const { test } = createTest(import.meta.url, { tags: ['category:ut', 'os:linux', 'arch:amd64'] });
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -42,6 +43,13 @@ const expectedLightKeys = new Set([
   'real-e2e.yml:real-report',
 ]);
 
+const policyDependentLightKeys = new Set([
+  'ci.yml:l1',
+  'ci.yml:e2e-plan',
+  'ci.yml:coverage',
+  'ci.yml:merge-gate',
+]);
+
 const expectedCachedLightKeys = new Set([
   'ci.yml:l1',
   'ci.yml:e2e-plan',
@@ -55,10 +63,18 @@ const lightJobs = [...expectedLightKeys].map(key => {
   return job;
 });
 
-function evalExpression(expression, { event = 'pull_request', flag } = {}) {
+function evalExpression(expression, { event = 'pull_request', flag, policyFailed = false } = {}) {
+  const policy = route(event, 'pr', 'jiuwenswarm', null, 'linux-windows', {
+    selfHostedMergeQueue: flag === 'true',
+  });
   return runInNewContext(expression, {
     github: { event_name: event },
     vars: flag === undefined ? {} : { CI_SELF_HOSTED_MERGE_QUEUE: flag },
+    needs: {
+      policy: {
+        outputs: policyFailed ? {} : { self_hosted_merge_queue: String(policy.self_hosted_merge_queue) },
+      },
+    },
     fromJSON: JSON.parse,
   }, { timeout: 100 });
 }
@@ -68,6 +84,11 @@ test('lightweight merge-queue jobs route to dedicated light slots only when merg
     const runsOnMatch = block.match(/^    runs-on: \$\{\{ (.+) \}\}$/m);
     assert.ok(runsOnMatch, `${key} must define a dynamic runs-on expression`);
     const expr = runsOnMatch[1];
+
+    if (policyDependentLightKeys.has(key)) {
+      assert.match(expr, /needs\.policy\.outputs\.self_hosted_merge_queue/, `${key} reuses policy output`);
+      assert.doesNotMatch(block, /vars\.CI_SELF_HOSTED_MERGE_QUEUE/, `${key} does not re-read raw toggle`);
+    }
 
     const routed = evalExpression(expr, { event: 'merge_group', flag: 'true' });
     assert.deepEqual(routed, [...LIGHT_RUNNER], `${key} merge_group + true`);
@@ -92,6 +113,14 @@ test('lightweight merge-queue jobs route to dedicated light slots only when merg
       }
     }
   }
+
+  // merge-gate runs with if: always(); if policy fails and leaves outputs empty,
+  // merge-gate falls back safely to ubuntu-latest.
+  const gateExpr = jobsByKey.get('ci.yml:merge-gate').block.match(/^    runs-on: \$\{\{ (.+) \}\}$/m)[1];
+  assert.equal(
+    evalExpression(gateExpr, { event: 'merge_group', flag: 'true', policyFailed: true }),
+    'ubuntu-latest',
+  );
 });
 
 test('light jobs with pnpm setup skip remote setup-node cache only when routed to light slots', () => {
