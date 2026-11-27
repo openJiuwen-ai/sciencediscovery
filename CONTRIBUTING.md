@@ -510,9 +510,10 @@ repository:
   in the repository's history after the pull request is reverted.
 - **Self-describing.** Under each frame, say what it shows, the viewport and
   device scale, the harness, what is mocked, and which part of the copy on
-  screen comes from this diff rather than from a fixture. Those older
-  directories kept that in a `README.md`; with the frames outside the tree it
-  belongs in the body beside them.
+  screen comes from this diff rather than from a fixture. Six of the committed
+  directories kept that in a `README.md` and the rest left it in the pull request
+  that added them; with the frames outside the tree it belongs in the body
+  beside them.
 - **Redacted.** A frame of a real stack shows what the stack shows: keys on the
   settings page, bearer tokens in a log panel, `/home/<user>` and
   `C:\Users\<name>` paths, hostnames, other people's session titles. Journey
