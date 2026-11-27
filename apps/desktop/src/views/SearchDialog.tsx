@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import type { WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
 import { groupsFor, searchDetail } from "../app/session-search.js";
 import { TEXT } from "../text.js";
+import { SearchHitIcon } from "./search-hit-icons.js";
 import { useTopmostEscape } from "./use-dialog-escape.js";
 
 /** 全部 groups every hit by kind; a kind shows only that kind. */
@@ -161,10 +162,13 @@ export function SearchDialog({
                     onClick={() => onPick(result)}
                     type="button"
                   >
-                    <span className="search-hit-label">{result.label}</span>
-                    {searchDetail(result) === result.label ? null : (
-                      <span className="search-hit-detail">{searchDetail(result)}</span>
-                    )}
+                    <SearchHitIcon kind={result.kind} path={result.path} />
+                    <span className="search-hit-text">
+                      <span className="search-hit-label">{result.label}</span>
+                      {searchDetail(result) === result.label ? null : (
+                        <span className="search-hit-detail">{searchDetail(result)}</span>
+                      )}
+                    </span>
                   </button>
                 ))}
               </div>

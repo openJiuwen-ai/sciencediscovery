@@ -5548,12 +5548,14 @@ body.is-resizing {
 .search-panel-close:hover { background: var(--hover, #eceff3); color: var(--ink, #1f2328); }
 .search-panel-body { flex: 1 1 auto; overflow-y: auto; padding: 8px 6px; }
 .search-panel-group + .search-panel-group { margin-top: 6px; }
+/* One size for the dialog's text: a kind's heading is set apart by its colour,
+   not by being smaller than the rows under it. */
 .search-panel-heading {
   display: block;
-  padding: 4px 8px 2px;
+  padding: 6px 8px 2px;
   color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: 13px;
+  line-height: 18px;
 }
 .search-panel-note { margin: 8px; color: var(--muted); font-size: 12px; line-height: 18px; }
 .search-panel-note.is-error { color: var(--danger, #d4380d); }
@@ -5568,7 +5570,9 @@ body.is-resizing {
 }
 .search-panel-retry:hover { text-decoration: underline; }
 .search-hit {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 6px 8px;
   border: 0;
@@ -5597,3 +5601,9 @@ body.is-resizing {
 }
 .search-kind:hover { background: rgba(127, 127, 127, 0.10); }
 .search-kind.is-on { background: rgba(127, 127, 127, 0.16); color: var(--text-strong); font-weight: 600; }
+
+/* A hit's mark: the row reads as a folder, a bubble or the file it is, so a
+   column of results can be told apart before any of them is read. */
+.search-hit-icon { flex: none; color: var(--muted); }
+.search-hit-text { min-width: 0; }
+.search-hit-label, .search-hit-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
