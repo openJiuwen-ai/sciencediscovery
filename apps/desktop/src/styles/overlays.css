@@ -697,11 +697,15 @@
 
 
 /* ===== the window as a drop target ===== */
-/* Above the shell, below the dialogs. A drag belongs to the surface under the
-   pointer, and over a dialog that surface is the dialog: `useFileDrop` raises
-   no overlay there, so this only has to stay under the scrims (1200/1300) for
-   the moment a dialog opens during a drag. It has to cover the three columns,
-   because all three accept a drop. */
+/* Above the shell, below the two scrims that `useFileDrop` treats as a dialog
+   (`.modal-backdrop` 1300, `.config-backdrop` 1200). A drag belongs to the
+   surface under the pointer, and over a dialog that surface is the dialog:
+   `useFileDrop` raises no overlay there, so this only has to stay under those
+   two for the moment a dialog opens during a drag. The 搜索 palette is the
+   exception — its panel declares `aria-modal="true"` and raises nothing, but
+   its dimmed surround `.search-overlay` (60) declares nothing, so there the
+   window still owns the drag and this card does paint over the palette. It has
+   to cover the three columns, because all three accept a drop. */
 .drop-overlay {
   position: fixed;
   inset: 0;
