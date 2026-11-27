@@ -1777,12 +1777,17 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             environmentId: params.environment_id, cwd, ...(params.network_authorization_id !== undefined ? { networkAuthorizationId: params.network_authorization_id } : {}),
           }, signal, toolCallId, params.runner_id);
           if (!params.background) {
-            const deadline = Date.now() + (params.wait_ms ?? 10_000);
+            const waitMs = Math.max(0, params.wait_ms ?? 10_000);
+            const deadline = Date.now() + waitMs;
+            let remainingMs = waitMs;
             let cursor = 0;
             do {
               signal?.throwIfAborted();
-              execution = await options.shellExecutions.wait(execution.id,
-                onProgress ? Math.min(250, Math.max(0, deadline - Date.now())) : Math.max(0, deadline - Date.now()), signal);
+              execution = await options.shellExecutions.wait(
+                execution.id,
+                onProgress ? Math.min(250, remainingMs) : remainingMs,
+                signal,
+              );
               if (onProgress) {
                 try {
                   const page = await options.shellExecutions.logs(execution.id, cursor);
@@ -1791,7 +1796,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
                   if (chunk) onProgress(chunk);
                 } catch { /* Log observation must not change the command outcome. */ }
               }
-            } while (onProgress && (execution.state === "queued" || execution.state === "running") && Date.now() < deadline);
+              if (!onProgress || (execution.state !== "queued" && execution.state !== "running")) break;
+              remainingMs = Math.max(0, deadline - Date.now());
+            } while (remainingMs > 0);
           }
           const modelView = shellExecutionModelView(execution);
           return {
