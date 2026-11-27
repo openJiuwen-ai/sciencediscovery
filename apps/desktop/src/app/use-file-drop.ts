@@ -33,6 +33,12 @@ import { carriesFiles } from "./upload.js";
  * Both handlers are installed unconditionally, even while `enabled` is false,
  * so the browser's own "open the file" navigation is still suppressed: dropping
  * a file on a page that has no handler would otherwise replace the app.
+ *
+ * A drop is only this hook's when no inner target took it first. The window is
+ * the fallback, not the owner: the import and skill dialogs have their own drop
+ * zones, and a drop they claimed is their file — uploading it here as well put
+ * a `.sdresearch` package the reader was importing, and then cancelled, into the
+ * composer as a chat attachment.
  */
 export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean): boolean {
   const [dragging, setDragging] = useState(false);
@@ -71,8 +77,13 @@ export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean):
     const onDrop = (event: DragEvent) => {
       const files = [...(event.dataTransfer?.files ?? [])];
       if (files.length === 0) return;
+      // Read before this handler prevents anything itself: a target that handled
+      // the drop prevents the default in its own handler, and that mark is what
+      // says the file has an owner.
+      const taken = event.defaultPrevented;
       event.preventDefault();
       reset();
+      if (taken) return;
       if (latest.current.enabled) latest.current.onFiles(files);
     };
     // Bind each handler once and keep its own unbind, so the four listeners
