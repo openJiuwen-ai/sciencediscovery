@@ -94,7 +94,12 @@ export function createIdeaResearchClient(options: {
   const timer = setInterval(() => {
     for (const [researchId, { sessionId }] of grants) {
       if (watchers.has(researchId)) continue;
-      if (!pending.has(sessionId)) void command(sessionId, "get", { researchId }).catch(() => undefined);
+      // A Session record that no longer exists is terminal: the research it owned
+      // will never be read again, and `invoke` refuses such a Session before
+      // reaching the engine (`Session not found`), so waiting for an answer that
+      // cannot come would keep the credential and cost one read per sweep.
+      if (!options.store.getSession(sessionId)) retire(researchId);
+      else if (!pending.has(sessionId)) void command(sessionId, "get", { researchId }).catch(() => undefined);
     }
   }, RETIRE_SWEEP_MS);
   timer.unref();
@@ -105,7 +110,19 @@ export function createIdeaResearchClient(options: {
     try { return await invoke(sessionId, operation, input); }
     finally { if (mutation) pending.delete(sessionId); }
   }
+  function retireSession(sessionId: string) {
+    for (const [id, owner] of grants) if (owner.sessionId === sessionId) retire(id);
+  }
+  /**
+   * Retire a deleted Session's grants, then ask the engine to forget its research.
+   *
+   * The grants are this process's own state, so the revoke happens before the
+   * engine call: a transport error, a timeout or a non-2xx answer must not leave a
+   * deleted Session's credential resolvable. The failure is still thrown, because
+   * the engine-side cleanup did not happen.
+   */
   async function cleanup(projectId: string, sessionId: string) {
+    retireSession(sessionId);
     if (!options.url && !options.connection) return;
     const target = await connection();
     const response = await fetch(`${target.url.replace(/\/$/, "")}/idea-tree/research/command`, {
@@ -113,7 +130,6 @@ export function createIdeaResearchClient(options: {
       body: JSON.stringify({operation: "delete", projectId, sessionId}), signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) throw new Error(`Research cleanup failed: HTTP ${response.status}`);
-    for (const [id, owner] of grants) if (owner.sessionId === sessionId) retire(id);
   }
   /**
    * Watch one research's stream, and retire its grant on the terminal frame.
