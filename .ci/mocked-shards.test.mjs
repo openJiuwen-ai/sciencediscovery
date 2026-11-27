@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createTest } from '../test/support/tagged/compat.mjs';
@@ -130,6 +130,36 @@ test('a failed case remains executed and failed in the suite totals', t => {
   assert.equal(result.status, 'FAIL'); assert.equal(result.executed, 5);
   assert.equal(result.passed, 4); assert.equal(result.failed, 1);
   assert.ok(!result.problems.some(p => p.startsWith('NOT_RUN:')));
+});
+
+test('a retried batch keeps reconciliation strict about a second checks artifact', t => {
+  // A daily/release case failure repeats the failed cases in an isolated
+  // worktree whose results directory is `<batch>-retry`, next to the batch
+  // that ran the checks. The retry launch config turns the checks off
+  // (retry-runner.mjs), so such a directory holds case results only. This is
+  // an audit-invariance guard, not a reproduction of that configuration bug:
+  // it holds before and after the retry fix, and it fails if the report ever
+  // starts tolerating a stray checks file.
+  const p = plan(), root = evidence(t, p);
+  const checkKey = mockedBatches(p).find(batch => batch.checks.length).key;
+  const retryDir = file(root, `${checkKey}-retry`);
+  mkdirSync(join(retryDir, 'e2e/tagged'), { recursive: true });
+  writeFileSync(join(retryDir, 'e2e/tagged/results.json'), JSON.stringify({ retried: true }));
+  assert.equal(existsSync(join(retryDir, 'e2e/jiuwenswarm-checks.json')), false);
+  assert.equal(reconcileMocked(p, root).status, 'PASS');
+
+  // A checks artifact anywhere outside the one designated batch directory —
+  // including a retry directory and a concurrent local sub-lane — still fails.
+  for (const stray of [`${checkKey}-retry`, 'mocked-standard-config-global-2']) {
+    const directory = file(root, join(stray, 'e2e'));
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'jiuwenswarm-checks.json'), JSON.stringify(swarmChecks.map(name => ({ name, outcome: 'PASS' }))));
+    const verdict = reconcileMocked(p, root);
+    assert.equal(verdict.exitCode, 1, stray);
+    assert.ok(verdict.problems.some(problem => problem.includes('UNEXPECTED_SWARM_CHECKS')), stray);
+    rmSync(join(directory, 'jiuwenswarm-checks.json'));
+  }
+  assert.equal(reconcileMocked(p, root).status, 'PASS');
 });
 
 test('supplemental checks must run once, in order, on their designated stack', t => {

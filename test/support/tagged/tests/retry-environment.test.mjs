@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { batchLaunchEnvironment, ensureCleanCheckout, isolatedRetryConfig } from '../retry-runner.mjs';
+import { swarmChecks } from '../execution.mjs';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('../../../../', import.meta.url)));
 
@@ -64,6 +65,20 @@ test('isolated retry config preserves disabled swarm checks', () => {
   const config = isolatedRetryConfig({
     ...retryInputs,
     batch: { group: 'mocked', fixture: 'standard', checks: [] },
+  });
+
+  assert.equal(config.launchConfig.checks, 'off');
+  assert.equal(batchLaunchEnvironment(config.launchConfig).CI_E2E_SWARM_CHECKS, 'off');
+});
+
+test('isolated retry never repeats the one-shot JiuwenSwarm checks', () => {
+  // The batch that carries the checks runs them once on its first attempt; the
+  // retry re-runs only the failed case, so it must not write a second checks
+  // artifact into `<batch>-retry`. Otherwise the merge gate reports
+  // UNEXPECTED_SWARM_CHECKS for a retry that succeeded.
+  const config = isolatedRetryConfig({
+    ...retryInputs,
+    batch: { group: 'mocked', fixture: 'standard', checks: swarmChecks },
   });
 
   assert.equal(config.launchConfig.checks, 'off');
