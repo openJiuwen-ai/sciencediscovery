@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createTest } from '../test/support/tagged/compat.mjs';
 import { createPlan, subplan, verifyResults } from '../test/support/tagged/plan.mjs';
 import { prepareRealE2EResults } from './prepare-real-e2e-results.mjs';
+import { caseExecutionSummary } from './case-execution.mjs';
 import { profiles } from '../test/support/tagged/profiles.mjs';
 import { biomniCase, realShards } from '../test/support/tagged/execution.mjs';
 import { dataset, l5Tasks, manifestHash, evaluateSuite, projectMetrics, validateMetrics, renderSuite } from './biomni-gate.mjs';
@@ -214,10 +215,50 @@ test('matrix, score packaging and suite accounting preserve all metrics and reje
   await prepareRealE2EResults(root);
   const projected=JSON.parse(readFileSync(join(root,'.tmp/real-e2e-results/research-1/e2e-real/benchmark-metrics.json')));
   assert.deepEqual(projected.measurements,docs[0].measurements);
-  rmSync(join(root,'real-e2e-results-research-1/e2e-real/benchmark-metrics.json'));
-  assert.equal(run().status,1);
-  assert.equal(existsSync(candidate),false);
-  assert.match(JSON.parse(readFileSync(join(root,'verdict.json'))).problems.join(),/MISSING_OR_DUPLICATE/);
+
+  const shardRoot = join(root, 'real-e2e-results-research-1');
+  const tagged = join(shardRoot, 'e2e-real/tagged');
+  const worker = JSON.parse(readFileSync(join(tagged, 'plan.json')));
+  const original = docs.find(d => d.key === worker.entries[0].key);
+  const firstPath = join(shardRoot, 'real-standard/e2e-real/test-results/case/benchmark-metrics.json');
+  const retryPath = join(shardRoot, 'real-standard-retry/e2e-real/test-results/case/benchmark-metrics.json');
+  const extraRetryPath = join(shardRoot, 'real-standard-retry/e2e-real/test-results/duplicate/benchmark-metrics.json');
+  const retryMetrics = { ...original, evaluation: { ...original.evaluation, score: 93 },
+    measurements: { ...original.measurements, score: 93, generation_tokens: 140, generation_input_tokens: 120, total_tokens: 160 } };
+  function saveMetrics(path, metrics) {
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, JSON.stringify(projectMetrics(metrics)));
+  }
+  const verdict = () => JSON.parse(readFileSync(join(root, 'verdict.json')));
+  const assertMissingOrDuplicate = () => {
+    assert.equal(run().status, 1);
+    assert.equal(existsSync(candidate), false);
+    assert.ok(verdict().problems.includes(`${original.case_id}: MISSING_OR_DUPLICATE_METRICS`));
+  };
+  rmSync(join(shardRoot, 'e2e-real/benchmark-metrics.json'));
+  saveMetrics(firstPath, { ...original, integration_status: 'failed' });
+  saveMetrics(retryPath, retryMetrics);
+  assertMissingOrDuplicate(); // Two documents without a successful retry record are ambiguous.
+
+  const [entry] = worker.entries;
+  const recovered = { key: entry.key, outcome: 'PASS', actualTarget: entry.target, actualBackend: entry.backend,
+    retriedAfterRetry: true, passed_after_retry: true, firstAttempt: { outcome: 'FAIL' } };
+  writeFileSync(join(tagged, 'summary.json'), JSON.stringify(verifyResults(worker, [recovered])));
+  const retry = run();
+  assert.equal(retry.status, 0, retry.stdout + retry.stderr);
+  assert.equal(verdict().biomni.measured, 45);
+  assert.equal(verdict().biomni.summary.total_tokens, 44 * 120 + 160);
+  const reportCases = JSON.parse(readFileSync(candidate)).cases;
+  assert.equal(reportCases.find(doc => doc.case_id === original.case_id).measurements.score, 93);
+  const row = caseExecutionSummary(parent, root, verdict()).table.rows.find(row => row.case === original.case_id);
+  assert.equal(row.score, '93');
+  assert.equal(row.total_tokens, '160');
+
+  saveMetrics(extraRetryPath, retryMetrics);
+  assertMissingOrDuplicate();
+  rmSync(extraRetryPath);
+  rmSync(retryPath);
+  assertMissingOrDuplicate(); // Do not fall back to the failed first attempt.
 });
 
 // The frozen execution target must agree with the measured host architecture.

@@ -52,7 +52,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const policy = JSON.parse(readFileSync(policyPath ?? new URL('./biomni-gate.json', import.meta.url)));
     const baseline = policy.mode === 'compare' ? JSON.parse(readFileSync(policy.baseline)) : undefined;
-    const biomni = collectSuite(plan, root, policy, baseline);
+    const biomni = collectSuite(plan, root, policy, baseline, verdict.results);
     if (biomni) {
       // A provider fault is not a product regression: it does not invalidate
       // the biomni accounting, while a real failure does.
