@@ -66,6 +66,8 @@ export interface SessionRecord {
   messages?: unknown[];
   modelId?: string;
   projectId: string;
+  /** The expert the Session is bound to; absent means 无. */
+  specialistId?: string;
   title: string;
   updatedAt: string;
 }

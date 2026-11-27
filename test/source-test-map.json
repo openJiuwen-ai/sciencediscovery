@@ -2186,6 +2186,18 @@
       ]
     },
     {
+      "source": "apps/desktop/src/views/flyout-placement.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/flyout-placement.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/settings/GeneralSettings.tsx",
       "risk": "P1",
       "owner": "desktop",

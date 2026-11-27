@@ -2063,6 +2063,10 @@ body.is-resizing {
 
 .session-menu-flyout {
   width: 300px;
+  /* Never wider than the space a clamped placement can leave (#1487). The
+     measured width in `useFlyoutPlacement` is the authority; this is the
+     stylesheet's guard for the first frame and for non-portalled renders. */
+  max-width: calc(100vw - 16px);
 }
 
 .session-menu-row {
@@ -2283,6 +2287,19 @@ body.is-resizing {
   bottom: 0;
   width: 380px;
   padding: 8px;
+}
+
+/* The open card is portalled to the body so the column that holds the menu
+   cannot clip it: the card is fixed-width and a flip to the panel's left would
+   otherwise be cut by that column rather than by the window (#1487). `bottom`
+   is reset because 专家 anchors by it in the in-flow arrangement; the measured
+   `top` in `useFlyoutPlacement` carries that edge instead. */
+.session-menu-flyout.is-floating {
+  position: fixed;
+  top: auto;
+  bottom: auto;
+  left: auto;
+  z-index: 60;
 }
 
 .expert-search {

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 
 import type { ApiClient } from "../api/client.js";
 import { listSkills, listSpecialists } from "../api/settings.js";
@@ -37,6 +38,7 @@ import type { EvolveDirectionInput } from "@sciencediscovery/schema";
 import { AttachmentTray } from "./AttachmentTray.js";
 import { EvolveGlyph, EvolveTreeGlyph } from "./evolve/glyphs.js";
 import { filterExperts } from "./expert-catalog.js";
+import { placeFlyout } from "./flyout-placement.js";
 import { modelBrand } from "./model-brand.js";
 import { modelLabel, providerName } from "./provider-name.js";
 import { ProjectPicker } from "./ProjectPicker.js";
@@ -316,6 +318,113 @@ function NoneGlyph() {
   );
 }
 
+// No DOM in the package's unit tests, where a layout effect only warns.
+const usePlacementEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+/**
+ * Draws a flyout beside its panel and keeps it there while the window changes.
+ *
+ * The card is measured after it is in the document — its width is fixed by the
+ * stylesheet but may be reduced by the viewport — and then placed by
+ * `placeFlyout`: right of the panel, or on its left when the right edge cannot
+ * hold it, finally clamped into the window. `max-width` is set from the same
+ * `innerWidth` the clamp uses, so a card can never be wider than the space the
+ * clamp leaves. A layout effect settles all of this before paint; a resize or
+ * a scroll (the menu hangs off the composer, which a short window scrolls)
+ * measures again rather than leaving a card that no longer lines up.
+ *
+ * The card is portalled to the body by its caller because the column that
+ * holds the menu clips its overflow; without that, a card flipped to the
+ * panel's left would be cut by that column instead of the window.
+ */
+function useFlyoutPlacement(
+  ref: RefObject<HTMLDivElement | null>,
+  anchorRef: RefObject<HTMLDivElement | null> | undefined,
+  align: "bottom" | "top",
+) {
+  usePlacementEffect(() => {
+    const node = ref.current;
+    const anchor = anchorRef?.current;
+    if (node === null || anchor === null || anchor === undefined) return;
+    const place = () => {
+      const viewport = { height: window.innerHeight, width: window.innerWidth };
+      node.style.maxWidth = `${Math.max(0, viewport.width - 16)}px`;
+      const box = node.getBoundingClientRect();
+      const { left, top } = placeFlyout(anchor.getBoundingClientRect(), box, viewport, align);
+      node.style.left = `${left}px`;
+      node.style.top = `${top}px`;
+    };
+    place();
+    window.addEventListener("resize", place);
+    // Capture: the card is fixed to the window while the page under it may
+    // scroll, and the panel it hangs from scrolls with that page.
+    window.addEventListener("scroll", place, true);
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(place);
+    observer?.observe(node);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+      observer?.disconnect();
+    };
+  }, [ref, anchorRef, align]);
+}
+
+/**
+ * 审查档位's choices, beside the row that opened them.
+ *
+ * Portalled to the body for the reason `useFlyoutPlacement` gives: the card's
+ * fixed width and the column's narrow scroll box would otherwise clip it.
+ */
+function ReviewerFlyout({
+  anchorRef,
+  onClose,
+  onReviewLevel,
+  reviewLevel,
+}: {
+  anchorRef: RefObject<HTMLDivElement | null>;
+  onClose: () => void;
+  onReviewLevel?: (level: ReviewerSpecialistLevel) => void;
+  reviewLevel?: ReviewerSpecialistLevel;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useFlyoutPlacement(ref, anchorRef, "top");
+  const floating = typeof document !== "undefined";
+  const card = (
+    <div
+      className={`session-menu-flyout${floating ? " is-floating" : ""}`}
+      // The menu closes on a pointerdown outside itself. The card is no longer
+      // inside that subtree, so it says which presses belong to it.
+      onPointerDown={(event) => event.stopPropagation()}
+      ref={ref}
+    >
+      {REVIEWER_LEVELS.map((level) => (
+        <button
+          className={`session-flyout-row${reviewLevel === level ? " is-selected" : ""}`}
+          key={level}
+          onClick={() => {
+            onReviewLevel?.(level);
+            onClose();
+          }}
+          type="button"
+        >
+          <span className="session-flyout-text">
+            <span className="session-flyout-label">{TEXT.reviewer.levelName(level)}</span>
+            <span className="session-flyout-desc">
+              {level === "deep" ? TEXT.reviewer.levelDeepDesc : TEXT.reviewer.levelQuickDesc}
+            </span>
+          </span>
+          {reviewLevel === level ? (
+            <span className="session-flyout-check">
+              <CheckGlyph />
+            </span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+  return floating ? createPortal(card, document.body) : card;
+}
+
 /**
  * 权限模式's choices, beside the row that opened them.
  *
@@ -466,12 +575,15 @@ export function SessionSettingsMenu({
   selectedSpecialistId?: string;
 }) {
   const [panel, setPanel] = useState<SettingsPanel>();
+  // The panel the open card hangs beside. It is measured rather than assumed:
+  // the composer sits wherever the window puts it.
+  const anchor = useRef<HTMLDivElement>(null);
   const selectedExpert = (experts ?? []).find((row) => row.id === selectedSpecialistId);
   const toggle = (next: SettingsPanel) => setPanel((current) => (current === next ? undefined : next));
 
   return (
     <div className="composer-dropdown is-settings" onPointerDown={(event) => event.stopPropagation()}>
-      <div className="session-menu">
+      <div className="session-menu" ref={anchor}>
         <div className="session-menu-panel">
           {/* An action rather than a setting: it opens a surface instead of
               showing a value, so it carries no value capsule or chevron. It
@@ -616,35 +728,17 @@ export function SessionSettingsMenu({
         </div>
 
         {panel === "reviewer" ? (
-          <div className="session-menu-flyout">
-            {REVIEWER_LEVELS.map((level) => (
-              <button
-                className={`session-flyout-row${reviewLevel === level ? " is-selected" : ""}`}
-                key={level}
-                onClick={() => {
-                  onReviewLevel?.(level);
-                  onClose();
-                }}
-                type="button"
-              >
-                <span className="session-flyout-text">
-                  <span className="session-flyout-label">{TEXT.reviewer.levelName(level)}</span>
-                  <span className="session-flyout-desc">
-                    {level === "deep" ? TEXT.reviewer.levelDeepDesc : TEXT.reviewer.levelQuickDesc}
-                  </span>
-                </span>
-                {reviewLevel === level ? (
-                  <span className="session-flyout-check">
-                    <CheckGlyph />
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
+          <ReviewerFlyout
+            anchorRef={anchor}
+            onClose={onClose}
+            onReviewLevel={onReviewLevel}
+            reviewLevel={reviewLevel}
+          />
         ) : null}
 
         {panel === "experts" ? (
           <ExpertFlyout
+            anchorRef={anchor}
             loading={expertsLoading ?? false}
             onClose={onClose}
             onSelect={(specialistId) => {
@@ -708,12 +802,16 @@ function focusAtEnd(node: HTMLTextAreaElement): () => void {
  * Exported because it is only mounted while its row is open.
  */
 export function ExpertFlyout({
+  anchorRef,
   loading,
   onClose,
   onSelect,
   selectedId,
   specialists,
 }: {
+  /** The panel the card hangs beside. Only the menu this card belongs to can
+   *  supply one; a standalone render places it as the stylesheet does. */
+  anchorRef?: RefObject<HTMLDivElement | null>;
   loading: boolean;
   onClose: () => void;
   onSelect: (specialistId?: string) => void;
@@ -721,8 +819,10 @@ export function ExpertFlyout({
   specialists: Specialist[];
 }) {
   const [query, setQuery] = useState("");
+  const card = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const shown = filterExperts(specialists, query);
+  useFlyoutPlacement(card, anchorRef, "bottom");
 
   // The list can be longer than the card; opening it on the bound expert is
   // what shows the reader where the session stands, without hunting for the
@@ -731,8 +831,15 @@ export function ExpertFlyout({
     list.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, []);
 
-  return (
-    <div className="session-menu-flyout is-experts">
+  // Portalled out of the column that holds the menu: the card is fixed-width,
+  // and an ancestor with a scroll box would clip the side it was flipped to.
+  const floating = anchorRef !== undefined && typeof document !== "undefined";
+  const surface = (
+    <div
+      className={`session-menu-flyout is-experts${floating ? " is-floating" : ""}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      ref={card}
+    >
       <label className="expert-search">
         <SearchGlyph />
         <input
@@ -802,6 +909,7 @@ export function ExpertFlyout({
       </div>
     </div>
   );
+  return floating ? createPortal(surface, document.body) : surface;
 }
 
 function Chevron({ down = true }: { down?: boolean }) {
@@ -1133,7 +1241,13 @@ export function Composer({
 
   useEffect(() => {
     if (!menu) return;
-    const dismiss = () => setMenu(undefined);
+    const dismiss = (event: PointerEvent) => {
+      // The session-settings cards are portalled out of the composer so a
+      // narrow window cannot clip them; a press on one is still a press on
+      // this menu, not somewhere else.
+      if (event.target instanceof Element && event.target.closest(".session-menu-flyout") !== null) return;
+      setMenu(undefined);
+    };
     document.addEventListener("pointerdown", dismiss);
     return () => document.removeEventListener("pointerdown", dismiss);
   }, [menu]);
