@@ -58,7 +58,9 @@ export function createIdeaResearchClient(options: {
       const model = options.store.getModel(modelId);
       if (!model || !options.store.getModelApiToken(model.id)) throw new Error("Configure a model with an API token before starting research");
       const researchId = previous?.research.id ?? `research-${randomUUID()}`;
-      options.tokens.revoke(researchId);
+      // Never revoke an earlier grant for this research id before issuing the new
+      // one: RunTokenRegistry.revoke deletes every grant of the run, and an engine
+      // that is already running keeps the exact token it was started with.
       const token = options.tokens.issue(researchId, sessionId, model.id);
       grants.set(researchId, { sessionId, token });
       issued = researchId;
@@ -68,13 +70,30 @@ export function createIdeaResearchClient(options: {
         ...(operation === "create" ? { settings: { ...options.store.resolveIdeaTreeSettings(sessionId), ...(input.settings as object ?? {}) } } : {}),
         llm: { token, url: `${options.apiOrigin}/internal/evolve-llm/${researchId}/v1/chat/completions` } };
     }
+    let refused = false;
+    let sent = false;
     try {
       const observedGrants = new Map(grants);
+      sent = true;
       const response = await fetch(`${target.url.replace(/\/$/, "")}/idea-tree/research/command`, {
         method: "POST", headers: { "content-type": "application/json", ...(target.internalToken ? { authorization: `Bearer ${target.internalToken}` } : {}) },
         body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000),
       });
+      // A 404 to a get means this research does not exist only when it is the
+      // research handler's own answer; a route-level 404 (wrong base URL, proxy or
+      // version skew) says nothing about the research. Retire the grant this read
+      // started with, but keep one issued while the read was in flight: it belongs
+      // to a newer command that may be live.
+      const readId = typeof input.researchId === "string" ? input.researchId : undefined;
+      // Only a 4xx answer is a deterministic refusal: validate/state checks raise
+      // 400/404/409 before start(). A 5xx can come from view() after start() already
+      // scheduled drive(), so it is as uncertain as a lost answer.
+      refused = response.status >= 400 && response.status < 500;
       const body = await response.json() as any;
+      if (operation === "get" && response.status === 404 && readId && body?.detail === "Research not found") {
+        const observed = observedGrants.get(readId);
+        if (observed && grants.get(readId)?.token === observed.token) retire(readId);
+      }
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
       const views: IdeaResearchView[] = body.items ?? (body.research ? [body] : []);
       for (const view of views) {
@@ -82,7 +101,13 @@ export function createIdeaResearchClient(options: {
       }
       return body;
     } catch (error) {
-      if (issued) { options.tokens.revoke(issued); grants.delete(issued); }
+      if (issued && refused) { options.tokens.revoke(issued); grants.delete(issued); }
+      else if (issued && sent) {
+        // Keep the grant on an uncertain failure: the answer may have been lost after
+        // evolve already scheduled the run. Say so, retaining the original cause text.
+        const cause = error instanceof Error ? error.message : String(error);
+        throw new Error(`The research command was sent, but its answer was lost or unusable (${cause}). The run may already be live, and its credential was kept.`, { cause: error });
+      }
       throw error;
     }
   }

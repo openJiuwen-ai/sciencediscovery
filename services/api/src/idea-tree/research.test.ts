@@ -17,6 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 import { createIdeaResearchClient } from "./research.js";
+import { RunTokenRegistry } from "../evolution/llm-proxy.js";
 
 const GLOBAL = {
   templateId: "scientific-hypothesis-general/v1",
@@ -131,6 +132,303 @@ test("continue still restarts a paused research", async () => {
   assert.deepEqual(attempt.issued, ["research-1"]);
 });
 
+/** Send one continue with a real registry, keeping the payloads that reached the engine. */
+async function continueWithRealTokens(answer: (operation: string) => unknown) {
+  const sent: Array<{ operation: string; researchId?: string; llm?: { token: string } }> = [];
+  const tokens = new RunTokenRegistry();
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string; researchId?: string };
+    sent.push(payload);
+    const reply = answer(payload.operation);
+    if (reply instanceof Error) throw reply;
+    return reply as never;
+  }) as never;
+  const client = createIdeaResearchClient({
+    url: "http://127.0.0.1:1",
+    apiOrigin: "http://127.0.0.1:2",
+    store: storeWith({}) as never,
+    tokens,
+  });
+  let error: unknown;
+  try {
+    await client.command("s1", "continue", { researchId: "research-1" });
+  } catch (reason: unknown) {
+    error = reason;
+  }
+  return {
+    client, error, sent, tokens,
+    restore: () => { globalThis.fetch = original; },
+  };
+}
+
+function issuedToken(sent: Array<{ operation: string; llm?: { token: string } }>) {
+  return sent.find((payload) => payload.operation === "continue")?.llm?.token;
+}
+
+test("a continue whose reply is lost keeps the grant its running engine holds", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const attempt = await continueWithRealTokens((operation) => {
+    if (operation === "continue") {
+      // evolve's start() already scheduled drive(); only its reply was lost.
+      const timeout = new Error("The operation was aborted due to timeout");
+      timeout.name = "TimeoutError";
+      return timeout;
+    }
+    return { ok: true, json: async () => researchView("paused") };
+  });
+  try {
+    assert.match(String(attempt.error), /The research command was sent/);
+    assert.match(String(attempt.error), /the run may already be live/i);
+    assert.match(String(attempt.error), /aborted due to timeout/);
+    const token = issuedToken(attempt.sent);
+    assert.ok(token, "the continue reached the engine");
+    // The engine keeps the exact token it was started with, so the proxy must
+    // still resolve it; a revocation here would turn every model call into a 401.
+    assert.ok(attempt.tokens.resolve("research-1", token), "a lost reply keeps the live grant");
+    assert.equal(attempt.tokens.size, 1, "the grant stays tracked for the fallback sweep");
+    // With no stream listener, the next sweep reads the research: paused is
+    // terminal, so that read retires the grant rather than leaking it.
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(attempt.sent.map((payload) => payload.operation), ["get", "continue", "get"]);
+    assert.equal(attempt.tokens.resolve("research-1", token), undefined,
+      "a terminal read retires the grant the lost reply left behind");
+  } finally {
+    attempt.client.close();
+    attempt.restore();
+  }
+});
+
+test("a continue whose engine answers 5xx keeps the grant its run may be using", async () => {
+  const attempt = await continueWithRealTokens((operation) => operation === "continue"
+    ? { ok: false, status: 500, json: async () => ({ detail: "Internal Server Error" }) }
+    : { ok: true, json: async () => researchView("paused") });
+  try {
+    // view() runs after start(), so a 500 does not prove the run never began.
+    assert.match(String(attempt.error), /The research command was sent/);
+    assert.match(String(attempt.error), /the run may already be live/i);
+    assert.match(String(attempt.error), /Internal Server Error/);
+    const token = issuedToken(attempt.sent);
+    assert.ok(token);
+    assert.ok(attempt.tokens.resolve("research-1", token), "a 5xx keeps the grant start() may already hold");
+    assert.equal(attempt.tokens.size, 1);
+  } finally {
+    attempt.client.close();
+    attempt.restore();
+  }
+});
+
+test("a continue the engine refuses revokes the grant it was given", async () => {
+  const attempt = await continueWithRealTokens((operation) => operation === "continue"
+    ? { ok: false, status: 409, json: async () => ({ detail: "Research is not resumable" }) }
+    : { ok: true, json: async () => researchView("paused") });
+  try {
+    assert.match(String(attempt.error), /Research is not resumable/);
+    const token = issuedToken(attempt.sent);
+    assert.ok(token);
+    assert.equal(attempt.tokens.resolve("research-1", token), undefined,
+      "a refusal received from the engine proves the command did not start a run");
+    assert.equal(attempt.tokens.size, 0);
+  } finally {
+    attempt.client.close();
+    attempt.restore();
+  }
+});
+
+test("a create whose reply is lost keeps the grant its running engine holds", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const sent: Array<{ operation: string; researchId: string; llm?: { token: string } }> = [];
+  const tokens = new RunTokenRegistry();
+  let createdId = "";
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string; researchId: string };
+    sent.push(payload);
+    if (payload.operation === "create") {
+      createdId = payload.researchId;
+      const timeout = new Error("fetch failed");
+      timeout.name = "TypeError";
+      throw timeout;
+    }
+    return { ok: true, json: async () => researchView("paused", payload.researchId) } as never;
+  }) as never;
+  const client = createIdeaResearchClient({
+    url: "http://127.0.0.1:1",
+    apiOrigin: "http://127.0.0.1:2",
+    store: storeWith({}) as never,
+    tokens,
+  });
+  try {
+    await assert.rejects(
+      client.command("s1", "create", { content: "/idea-tree Compare treatments" }),
+      /fetch failed/,
+    );
+    const token = sent.find((payload) => payload.operation === "create")?.llm?.token;
+    assert.ok(token);
+    assert.ok(tokens.resolve(createdId, token), "a lost create reply keeps the live grant");
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.equal(tokens.resolve(createdId, token), undefined, "the fallback read still retires it");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a lost create reply is retired when the sweep's get returns the handler's 404", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const sent: Array<{ operation: string; researchId: string; llm?: { token: string } }> = [];
+  const tokens = new RunTokenRegistry();
+  let createdId = "";
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string; researchId: string };
+    sent.push(payload);
+    if (payload.operation === "create") {
+      createdId = payload.researchId;
+      throw new Error("fetch failed");
+    }
+    return { ok: false, status: 404, json: async () => ({ detail: "Research not found" }) } as never;
+  }) as never;
+  const client = createIdeaResearchClient({
+    url: "http://127.0.0.1:1",
+    apiOrigin: "http://127.0.0.1:2",
+    store: storeWith({}) as never,
+    tokens,
+  });
+  try {
+    await assert.rejects(
+      client.command("s1", "create", { content: "/idea-tree Compare treatments" }),
+      /fetch failed/,
+    );
+    const token = sent.find((payload) => payload.operation === "create")?.llm?.token;
+    assert.ok(token);
+    assert.ok(tokens.resolve(createdId, token));
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(sent.map((payload) => payload.operation), ["create", "get"]);
+    assert.equal(tokens.resolve(createdId, token), undefined,
+      "a 404 get proves no run holds this id, so the grant is retired");
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(sent.map((payload) => payload.operation), ["create", "get"],
+      "the retired grant is not read again every sweep");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a route-level 404 keeps the grant the sweep keeps tracking", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const sent: Array<{ operation: string; researchId: string; llm?: { token: string } }> = [];
+  const tokens = new RunTokenRegistry();
+  let createdId = "";
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string; researchId: string };
+    sent.push(payload);
+    if (payload.operation === "create") {
+      createdId = payload.researchId;
+      throw new Error("fetch failed");
+    }
+    // A proxy or wrong base URL answers 404 at the route level; it is not the
+    // research handler saying this id does not exist.
+    return { ok: false, status: 404, json: async () => ({ detail: "Not Found" }) } as never;
+  }) as never;
+  const client = createIdeaResearchClient({
+    url: "http://127.0.0.1:1",
+    apiOrigin: "http://127.0.0.1:2",
+    store: storeWith({}) as never,
+    tokens,
+  });
+  try {
+    await assert.rejects(
+      client.command("s1", "create", { content: "/idea-tree Compare treatments" }),
+      /fetch failed/,
+    );
+    const token = sent.find((payload) => payload.operation === "create")?.llm?.token;
+    assert.ok(token);
+    assert.ok(tokens.resolve(createdId, token));
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(sent.map((payload) => payload.operation), ["create", "get"]);
+    assert.ok(tokens.resolve(createdId, token),
+      "a route-level 404 says nothing about the research, so the grant stays");
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(sent.map((payload) => payload.operation), ["create", "get", "get"],
+      "the sweep keeps tracking the grant a route-level 404 left alone");
+    assert.ok(tokens.resolve(createdId, token));
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a 404 get does not retire a grant issued while that read was in flight", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const sent: Array<{ operation: string; researchId: string; llm?: { token: string } }> = [];
+  const tokens = new RunTokenRegistry();
+  let createdId = "";
+  let getCalls = 0;
+  let release!: (value: unknown) => void;
+  const held = new Promise<unknown>((resolve) => { release = resolve; });
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string; researchId: string };
+    sent.push(payload);
+    if (payload.operation === "create") {
+      createdId = payload.researchId;
+      throw new Error("fetch failed");
+    }
+    if (payload.operation === "continue") {
+      return { ok: true, json: async () => researchView("running", payload.researchId) } as never;
+    }
+    getCalls += 1;
+    // Hold the sweep's read open, then answer continue's resumability read.
+    if (getCalls === 1) return held as never;
+    return { ok: true, json: async () => researchView("paused", payload.researchId) } as never;
+  }) as never;
+  const client = createIdeaResearchClient({
+    url: "http://127.0.0.1:1",
+    apiOrigin: "http://127.0.0.1:2",
+    store: storeWith({}) as never,
+    tokens,
+  });
+  try {
+    await assert.rejects(
+      client.command("s1", "create", { content: "/idea-tree Compare treatments" }),
+      /fetch failed/,
+    );
+    const first = sent.find((payload) => payload.operation === "create")?.llm?.token;
+    assert.ok(first);
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(sent.map((payload) => payload.operation), ["create", "get"]);
+    // Resume while that read is in flight: this issues a newer grant for the id.
+    await client.command("s1", "continue", { researchId: createdId });
+    const second = sent.find((payload) => payload.operation === "continue")?.llm?.token;
+    assert.ok(second);
+    assert.notEqual(second, first);
+    assert.equal(tokens.resolve(createdId, first), undefined,
+      "continue's resumability read retired the previous generation");
+    // The older read now answers 404; it must not retire the newer grant.
+    release({ ok: false, status: 404, json: async () => ({ detail: "Research not found" }) });
+    await settle();
+    assert.ok(tokens.resolve(createdId, second),
+      "a grant issued after the read started survives that read's 404");
+    // A later read of the current generation still retires it.
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.equal(tokens.resolve(createdId, second), undefined);
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
 /** An engine stub that records operations, answers with `status()`, and lets a test drive the stream. */
 function engineStub(options: { status?: () => string; statuses?: Record<string, string> } = {}) {
   const sent: Array<{ operation: string; researchId?: string }> = [];
@@ -170,8 +468,8 @@ async function startedResearch(engine: ReturnType<typeof engineStub>) {
     tokens: { issue: () => `t${(issued += 1)}`, revoke: (id: string) => revoked.push(id) } as never,
   });
   const created = await client.command("s1", "create", { objective: "Compare treatments" });
-  // Creating a research clears any grant a previous research with the same id held;
-  // that revoke is not the retirement these tests are about.
+  // Creating a research issues its grant; reset the record so these tests see only
+  // the retirements that follow.
   revoked.length = 0;
   return { client, id: created.research.id as string, revoked };
 }
