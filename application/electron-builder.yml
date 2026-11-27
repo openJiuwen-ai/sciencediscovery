@@ -90,8 +90,37 @@ mac:
   # remain covered by the CodeResources seal hashes, so notarization and
   # Gatekeeper are unaffected (only per-file ad-hoc signature entries, which
   # data files never need, are skipped). Same treatment as .kext upstream.
+  # W23a — same isbinaryfile misjudgement, next cohort: ~2500 pure DATA
+  # files (NUL bytes in the first 8000) are walked into the per-file
+  # codesign --timestamp loop as if they were Mach-O. Two signed m5
+  # attempts (2026-11-25) both died mid-marathon with "A timestamp was
+  # expected but was not found" — the ~2h / ~2500-roundtrip load trips
+  # Apple's TSA rate limit. Cohorts verified by scanning the actual
+  # release bundle (this tree, 92376 files):
+  #   tzdata/pytz zoneinfo/         (598 + ~500)  timezone blobs
+  #   pdfminer cmap/ *.json.gz      (~212+148)    CMap tables
+  #   numpy/scipy/sklearn test data (~560)        .npz/.mat/.sav/.wav/.fits…
+  #   reportlab fonts, lib *.a, dots.png etc.     (~60)
+  # Pattern set validated over the whole bundle: 2555 files matched,
+  # 0 true Mach-O harmed (.so 259 / .dylib 23 / bin/python 2 untouched).
+  # Skipped files stay in the bundle under the CodeResources seal
+  # (same notarization/Gatekeeper story as .pyc above).
   signIgnore:
     - \.pyc$
+    - zoneinfo/
+    - /tests?/data/
+    - /cmap/
+    - reportlab/fonts/
+    - /datasets/(data|images)/
+    - \.npz$
+    - \.a$
+    - \.fits$
+    - \.pfb$
+    - \.wav$
+    - \.mat$
+    - \.sav$
+    - /babel/locale-data/
+    - /mpl-data/
 
 dmg:
   # Standard drag-to-Applications layout: app on the left, /Applications alias
