@@ -176,8 +176,9 @@ blocked / skipped counts and failure attribution.>
 <Required when the change is visible to a user. Before and after frames of the
 same view, in zh-CN and en, hosted outside the repository and embedded here from
 a URL that does not change — a commit SHA when it comes from a git branch — each
-with a caption naming the surface, the viewport, the harness, what is mocked and
-what it shows. Do not commit the images.>
+with a caption naming the surface, the viewport and device scale, the harness,
+what is mocked, and which copy on screen comes from this diff and not from a
+fixture. Do not commit the images.>
 
 ## Release
 Release category: <one release:* label>
