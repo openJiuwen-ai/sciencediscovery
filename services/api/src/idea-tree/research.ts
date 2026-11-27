@@ -10,6 +10,21 @@ import type { RunTokenRegistry } from "../evolution/llm-proxy.js";
  */
 const RETIRE_SWEEP_MS = 5000;
 
+/**
+ * How long the engine is given to acknowledge a command.
+ *
+ * The engine starts the run before it answers (`research_service.start()` saves
+ * `running` and schedules the task, then returns), so this timeout says nothing
+ * about whether the command took effect — only that its answer is not coming.
+ */
+const COMMAND_TIMEOUT_MS = 15_000;
+
+/** How long the read-back gets when it has to decide a lost answer's fate. */
+const RECOVERY_READ_MS = 5_000;
+
+/** A refusal the engine itself answered: it did not start anything. */
+class CommandRefused extends Error {}
+
 /** The research states a stream stays open for; anything else is terminal. */
 function terminal(status: unknown): boolean {
   return typeof status === "string" && status !== "running" && status !== "pausing";
@@ -32,7 +47,27 @@ export function createIdeaResearchClient(options: {
     options.tokens.revoke(researchId);
     grants.delete(researchId);
   }
-  async function invoke(sessionId: string, operation: string, input: Record<string, unknown> = {}): Promise<any> {
+  /** Give back the grant a command issued, if it issued one. */
+  function withdraw(issued: string | undefined) {
+    if (!issued) return;
+    options.tokens.revoke(issued);
+    grants.delete(issued);
+  }
+  /**
+   * What the research is doing now, and whether the engine answered at all.
+   *
+   * A refusal from the engine (`CommandRefused`) means it heard the question, so
+   * a research it does not know is a research that does not exist. Any other
+   * failure means the question itself was lost, and nothing can be concluded.
+   */
+  async function readBack(sessionId: string, researchId: string): Promise<{ reached: boolean; view?: IdeaResearchView }> {
+    try {
+      return { reached: true, view: await invoke(sessionId, "get", { researchId }, RECOVERY_READ_MS) };
+    } catch (error) {
+      return { reached: error instanceof CommandRefused };
+    }
+  }
+  async function invoke(sessionId: string, operation: string, input: Record<string, unknown> = {}, timeoutMs = COMMAND_TIMEOUT_MS): Promise<any> {
     const target = await connection();
     const session = operation === "list" || operation === "get" || operation === "defaults"
       ? options.store.getSession(sessionId) : options.store.assertSessionWritable(sessionId);
@@ -72,17 +107,42 @@ export function createIdeaResearchClient(options: {
       const observedGrants = new Map(grants);
       const response = await fetch(`${target.url.replace(/\/$/, "")}/idea-tree/research/command`, {
         method: "POST", headers: { "content-type": "application/json", ...(target.internalToken ? { authorization: `Bearer ${target.internalToken}` } : {}) },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs),
       });
       const body = await response.json() as any;
-      if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
+      if (!response.ok) throw new CommandRefused(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
       const views: IdeaResearchView[] = body.items ?? (body.research ? [body] : []);
       for (const view of views) {
         if (terminal(view.research.status) && grants.has(view.research.id) && grants.get(view.research.id) === observedGrants.get(view.research.id)) retire(view.research.id);
       }
       return body;
     } catch (error) {
-      if (issued) { options.tokens.revoke(issued); grants.delete(issued); }
+      if (!issued) throw error;
+      // A lost answer is not a failed command. The engine saves `running` and
+      // schedules the run before it replies, so a timeout — or a reply that never
+      // arrives — says nothing about whether the research is already working.
+      // Revoking here would leave a running research with no credential: the LLM
+      // proxy answers 401 to every model call, and the run the user did start dies
+      // for a reason nobody can see. Only an answered refusal is certain.
+      if (error instanceof CommandRefused) {
+        withdraw(issued);
+        throw error;
+      }
+      const known = await readBack(sessionId, issued);
+      if (known.view && (known.view.research.status === "running" || known.view.research.status === "pausing")) {
+        // The command took effect. The grant stays, and the caller is handed the
+        // state the engine reports instead of an error about a lost answer.
+        return known.view;
+      }
+      if (!known.reached) {
+        // Nothing answered, so nothing is known. Keep the grant: a run that did
+        // start must not be left without a credential. The fallback sweep retires
+        // it as soon as the research reports a terminal state.
+        throw new Error(`The research command was sent but its answer was lost, and ${issued} could not be read back. Its credential was kept, so a run that started is not left without one.`);
+      }
+      // The engine answered and the research is not running: nothing took effect,
+      // so the grant it was issued goes back.
+      withdraw(issued);
       throw error;
     }
   }
