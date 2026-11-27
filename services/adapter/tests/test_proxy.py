@@ -213,9 +213,13 @@ async def test_non_printable_path_parameter_is_a_400_naming_it_without_contactin
     assert response.status_code == 400, response.text
     assert response.headers["content-type"] == "application/json"
     body = response.json()
-    assert body["error"] == "invalid_path_parameter"
+    # The clients render `error`, so it must be the sentence that names the
+    # parameter; `code`/`parameter` stay available for machine handling.
+    assert body["error"].startswith("Invalid path parameter")
+    assert repr(f"id-{character}") in body["error"]
+    assert body["code"] == "INVALID_PATH_PARAMETER"
     assert body["parameter"] == f"id-{character}"
-    assert repr(f"id-{character}") in body["message"]
+    assert len(body["requestId"]) == 32
     assert calls == []
 
 

@@ -8,6 +8,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RunnerClient, RemoteComputeClient } from "@sciencediscovery/executor";
 import { ExecutionBlocks } from "@sciencediscovery/governance";
 import type { SessionStore } from "../store.js";
+import { ApiStatusError } from "./api-status-error.js";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 
 test("capability routes probe only the named Runner; decisions check session and runner ownership", async () => {
@@ -39,4 +40,27 @@ test("capability routes probe only the named Runner; decisions check session and
   assert.equal((await invoke("POST", path, { action: "switch", runnerId: "lab" })).status, 200);
   assert.deepEqual(await waiting, { action: "switch", runnerId: "lab" });
   assert.equal((await invoke("POST", path, { action: "retry" })).status, 409);
+});
+
+test("a malformed execution-block id answers 400 naming it instead of the block's 409", async () => {
+  const queue = new ExecutionBlocks();
+  queue.wait({ sessionId: "s", executionId: "run", runnerId: "local", reason: "missing",
+    alternatives: [{ runnerId: "local", label: "Local" }] });
+  const store = { executionBlocks: queue, getSession: (id: string) => id === "s" ? {} : undefined,
+    assertSessionWritable() {}, assertSessionAllowsRunner() {},
+  } as unknown as SessionStore;
+  let status = 0;
+  const response = { writeHead(value: number) { status = value; }, end() {} } as unknown as ServerResponse;
+  // The block id decodes after the session check, so the failure must be the
+  // catch-all's 400 for the parameter; the route's own try/catch answers 409
+  // for a real write conflict and must not claim this one.
+  await assert.rejects(
+    handleExecutionReadiness({ method: "POST" } as IncomingMessage, response,
+      new URL("/api/sessions/s/execution-blocks/%%", "http://api.test"), store,
+      {} as RunnerClient, {} as RemoteComputeClient, async () => ({ action: "retry" })),
+    (error: unknown) => error instanceof ApiStatusError && error.statusCode === 400
+      && /execution block id/.test(error.message),
+  );
+  assert.equal(status, 0, "a malformed block id must not be folded into the route's 409");
+  assert.equal(queue.list("s").length, 1, "the block stays undecided");
 });

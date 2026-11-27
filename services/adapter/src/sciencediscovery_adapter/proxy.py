@@ -71,12 +71,16 @@ def invalid_path_parameter(path: str) -> tuple[int, str] | None:
     return None
 
 
-def _invalid_path_response(index: int, segment: str) -> JSONResponse:
+def _invalid_path_response(index: int, segment: str, request_id: str) -> JSONResponse:
+    # Both clients show `body.error` as the message (ApiErrorBody has no
+    # `message` field), so the sentence the user reads lives there; `code`
+    # carries the stable token for callers that branch on it.
     return JSONResponse(
         {
-            "error": "invalid_path_parameter",
-            "message": f"Path parameter {segment!r} at segment {index} contains a non-printable character",
+            "error": f"Invalid path parameter at segment {index}: {segment!r} contains a non-printable character",
+            "code": "INVALID_PATH_PARAMETER",
             "parameter": segment,
+            "requestId": request_id,
         },
         status_code=400,
     )
@@ -108,7 +112,7 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
     started = time.monotonic()
     malformed = invalid_path_parameter(request.url.path)
     if malformed is not None:
-        return _invalid_path_response(*malformed)
+        return _invalid_path_response(*malformed, request_id)
     upstream_url = (
         httpx.URL(path=request.url.path, query=request.url.query.encode())
         if request.url.query else httpx.URL(path=request.url.path)
