@@ -137,7 +137,7 @@ jobs:
   l1:
     name: L1 (static checks)
     needs: policy
-    runs-on: ${{ fromJSON(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(needs.policy.outputs.self_hosted_merge_queue == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -147,7 +147,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: ${{ !(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true') && 'pnpm' || '' }}
+          cache: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' && 'pnpm' || '' }}
       - name: Run the frozen L1 slice
         if: ${{ needs.policy.outputs.docs_only != 'true' }}
         env:
@@ -181,7 +181,7 @@ jobs:
     name: Freeze mocked E2E matrix
     needs: [policy, l1]
     if: ${{ success() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.mocked == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
-    runs-on: ${{ fromJSON(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(needs.policy.outputs.self_hosted_merge_queue == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -196,7 +196,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: ${{ !(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true') && 'pnpm' || '' }}
+          cache: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: node test/sync-e2e.mjs --write
       - run: npm ci --prefix .e2e
@@ -393,7 +393,7 @@ jobs:
     # nothing to report. Version tag pushes opt out of coverage.
     needs: [policy, ut, st]
     if: ${{ !cancelled() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !inputs['skip-coverage'] }}
-    runs-on: ${{ fromJSON(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(needs.policy.outputs.self_hosted_merge_queue == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -1246,7 +1246,7 @@ jobs:
     name: ${{ inputs.profile == 'package' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && 'package-gate' || 'merge-gate' }}
     needs: [policy, l1, ut, st, e2e-plan, e2e, desktop-mocked, real-merge, real-scheduled, binary, docker, windows-desktop, macos-desktop]
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
-    runs-on: ${{ fromJSON(github.event_name == 'merge_group' && vars.CI_SELF_HOSTED_MERGE_QUEUE == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(needs.policy.outputs.self_hosted_merge_queue == 'true' && '["self-hosted","Linux","X64","sciencediscovery-light"]' || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
