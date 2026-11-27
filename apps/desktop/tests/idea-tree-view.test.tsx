@@ -294,8 +294,8 @@ function cssRule(css: string, selector: string): string {
 /** The token map of a `:root { ... }` block, name to literal value. */
 function cssTokens(css: string): Map<string, string> {
   const tokens = new Map<string, string>();
-  for (const [, name, value] of css.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
-    tokens.set(name!, value!.trim());
+  for (const [, name = "", value = ""] of css.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    tokens.set(name, value.trim());
   }
   return tokens;
 }
@@ -304,13 +304,13 @@ function cssTokens(css: string): Map<string, string> {
 function cssValue(rule: string, property: string, tokens: Map<string, string>): string {
   const declared = new RegExp(`(?:^|[;{])\\s*${property}\\s*:\\s*([^;]+);`).exec(rule);
   assert.ok(declared, `${property} is declared in the rule`);
-  let value = declared![1]!.trim();
+  let value = declared[1]!.trim();
   for (let hop = 0; hop < 8 && value.startsWith("var("); hop += 1) {
     const token = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value);
     assert.ok(token, `${value} is a plain var() reference, so it resolves without a fallback`);
-    const resolved = tokens.get(token![1]!);
-    assert.ok(resolved, `${token![1]} is defined in tokens.css on this branch`);
-    value = resolved!;
+    const resolved = tokens.get(token[1]!);
+    assert.ok(resolved, `${token[1]} is defined in tokens.css on this branch`);
+    value = resolved;
   }
   return value.toLowerCase();
 }
