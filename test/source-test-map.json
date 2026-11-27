@@ -1489,6 +1489,18 @@
       ]
     },
     {
+      "source": "services/api/src/http/path-params.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/http/malformed-path.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "services/runner/src/agent-execution.ts",
       "risk": "P1",
       "owner": "runner",

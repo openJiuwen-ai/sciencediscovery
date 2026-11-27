@@ -114,6 +114,18 @@ for (const mode of ["native", "win32"] as const) {
     assert.equal(readCalls.mock.callCount(), 0);
   });
 
+  test(`${mode}: a malformed escape is the caller's mistake, not a URIError`, async (context) => {
+    const { staticDir, statCalls, readCalls } = await staticFixture(context, mode);
+    // The whole pathname is decoded here, so `%` used to throw `URIError` and
+    // answer 500; it is now a typed client error the request handler maps to 400.
+    await assert.rejects(
+      requestStatic(staticDir, "/%"),
+      (error: unknown) => (error as { code?: string }).code === "MALFORMED_PATH_PARAM",
+    );
+    assert.equal(statCalls.mock.callCount(), 0);
+    assert.equal(readCalls.mock.callCount(), 0);
+  });
+
   test(`${mode}: keeps SPA route and directory fallback behavior`, async (context) => {
     const { staticDir } = await staticFixture(context, mode);
     for (const pathname of ["/projects/example", "/missing.js", "/assets/"]) {
