@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RunnerClient, RemoteComputeClient } from "@sciencediscovery/executor";
 import type { ExecutionBlockDecision } from "@sciencediscovery/schema";
 import type { SessionStore } from "../store.js";
+import { decodePathParameter } from "./decode-path-parameter.js";
 
 /** Called only behind the normal control-plane bearer-token check. */
 export async function handleExecutionReadiness(
@@ -16,7 +17,7 @@ export async function handleExecutionReadiness(
   if (!probe && !decision) return false;
   const send = (status: number, value: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
   if (probe && ["GET", "POST"].includes(request.method ?? "")) {
-    const runnerId = decodeURIComponent(probe[1]!);
+    const runnerId = decodePathParameter(probe[1]!, "runner id");
     try {
       const client = runnerId === "local" ? local : remote.runnerClient(runnerId);
       // Never substitute a local probe for an unavailable remote Runner.
@@ -28,7 +29,7 @@ export async function handleExecutionReadiness(
     return true;
   }
   if (decision) {
-    const sessionId = decodeURIComponent(decision[1]!);
+    const sessionId = decodePathParameter(decision[1]!, "session id");
     if (!store.getSession(sessionId)) { send(404, { error: "Session not found" }); return true; }
     if (request.method === "GET" && !decision[2]) {
       send(200, store.executionBlocks.list(sessionId)); return true;
@@ -38,10 +39,13 @@ export async function handleExecutionReadiness(
       if (!choice || typeof choice !== "object" || !["retry", "cancel", "switch"].includes(choice.action)) {
         send(400, { error: "Invalid execution decision" }); return true;
       }
+      // Decode before the try: a malformed id is the caller's mistake (400 from
+      // the catch-all), not a write conflict (409 from the block below).
+      const blockId = decodePathParameter(decision[2], "execution block id");
       try {
         store.assertSessionWritable(sessionId);
         if (choice.action === "switch") store.assertSessionAllowsRunner(sessionId, choice.runnerId);
-        store.executionBlocks.decide(sessionId, decodeURIComponent(decision[2]), choice);
+        store.executionBlocks.decide(sessionId, blockId, choice);
         send(200, { resolved: true });
       } catch (error) { send(409, { error: String(error) }); }
       return true;

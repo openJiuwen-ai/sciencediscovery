@@ -2722,6 +2722,18 @@
       ]
     },
     {
+      "source": "services/api/src/http/decode-path-parameter.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/server.test.ts",
+          "layer": "st",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
       "source": "services/runner/src/egress-bridge.ts",
       "risk": "P1",
       "owner": "runner",

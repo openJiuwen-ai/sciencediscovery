@@ -2,6 +2,7 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BridgeError, type BridgeEnvelope } from "@sciencediscovery/plugin-sdk";
+import { decodePathParameter } from "../http/decode-path-parameter.js";
 import type { PluginControl } from "./control.js";
 
 /** Called only after the API's bearer authentication. Path owns the scope. */
@@ -10,7 +11,7 @@ export async function handlePluginRequest(request: IncomingMessage, response: Se
   const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/plugins(?:\/(bridge|events|candidates)(?:\/([^/]+)\/([^/]+))?)?$/);
   if (!match) return false;
   const send = (status: number, value: unknown) => { response.writeHead(status, { "Content-Type": "application/json" }); response.end(JSON.stringify(value)); };
-  const scope = { projectId: decodeURIComponent(match[1]!), ...(url.searchParams.get("sessionId") ? { sessionId: url.searchParams.get("sessionId")! } : {}) };
+  const scope = { projectId: decodePathParameter(match[1]!, "project id"), ...(url.searchParams.get("sessionId") ? { sessionId: url.searchParams.get("sessionId")! } : {}) };
   const abort = new AbortController();
   response.once("close", () => abort.abort());
   try {

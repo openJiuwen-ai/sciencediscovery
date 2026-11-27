@@ -362,6 +362,7 @@ import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
 import { ApiStatusError } from "./api-status-error.js";
+import { decodePathParameter } from "./decode-path-parameter.js";
 import { send, sendError, sendJson } from "./response.js";
 import { handleCustomMcpRequest, handleMcpOAuthCallback } from "./custom-mcp.js";
 import { contentTypeForPath, serveStatic } from "./static.js";
@@ -1422,7 +1423,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         /^\/internal\/evolve-llm\/([^/]+)\/v1\/chat\/completions$/,
       );
       if (evolveLlmMatch && request.method === "POST") {
-        await handleEvolveCompletion(request, response, decodeURIComponent(evolveLlmMatch[1]!), {
+        await handleEvolveCompletion(request, response, decodePathParameter(evolveLlmMatch[1]!, "run id"), {
           store,
           tokens: evolveRunTokens,
         });
@@ -1455,17 +1456,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const suffix = scopedSession[2] ?? "";
         const management = suffix === "" && request.method === "DELETE"
           || /^\/(archive|restore|research-continuations|conversation-branches)(?:\/|$)/.test(suffix);
-        const target = decodeURIComponent(scopedSession[1]!);
+        const target = decodePathParameter(scopedSession[1]!, "session id");
         if (!management && isEvidenceSessionReadOnly(store.getSession(target))) throw new SessionEvidenceLockedError();
       }
       const branchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/conversation-branches$/);
       if (branchMatch && request.method === "POST") {
         const body = await readJson<{ messageId: string; requestId: string }>(request);
-        return sendJson(response, 202, await startConversationBranch(decodeURIComponent(branchMatch[1]!), body.messageId, body.requestId));
+        return sendJson(response, 202, await startConversationBranch(decodePathParameter(branchMatch[1]!, "session id"), body.messageId, body.requestId));
       }
       const continuationMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/research-continuations(?:\/([^/]+))?$/);
       if (continuationMatch) {
-        const sourceId = decodeURIComponent(continuationMatch[1]!);
+        const sourceId = decodePathParameter(continuationMatch[1]!, "session id");
         // A durable operation stays readable after its source session is gone:
         // the status route reads the operation file (and checks its source id)
         // instead of requiring the session to still exist.
@@ -1518,7 +1519,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (await handlePluginRequest(request, response, url, store.plugins, () => readJson(request))) return;
       const conversationExportMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/conversation-export$/);
       if (conversationExportMatch && request.method === "GET") {
-        const sessionId = decodeURIComponent(conversationExportMatch[1]!);
+        const sessionId = decodePathParameter(conversationExportMatch[1]!, "session id");
         const session = store.getSession(sessionId);
         if (!session) return sendError(response, 404, "Session not found");
         const allMessages = await store.readMessages(sessionId);
@@ -1553,7 +1554,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const researchPackageExportMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package\/exports(?:\/([^/]+)(?:\/(download|cancel))?)?$/);
       if (researchPackageExportMatch) {
-        const projectId = decodeURIComponent(researchPackageExportMatch[1]!);
+        const projectId = decodePathParameter(researchPackageExportMatch[1]!, "project id");
         if (!store.getProject(projectId)) return sendError(response, 404, "Project not found");
         const taskId = researchPackageExportMatch[2];
         const action = researchPackageExportMatch[3];
@@ -1635,7 +1636,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const researchPackageMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package(?:\/(inspect|import|preview))?$/);
       if (researchPackageMatch) {
-        const projectId = decodeURIComponent(researchPackageMatch[1]!);
+        const projectId = decodePathParameter(researchPackageMatch[1]!, "project id");
         const sessionId = url.searchParams.get("sessionId") ?? undefined;
         const previewRead = request.method === "GET" && (!researchPackageMatch[2] || researchPackageMatch[2] === "preview");
         // Only the polling shape (`defaults=1`, what a mounted panel asks every
@@ -2105,13 +2106,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const proxyServerMatch = url.pathname.match(/^\/api\/proxy\/servers\/([^/]+)$/);
       if (proxyServerMatch && request.method === "PUT") {
         sendJson(response, 200, await store.updateProxyServer(
-          decodeURIComponent(proxyServerMatch[1]!),
+          decodePathParameter(proxyServerMatch[1]!, "proxy server id"),
           await readJson<UpdateProxyServerRequest>(request),
         ));
         return;
       }
       if (proxyServerMatch && request.method === "DELETE") {
-        const serverId = decodeURIComponent(proxyServerMatch[1]!);
+        const serverId = decodePathParameter(proxyServerMatch[1]!, "proxy server id");
         await store.deleteProxyServer(serverId);
         sendJson(response, 200, { deleted: serverId });
         return;
@@ -2227,7 +2228,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!jiuwenSwarm) throw new ApiStatusError(409, "Skills are switched in JiuwenSwarm only when it is the agent backend");
         const body = await readJson<{ enabled?: unknown }>(request);
         if (typeof body.enabled !== "boolean") throw new ApiStatusError(400, "enabled must be true or false");
-        const name = decodeURIComponent(jiuwenSwarmSkillMatch[1]!);
+        const name = decodePathParameter(jiuwenSwarmSkillMatch[1]!, "skill name");
         try {
           await setJiuwenSwarmSkillEnabled(jiuwenSwarm, name, body.enabled);
         } catch (error) {
@@ -2241,7 +2242,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!jiuwenSwarm) throw new ApiStatusError(409, "Skills are switched in JiuwenSwarm only when it is the agent backend");
         const body = await readJson<{ enabled?: unknown }>(request);
         if (typeof body.enabled !== "boolean") throw new ApiStatusError(400, "enabled must be true or false");
-        const skillId = decodeURIComponent(jiuwenSwarmSkillByIdMatch[1]!);
+        const skillId = decodePathParameter(jiuwenSwarmSkillByIdMatch[1]!, "skill id");
         let snapshot: RuntimeSkillSnapshot;
         try {
           snapshot = skillCatalog.resolve([skillId])[0]!;
@@ -2408,7 +2409,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const legacyCancelRunMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/run\/cancel$/);
       if (legacyCancelRunMatch && request.method === "POST") {
-        const sessionId = decodeURIComponent(legacyCancelRunMatch[1]!);
+        const sessionId = decodePathParameter(legacyCancelRunMatch[1]!, "session id");
         await cancelCurrentSessionRun(response, store, sessionId, true);
         scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
           artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
@@ -2418,7 +2419,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const teardownKernelMatch = url.pathname.match(/^\/api\/runtime-status\/kernels\/([^/]+)\/teardown$/);
       if (teardownKernelMatch && request.method === "POST") {
-        const kernelId = decodeURIComponent(teardownKernelMatch[1]!);
+        const kernelId = decodePathParameter(teardownKernelMatch[1]!, "kernel id");
         sendJson(response, 200, await runnerClient.teardownKernel(
           kernelId,
           "User cleared the persistent Kernel from Runtime status",
@@ -2437,7 +2438,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const runnerDetail = url.pathname.match(/^\/api\/runners\/([^/]+)$/);
       if (runnerDetail && request.method === "GET" && runnerDetail[1] !== "npu") {
-        const id = decodeURIComponent(runnerDetail[1]!);
+        const id = decodePathParameter(runnerDetail[1]!, "runner id");
         if (id !== "local" && !store.getRemoteHost(id)) return sendError(response, 404, "Runner not found");
         sendJson(response, 200, await runnerTarget(store, runnerClient, remoteCompute, id, { reachability: "now" }));
         return;
@@ -2546,7 +2547,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const runnerNpuMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/npu-devices$/);
       if (runnerNpuMatch && request.method === "PUT") {
-        const runnerId = decodeURIComponent(runnerNpuMatch[1]!);
+        const runnerId = decodePathParameter(runnerNpuMatch[1]!, "runner id");
         const body = await readJson<{ devices?: unknown }>(request);
         const devices = body.devices;
         if (!Array.isArray(devices) || devices.some((entry) => typeof entry !== "number")) {
@@ -2637,7 +2638,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const remoteRunnerActionMatch = url.pathname.match(/^\/api\/(?:remote-hosts\/([^/]+)\/runner|runners\/([^/]+))\/(connect|disconnect)$/);
       if (remoteRunnerActionMatch && request.method === "POST") {
-        const host = store.getRemoteHost(decodeURIComponent((remoteRunnerActionMatch[1] ?? remoteRunnerActionMatch[2])!));
+        const host = store.getRemoteHost(decodePathParameter((remoteRunnerActionMatch[1] ?? remoteRunnerActionMatch[2])!, "runner id"));
         if (!host) return sendError(response, 404, "Remote host not found");
         if (remoteRunnerActionMatch[3] === "disconnect") {
           sendJson(response, 200, await remoteCompute.disconnectRunner(host.id));
@@ -2660,7 +2661,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const remoteConnectLogMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/connect-log$/)
         ?? url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/runner\/connect-log$/);
       if (remoteConnectLogMatch && request.method === "GET") {
-        const hostId = decodeURIComponent(remoteConnectLogMatch[1]!);
+        const hostId = decodePathParameter(remoteConnectLogMatch[1]!, "runner id");
         if (hostId !== "local" && !store.getRemoteHost(hostId)) return sendError(response, 404, "Runner not found");
         sendJson(response, 200, { entries: remoteCompute.connectLog(hostId), hostId } satisfies RemoteConnectLog);
         return;
@@ -2716,7 +2717,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const skillReviewConfirmMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)\/confirm$/);
       if (skillReviewConfirmMatch && request.method === "POST") {
-        const draftId = decodeURIComponent(skillReviewConfirmMatch[1]!);
+        const draftId = decodePathParameter(skillReviewConfirmMatch[1]!, "draft id");
         const body = await readJson<ConfirmSkillReviewDraftRequest>(request);
         const requestedLibraryId = body.libraryId?.trim();
         const libraryId = requestedLibraryId || DEFAULT_WRITABLE_SKILL_LIBRARY_ID;
@@ -2781,14 +2782,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const skillReviewDraftMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)$/);
       if (skillReviewDraftMatch && request.method === "GET") {
-        const draftId = decodeURIComponent(skillReviewDraftMatch[1]!);
+        const draftId = decodePathParameter(skillReviewDraftMatch[1]!, "draft id");
         const draft = await skillCatalog.getReviewDraft(draftId);
         if (!draft) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill review draft not found: ${draftId}`);
         sendJson(response, 200, draft);
         return;
       }
       if (skillReviewDraftMatch && request.method === "DELETE") {
-        const draftId = decodeURIComponent(skillReviewDraftMatch[1]!);
+        const draftId = decodePathParameter(skillReviewDraftMatch[1]!, "draft id");
         await skillCatalog.discardReviewDraft(draftId);
         sendJson(response, 200, { discarded: draftId });
         return;
@@ -2866,7 +2867,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const gitImportJobMatch = url.pathname.match(/^\/api\/skills\/import-git\/jobs\/([^/]+)$/);
       if (gitImportJobMatch) {
-        const jobId = decodeURIComponent(gitImportJobMatch[1]!);
+        const jobId = decodePathParameter(gitImportJobMatch[1]!, "import job id");
         if (request.method === "GET") {
           const job = getGitSkillImportJob(jobId);
           if (!job) throw new ApiStatusError(404, "Git Skill import job not found");
@@ -2918,7 +2919,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const skillDeletionImpactMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/deletion-impact$/);
       if (skillDeletionImpactMatch && request.method === "GET") {
-        const skillId = decodeURIComponent(skillDeletionImpactMatch[1]!);
+        const skillId = decodePathParameter(skillDeletionImpactMatch[1]!, "skill id");
         const skill = skillCatalog.get(skillId);
         if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         const impact = store.getSkillDeletionImpact(skillId);
@@ -2934,22 +2935,22 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const skillVersionMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/versions\/([^/]+)$/);
       if (skillVersionMatch && request.method === "GET") {
         sendJson(response, 200, await skillCatalog.getSkillVersion(
-          decodeURIComponent(skillVersionMatch[1]!),
-          decodeURIComponent(skillVersionMatch[2]!),
+          decodePathParameter(skillVersionMatch[1]!, "skill id"),
+          decodePathParameter(skillVersionMatch[2]!, "version id"),
         ));
         return;
       }
       const skillVersionsMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/versions$/);
       if (skillVersionsMatch && request.method === "GET") {
-        sendJson(response, 200, await skillCatalog.listSkillVersions(decodeURIComponent(skillVersionsMatch[1]!)));
+        sendJson(response, 200, await skillCatalog.listSkillVersions(decodePathParameter(skillVersionsMatch[1]!, "skill id")));
         return;
       }
 
       const skillFileRenameMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/files\/(.+)\/rename$/);
       if (skillFileRenameMatch && request.method === "POST") {
         sendJson(response, 200, await skillCatalog.renameFile(
-          decodeURIComponent(skillFileRenameMatch[1]!),
-          decodeURIComponent(skillFileRenameMatch[2]!),
+          decodePathParameter(skillFileRenameMatch[1]!, "skill id"),
+          decodePathParameter(skillFileRenameMatch[2]!, "file path"),
           await readJson<RenameSkillFileRequest>(request),
         ));
         return;
@@ -2958,16 +2959,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const skillFileMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/files\/(.+)$/);
       if (skillFileMatch && request.method === "PUT") {
         sendJson(response, 200, await skillCatalog.updateFile(
-          decodeURIComponent(skillFileMatch[1]!),
-          decodeURIComponent(skillFileMatch[2]!),
+          decodePathParameter(skillFileMatch[1]!, "skill id"),
+          decodePathParameter(skillFileMatch[2]!, "file path"),
           await readJson<UpdateSkillFileRequest>(request),
         ));
         return;
       }
       if (skillFileMatch && request.method === "DELETE") {
         sendJson(response, 200, await skillCatalog.deleteFile(
-          decodeURIComponent(skillFileMatch[1]!),
-          decodeURIComponent(skillFileMatch[2]!),
+          decodePathParameter(skillFileMatch[1]!, "skill id"),
+          decodePathParameter(skillFileMatch[2]!, "file path"),
           await readJson<DeleteSkillFileRequest>(request),
         ));
         return;
@@ -2975,12 +2976,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const skillMarkdownMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/skill-md$/);
       if (skillMarkdownMatch && request.method === "GET") {
-        sendJson(response, 200, skillCatalog.readSkillMarkdown(decodeURIComponent(skillMarkdownMatch[1]!)));
+        sendJson(response, 200, skillCatalog.readSkillMarkdown(decodePathParameter(skillMarkdownMatch[1]!, "skill id")));
         return;
       }
       if (skillMarkdownMatch && request.method === "PUT") {
         sendJson(response, 200, await skillCatalog.updateSkillMarkdown(
-          decodeURIComponent(skillMarkdownMatch[1]!),
+          decodePathParameter(skillMarkdownMatch[1]!, "skill id"),
           await readJson<UpdateSkillMarkdownRequest>(request),
         ));
         return;
@@ -2989,15 +2990,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const skillResourceMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/resources\/(.+)$/);
       if (skillResourceMatch && request.method === "GET") {
         sendJson(response, 200, skillCatalog.readCurrentResource(
-          decodeURIComponent(skillResourceMatch[1]!),
-          decodeURIComponent(skillResourceMatch[2]!),
+          decodePathParameter(skillResourceMatch[1]!, "skill id"),
+          decodePathParameter(skillResourceMatch[2]!, "resource path"),
         ));
         return;
       }
 
       const skillPackageMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/package$/);
       if (skillPackageMatch && request.method === "GET") {
-        const archive = skillCatalog.exportPackage(decodeURIComponent(skillPackageMatch[1]!));
+        const archive = skillCatalog.exportPackage(decodePathParameter(skillPackageMatch[1]!, "skill id"));
         response.writeHead(200, {
           "cache-control": "no-store",
           "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(archive.filename)}`,
@@ -3011,19 +3012,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
       if (skillMatch && request.method === "GET") {
-        const skillId = decodeURIComponent(skillMatch[1]!);
+        const skillId = decodePathParameter(skillMatch[1]!, "skill id");
         const detail = skillCatalog.get(skillId);
         if (!detail) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         sendJson(response, 200, detail);
         return;
       }
       if (skillMatch && request.method === "PUT") {
-        const skillId = decodeURIComponent(skillMatch[1]!);
+        const skillId = decodePathParameter(skillMatch[1]!, "skill id");
         sendJson(response, 200, await skillCatalog.update(skillId, await readJson<UpdateSkillRequest>(request)));
         return;
       }
       if (skillMatch && request.method === "DELETE") {
-        const skillId = decodeURIComponent(skillMatch[1]!);
+        const skillId = decodePathParameter(skillMatch[1]!, "skill id");
         const skill = skillCatalog.get(skillId);
         if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         const impact: SkillDeletionImpact = store.getSkillDeletionImpact(skillId);
@@ -3042,7 +3043,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const runnerManagement = url.pathname.match(/^\/api\/(?:remote-hosts|runners)\/([^/]+)\/(environment-setup|environment-revisions|environments(?:\/[^/]+(?:\/(?:install|uninstall))?)?|workspaces(?:\/[^/]+(?:\/files)?)?)$/);
       if (runnerManagement) {
-        const hostId = decodeURIComponent(runnerManagement[1]!);
+        const hostId = decodePathParameter(runnerManagement[1]!, "runner id");
         const host = store.getRemoteHost(hostId);
         if (hostId !== "local" && !host) return sendError(response, 404, "Runner not found");
         const operation = runnerManagement[2]!;
@@ -3055,7 +3056,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         catch (error) { return sendError(response, 503, error instanceof Error ? error.message : "Connect this Runner first"); }
         const workspaceFiles = operation.match(/^workspaces\/([^/]+)\/files$/);
         if (workspaceFiles && request.method === "GET") {
-          const sessionId = decodeURIComponent(workspaceFiles[1]!);
+          const sessionId = decodePathParameter(workspaceFiles[1]!, "session id");
           const binding = (await runnerWorkspaceBindings(store, hostId)).find((item) => item.sessionId === sessionId);
           if (!binding) return sendError(response, 404, "Workspace binding not found");
           const files = hostId === "local" ? await listWorkspaceFiles(store, sessionId)
@@ -3064,7 +3065,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return;
         }
         if (operation.startsWith("workspaces/") && request.method === "DELETE") {
-          const sessionId = decodeURIComponent(operation.slice("workspaces/".length));
+          const sessionId = decodePathParameter(operation.slice("workspaces/".length), "session id");
           store.assertSessionWritable(sessionId);
           const binding = (await runnerWorkspaceBindings(store, hostId)).find((item) => item.sessionId === sessionId);
           if (!binding) return sendError(response, 404, "Workspace binding not found");
@@ -3123,7 +3124,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (environmentInstallMatch && request.method === "POST") {
         const body = await readJson<InstallEnvironmentRequest>(request);
         const packages = readEnvironmentPackages(body);
-        const environmentId = decodeURIComponent(environmentInstallMatch[1]!);
+        const environmentId = decodePathParameter(environmentInstallMatch[1]!, "environment id");
         if (packages.some((value) => value.trim().toLowerCase().endsWith(".whl"))) {
           return sendError(
             response,
@@ -3147,7 +3148,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (environmentUninstallMatch && request.method === "POST") {
         const body = await readJson<UninstallEnvironmentRequest>(request);
         const packages = readEnvironmentPackages(body);
-        const environmentId = decodeURIComponent(environmentUninstallMatch[1]!);
+        const environmentId = decodePathParameter(environmentUninstallMatch[1]!, "environment id");
         const revision = await runnerClient.uninstallEnvironment(environmentId, { packages });
         await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
         const environment = store.listEnvironments().find((candidate) => candidate.id === environmentId);
@@ -3157,7 +3158,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const environmentMatch = url.pathname.match(/^\/api\/environments\/([^/]+)$/);
       if (environmentMatch && request.method === "DELETE") {
-        const environmentId = decodeURIComponent(environmentMatch[1]!);
+        const environmentId = decodePathParameter(environmentMatch[1]!, "environment id");
         await runnerClient.deleteEnvironment(environmentId);
         await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
         sendJson(response, 200, { deleted: environmentId });
@@ -3171,7 +3172,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const modelConnectivityMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/test$/);
       if (modelConnectivityMatch && request.method === "POST") {
-        const modelId = decodeURIComponent(modelConnectivityMatch[1]!);
+        const modelId = decodePathParameter(modelConnectivityMatch[1]!, "model id");
         const savedProfile = store.getModel(modelId);
         if (!savedProfile) return sendError(response, 404, "Model not found");
         // Store edits mutate the saved object. Keep the approved revision frozen
@@ -3530,8 +3531,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       // first, which for a long run is several megabytes nobody asked for.
       const sessionSubagentMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)$/);
       if (sessionSubagentMatch && request.method === "GET") {
-        const sessionId = decodeURIComponent(sessionSubagentMatch[1]!);
-        const subagentId = decodeURIComponent(sessionSubagentMatch[2]!);
+        const sessionId = decodePathParameter(sessionSubagentMatch[1]!, "session id");
+        const subagentId = decodePathParameter(sessionSubagentMatch[2]!, "subagent id");
         if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         const child = store.getSubagent(sessionId, subagentId);
         if (child === undefined) return sendError(response, 404, `Subagent not found: ${subagentId}`);
@@ -3540,8 +3541,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const stopSubagentMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/stop$/);
       if (stopSubagentMatch && request.method === "POST") {
-        const sessionId = decodeURIComponent(stopSubagentMatch[1]!);
-        const subagentId = decodeURIComponent(stopSubagentMatch[2]!);
+        const sessionId = decodePathParameter(stopSubagentMatch[1]!, "session id");
+        const subagentId = decodePathParameter(stopSubagentMatch[2]!, "subagent id");
         if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         if (!stopSessionSubagent(store, sessionId, subagentId)) sendError(response, 404, `Subagent not found: ${subagentId}`);
         else sendJson(response, 200, { stopped: true, sessionId, subagentId });
@@ -4062,8 +4063,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         /^\/api\/sessions\/([^/]+)\/web-pages\/([^/]+)\/content$/,
       );
       if (webPageContentMatch && request.method === "GET") {
-        const sessionId = decodeURIComponent(webPageContentMatch[1]!);
-        const webPageId = decodeURIComponent(webPageContentMatch[2]!);
+        const sessionId = decodePathParameter(webPageContentMatch[1]!, "session id");
+        const webPageId = decodePathParameter(webPageContentMatch[2]!, "web page id");
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
         if (!memoryGraphEnabled()) {
           // Mirror the toggle-off shape of the other /api/memory/* endpoints:
@@ -4189,7 +4190,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const trajectoryMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/trajectory(?:\/(detail|export))?$/);
       if (trajectoryMatch && request.method === "GET") {
-        const sessionId = decodeURIComponent(trajectoryMatch[1]!);
+        const sessionId = decodePathParameter(trajectoryMatch[1]!, "session id");
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
         const controller = new AbortController();
         response.once("close", () => controller.abort());
@@ -4274,7 +4275,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         const maxNodes = Number(url.searchParams.get("maxNodes") ?? "0");
         sendJson(response, 200, await memoryGraphClient.getSearchGraph(
-          decodeURIComponent(searchGraphMatch[1]!),
+          decodePathParameter(searchGraphMatch[1]!, "session id"),
           Number.isFinite(maxNodes) && maxNodes > 0 ? Math.floor(maxNodes) : undefined,
         ));
         return;
@@ -4282,7 +4283,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const evolveDraftMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/evolve\/draft$/);
       if (evolveDraftMatch && request.method === "POST") {
-        const sessionId = decodeURIComponent(evolveDraftMatch[1]!);
+        const sessionId = decodePathParameter(evolveDraftMatch[1]!, "session id");
         const session = store.assertSessionWritable(sessionId);
         const body = await readJson<{ task?: unknown }>(request);
         const task = typeof body.task === "string" ? body.task.trim() : "";
@@ -4309,7 +4310,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!Number.isFinite(after) || after < 0) return sendError(response, 400, "after must be a non-negative number");
         await handleEvolveRunEvents(
           request, response, evolutionStore, evolveOrchestrator,
-          decodeURIComponent(evolveRunEventsMatch[1]!), Math.floor(after),
+          decodePathParameter(evolveRunEventsMatch[1]!, "run id"), Math.floor(after),
         );
         return;
       }
@@ -4320,15 +4321,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (evolveCandidateMatch && request.method === "GET") {
         await handleEvolveGetCandidate(
           response, evolutionStore, evolveCandidates,
-          decodeURIComponent(evolveCandidateMatch[1]!),
-          decodeURIComponent(evolveCandidateMatch[2]!),
+          decodePathParameter(evolveCandidateMatch[1]!, "run id"),
+          decodePathParameter(evolveCandidateMatch[2]!, "candidate id"),
         );
         return;
       }
 
       const evolveRunStopMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/stop$/);
       if (evolveRunStopMatch && request.method === "POST") {
-        await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodeURIComponent(evolveRunStopMatch[1]!));
+        await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodePathParameter(evolveRunStopMatch[1]!, "run id"));
         return;
       }
 
@@ -4336,7 +4337,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (evolveRunRetryMatch && request.method === "POST") {
         await handleEvolveRetryRun(
           response, evolutionStore, evolveOrchestrator,
-          decodeURIComponent(evolveRunRetryMatch[1]!), store,
+          decodePathParameter(evolveRunRetryMatch[1]!, "run id"), store,
         );
         return;
       }
@@ -4832,7 +4833,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const activityMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/agent-activity(?:\/(executions|transfers|timers)\/([^/]+)\/(logs|cancel|reconcile))?$/);
       if (activityMatch) {
-        const sessionId = decodeURIComponent(activityMatch[1]!);
+        const sessionId = decodePathParameter(activityMatch[1]!, "session id");
         if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         const owners = [{ sessionId, agentId: "main" }, ...store.listSubagents(sessionId).map((child) => ({ sessionId, agentId: `subagent:${child.id}` }))];
         const executions = owners.flatMap((owner) => store.shellExecutions.list(owner));
@@ -4842,7 +4843,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sendJson(response, 200, { executions, transfers, timers, agents: owners.map((owner) => ({ ...owner, stopped: !store.notifications.canWakeAgent(owner) })) });
           return;
         }
-        const kind = activityMatch[2]; const id = decodeURIComponent(activityMatch[3] ?? ""); const operation = activityMatch[4];
+        const kind = activityMatch[2]; const id = decodePathParameter(activityMatch[3] ?? "", "activity id"); const operation = activityMatch[4];
         const item = (kind === "executions" ? executions : kind === "transfers" ? transfers : timers).find((entry) => entry.id === id);
         if (!item) {
           const noun = kind === "executions" ? "Execution" : kind === "transfers" ? "Transfer" : "Timer";
@@ -4877,7 +4878,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const resumeChildMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/resume$/);
       if (resumeChildMatch && request.method === "POST") {
-        const sessionId = decodeURIComponent(resumeChildMatch[1]!); const subagentId = decodeURIComponent(resumeChildMatch[2]!);
+        const sessionId = decodePathParameter(resumeChildMatch[1]!, "session id"); const subagentId = decodePathParameter(resumeChildMatch[2]!, "subagent id");
         if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         store.assertSessionWritable(sessionId);
         if (!store.listSubagents(sessionId).some((child) => child.id === subagentId)) return sendError(response, 404, `Subagent not found: ${subagentId}`);

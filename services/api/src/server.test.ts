@@ -20,7 +20,7 @@ import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createServer as createHttpServer, type ServerResponse } from "node:http";
+import { createServer as createHttpServer, request as httpRequest, type ServerResponse } from "node:http";
 import { connect, createServer as createTcpServer, type AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
@@ -131,6 +131,7 @@ import { SkillCatalog } from "@sciencediscovery/specialist";
 import type { NativeAgentOptions } from "./native-agent/index.js";
 import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import { SAMPLE_SESSION_MARKER } from "./sample-session/index.js";
+import { apiLog } from "./logging.js";
 import { SessionStore } from "./store.js";
 import { EvolutionStore } from "./evolution/store.js";
 import type { McpCatalog, McpInvokeResponse } from "@sciencediscovery/schema";
@@ -10482,4 +10483,53 @@ test("Git Skill review rejects changed refs and duplicate names, and restores dr
   assert.equal(restored.commit, updated);
   assert.equal(restored.drafts[0]?.draftId, result.drafts[0]?.draftId);
   assert.equal((await readDrafts()).length, saved.length + 1);
+});
+
+/**
+ * A path parameter the client could not have meant is the caller's mistake.
+ * It must answer 400 naming the parameter, and it must not reach the
+ * `unclassified_request_error` channel that exists for real server faults.
+ * The request is written straight to the socket so `%%` reaches the server
+ * verbatim instead of being normalised by a URL parser first.
+ */
+function rawRequest(origin: string, path: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolveRaw, rejectRaw) => {
+    const request = httpRequest(`${origin}${path}`, { headers: authorization }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => resolveRaw({ body: Buffer.concat(chunks).toString("utf8"), status: response.statusCode ?? 0 }));
+    });
+    request.on("error", rejectRaw);
+    request.end();
+  });
+}
+
+test("an undecodable path parameter answers 400 naming it without an unclassified_request_error", async (context) => {
+  const root = resolve(process.cwd(), ".tmp/r", `malformed-path-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  context.after(() => removeTestRoot(root));
+  const { origin } = await startTestApi(context, root);
+  // The catch-all writes this event for an unclassified fault; a client mistake
+  // must never produce one. Capture the channel instead of reading a log file,
+  // so the assertion is about what the handler logged for these requests.
+  const logged = context.mock.method(apiLog, "error", () => undefined);
+  const routes: Array<[string, RegExp]> = [
+    ["/api/skills/id-%%", /skill id/],
+    ["/api/runners/id-%%", /runner id/],
+    ["/api/skill-libraries/id-%%", /skill library id/],
+    // A decoder outside http/index.ts: the execution-block route.
+    ["/api/sessions/id-%%/execution-blocks", /session id/],
+  ];
+  for (const [path, parameter] of routes) {
+    const response = await rawRequest(origin, path);
+    assert.equal(response.status, 400, `${path} must answer 400, not ${response.status}: ${response.body}`);
+    const body = JSON.parse(response.body) as { error: string };
+    assert.match(body.error, parameter, `${path} must name the parameter: ${response.body}`);
+  }
+  const events = logged.mock.calls.map((call) => call.arguments[0]);
+  assert.ok(!events.includes("unclassified_request_error"),
+    `a malformed path parameter must not be logged as an unclassified fault: ${events.join(", ")}`);
+  const unknown = await rawRequest(origin, "/api/skills/id-plain");
+  assert.equal(unknown.status, 404);
+  assert.match((JSON.parse(unknown.body) as { error: string }).error, /Skill not found: id-plain/);
 });

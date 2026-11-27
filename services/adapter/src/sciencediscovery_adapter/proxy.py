@@ -56,6 +56,31 @@ _HOP_BY_HOP = frozenset({
     "te", "trailer", "transfer-encoding", "upgrade",
 })
 
+# httpx.URL refuses a path that carries a control byte after Starlette decoded it
+# (`InvalidURL`, which is not an `httpx.HTTPError`). Such a byte cannot be part
+# of a path parameter, so it is answered as the caller's mistake before the URL
+# is built, rather than escaping as an unclassified 500.
+_NON_PRINTABLE = frozenset(chr(code) for code in range(0x20)) | {"\x7f"}
+
+
+def invalid_path_parameter(path: str) -> tuple[int, str] | None:
+    """The first decoded path segment with a non-printable byte, and its index."""
+    for index, segment in enumerate(path.split("/")):
+        if _NON_PRINTABLE.intersection(segment):
+            return index, segment
+    return None
+
+
+def _invalid_path_response(index: int, segment: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "invalid_path_parameter",
+            "message": f"Path parameter {segment!r} at segment {index} contains a non-printable character",
+            "parameter": segment,
+        },
+        status_code=400,
+    )
+
 
 def forwardable(headers, *, drop: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
     """Header pairs safe to forward, in order and with repeats preserved.
@@ -81,6 +106,9 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
     has_body = request.method not in ("GET", "HEAD")
     request_id = uuid.uuid4().hex
     started = time.monotonic()
+    malformed = invalid_path_parameter(request.url.path)
+    if malformed is not None:
+        return _invalid_path_response(*malformed)
     upstream_url = (
         httpx.URL(path=request.url.path, query=request.url.query.encode())
         if request.url.query else httpx.URL(path=request.url.path)

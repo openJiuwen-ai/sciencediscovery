@@ -16,6 +16,7 @@ import { readFile, stat } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { extname, isAbsolute, relative, resolve, sep } from "node:path";
 
+import { decodePathParameter } from "./decode-path-parameter.js";
 import { send, sendError } from "./response.js";
 
 const FALLBACK_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ScienceDiscovery</title></head><body><main><h1>ScienceDiscovery API is running</h1><p>Build the web package with <code>pnpm build</code> to load the browser UI.</p><p><a href="/health">Health check</a></p></main></body></html>`;
@@ -37,7 +38,7 @@ export function contentTypeForPath(pathname: string): string {
 }
 
 export async function serveStatic(response: ServerResponse, staticDir: string, pathname: string): Promise<void> {
-  const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname.slice(1));
+  const requested = pathname === "/" ? "index.html" : decodePathParameter(pathname.slice(1), "static asset path");
   const candidate = resolve(staticDir, requested);
   const relativePath = relative(staticDir, candidate);
   if (relativePath === ".." || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {

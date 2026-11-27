@@ -27,6 +27,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ExecutionOwner, PermissionEpoch, ShellExecutionRequest } from "@sciencediscovery/schema";
 
 import { readJson } from "../http/body.js";
+import { decodePathParameter } from "../http/decode-path-parameter.js";
 import { sendError, sendJson } from "../http/response.js";
 import { remoteWorkspaceKey } from "../remote-runner.js";
 
@@ -166,8 +167,8 @@ export async function handleEvolveRunner(
     /^\/internal\/evolve-runner\/([^/]+)\/shell-executions(?:\/([^/]+)(?:\/(cancel))?)?$/,
   );
   if (!match) return false;
-  const runId = decodeURIComponent(match[1]!);
-  const executionId = match[2] ? decodeURIComponent(match[2]) : undefined;
+  const runId = decodePathParameter(match[1]!, "run id");
+  const executionId = match[2] ? decodePathParameter(match[2], "execution id") : undefined;
   const cancel = match[3] === "cancel";
   const grant = deps.grants.resolve(runId, bearer(request));
   if (!grant) {

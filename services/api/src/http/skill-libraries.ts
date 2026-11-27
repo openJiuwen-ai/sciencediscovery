@@ -24,6 +24,7 @@ import type {
 
 import { SkillLibraryCatalog, SkillLibraryCatalogError } from "../skill-library-catalog.js";
 import { readJson } from "./body.js";
+import { decodePathParameter } from "./decode-path-parameter.js";
 import { sendJson } from "./response.js";
 
 export async function handleSkillLibraryRequest(options: {
@@ -60,20 +61,20 @@ export async function handleSkillLibraryRequest(options: {
 
   const proposalPublishMatch = url.pathname.match(/^\/api\/skill-library-proposals\/([^/]+)\/publish$/);
   if (proposalPublishMatch && request.method === "POST") {
-    const result = await catalog.publishProposal(decodeURIComponent(proposalPublishMatch[1]!));
+    const result = await catalog.publishProposal(decodePathParameter(proposalPublishMatch[1]!, "proposal id"));
     sendJson(response, result.result.conflicts.length ? 409 : 201, result);
     return true;
   }
 
   const proposalRejectMatch = url.pathname.match(/^\/api\/skill-library-proposals\/([^/]+)\/reject$/);
   if (proposalRejectMatch && request.method === "POST") {
-    sendJson(response, 200, await catalog.rejectProposal(decodeURIComponent(proposalRejectMatch[1]!)));
+    sendJson(response, 200, await catalog.rejectProposal(decodePathParameter(proposalRejectMatch[1]!, "proposal id")));
     return true;
   }
 
   const skillLibrariesMatch = url.pathname.match(/^\/api\/skill-libraries\/([^/]+)$/);
   if (skillLibrariesMatch && request.method === "GET") {
-    const libraryId = decodeURIComponent(skillLibrariesMatch[1]!);
+    const libraryId = decodePathParameter(skillLibrariesMatch[1]!, "skill library id");
     const library = catalog.get(libraryId);
     if (!library) throw new SkillLibraryCatalogError("SKILL_LIBRARY_NOT_FOUND", `Skill library not found: ${libraryId}`);
     sendJson(response, 200, library);
@@ -82,12 +83,12 @@ export async function handleSkillLibraryRequest(options: {
 
   const skillLibraryVersionsMatch = url.pathname.match(/^\/api\/skill-libraries\/([^/]+)\/versions$/);
   if (skillLibraryVersionsMatch && request.method === "GET") {
-    sendJson(response, 200, await catalog.listVersions(decodeURIComponent(skillLibraryVersionsMatch[1]!)));
+    sendJson(response, 200, await catalog.listVersions(decodePathParameter(skillLibraryVersionsMatch[1]!, "skill library id")));
     return true;
   }
   if (skillLibraryVersionsMatch && request.method === "POST") {
     const result = await catalog.commitVersion(
-      decodeURIComponent(skillLibraryVersionsMatch[1]!),
+      decodePathParameter(skillLibraryVersionsMatch[1]!, "skill library id"),
       await readJson<CommitSkillLibraryVersionRequest>(request),
     );
     sendJson(response, result.conflicts.length ? 409 : result.dryRun ? 200 : 201, result);
@@ -97,7 +98,7 @@ export async function handleSkillLibraryRequest(options: {
   const skillLibraryProposalMatch = url.pathname.match(/^\/api\/skill-libraries\/([^/]+)\/proposals$/);
   if (skillLibraryProposalMatch && request.method === "POST") {
     sendJson(response, 201, await catalog.proposeUpdate(
-      decodeURIComponent(skillLibraryProposalMatch[1]!),
+      decodePathParameter(skillLibraryProposalMatch[1]!, "skill library id"),
       await readJson<ProposeSkillLibraryUpdateRequest>(request),
     ));
     return true;
@@ -106,8 +107,8 @@ export async function handleSkillLibraryRequest(options: {
   const skillLibraryVersionMatch = url.pathname.match(/^\/api\/skill-libraries\/([^/]+)\/versions\/([^/]+)$/);
   if (skillLibraryVersionMatch && request.method === "GET") {
     sendJson(response, 200, await catalog.getVersion(
-      decodeURIComponent(skillLibraryVersionMatch[1]!),
-      decodeURIComponent(skillLibraryVersionMatch[2]!),
+      decodePathParameter(skillLibraryVersionMatch[1]!, "skill library id"),
+      decodePathParameter(skillLibraryVersionMatch[2]!, "version id"),
     ));
     return true;
   }
@@ -115,9 +116,9 @@ export async function handleSkillLibraryRequest(options: {
   const skillLibraryVersionDiffMatch = url.pathname.match(/^\/api\/skill-libraries\/([^/]+)\/versions\/([^/]+)\/diff\/([^/]+)$/);
   if (skillLibraryVersionDiffMatch && request.method === "GET") {
     sendJson(response, 200, await catalog.diffVersions(
-      decodeURIComponent(skillLibraryVersionDiffMatch[1]!),
-      decodeURIComponent(skillLibraryVersionDiffMatch[2]!),
-      decodeURIComponent(skillLibraryVersionDiffMatch[3]!),
+      decodePathParameter(skillLibraryVersionDiffMatch[1]!, "skill library id"),
+      decodePathParameter(skillLibraryVersionDiffMatch[2]!, "version id"),
+      decodePathParameter(skillLibraryVersionDiffMatch[3]!, "version id"),
     ));
     return true;
   }
@@ -125,7 +126,7 @@ export async function handleSkillLibraryRequest(options: {
   const skillLibraryRollbackMatch = url.pathname.match(/^\/api\/skill-libraries\/([^/]+)\/rollback$/);
   if (skillLibraryRollbackMatch && request.method === "POST") {
     const result = await catalog.rollback(
-      decodeURIComponent(skillLibraryRollbackMatch[1]!),
+      decodePathParameter(skillLibraryRollbackMatch[1]!, "skill library id"),
       await readJson<RollbackSkillLibraryVersionRequest>(request),
     );
     sendJson(response, result.conflicts.length ? 409 : 201, result);

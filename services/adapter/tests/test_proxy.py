@@ -186,3 +186,48 @@ async def test_a_path_outside_api_reaches_the_legacy_server_too():
     response = await call(handler, url="/assets/app.js")
     assert seen["url"] == "http://legacy.test/assets/app.js"
     assert response.headers["content-type"] == "text/html"
+
+
+@pytest.mark.parametrize("segment, character", [("id-%00", "\x00"), ("id-%01", "\x01"), ("id-%7f", "\x7f")])
+@pytest.mark.parametrize("route", [
+    "/api/models/{}",
+    "/api/projects/{}/settings",
+    "/api/skill-libraries/{}",
+    "/api/sessions/{}",
+])
+async def test_non_printable_path_parameter_is_a_400_naming_it_without_contacting_the_legacy_api(route, segment, character):
+    """A control byte is not an id, and httpx.URL refuses to build it.
+
+    The answer has to be the caller's 400 that names the parameter, not the
+    plain-text 500 Starlette produces for an escaped InvalidURL, and the
+    upstream must not be asked about input that cannot be forwarded.
+    """
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return streamed(404, b'{"error":"Not found"}')
+
+    response = await call(handler, url=route.format(segment))
+
+    assert response.status_code == 400, response.text
+    assert response.headers["content-type"] == "application/json"
+    body = response.json()
+    assert body["error"] == "invalid_path_parameter"
+    assert body["parameter"] == f"id-{character}"
+    assert repr(f"id-{character}") in body["message"]
+    assert calls == []
+
+
+async def test_an_unknown_but_well_formed_path_parameter_still_proxies_and_keeps_its_404():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return streamed(404, b'{"error":"Not found"}')
+
+    response = await call(handler, url="/api/models/id-plain")
+
+    assert seen["url"] == "http://legacy.test/api/models/id-plain"
+    assert response.status_code == 404
+    assert response.json() == {"error": "Not found"}

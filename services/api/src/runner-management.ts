@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import type { RemoteComputeClient, RunnerClient } from "@sciencediscovery/executor";
 import { effectiveRunnerIds, type RunnerTarget, type RemoteRunnerStatus, type CreateEnvironmentRequest, type InstallEnvironmentRequest } from "@sciencediscovery/schema";
 import type { SessionStore } from "./store.js";
+import { decodePathParameter } from "./http/decode-path-parameter.js";
 import { resolveEnvironmentInstallRequest } from "./environment-sources.js";
 import { remoteWorkspaceKey } from "./remote-runner.js";
 
@@ -64,7 +65,7 @@ export async function manageRunnerEnvironment(runner: RunnerClient, store: Sessi
   if (path === "environments" && method === "POST") return runner.createEnvironment(body as CreateEnvironmentRequest);
   const match = path.match(/^environments\/([^/]+)(?:\/(install|uninstall))?$/);
   if (match) {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodePathParameter(match[1]!, "environment id");
     if (!match[2] && method === "DELETE") { await runner.deleteEnvironment(id); return { deleted: id }; }
     if (match[2] && method === "POST") {
       let revision;
