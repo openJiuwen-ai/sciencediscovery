@@ -41,7 +41,8 @@ export default defineConfig({
     proxy: {
       "/api": "http://127.0.0.1:4310",
       "/health": "http://127.0.0.1:4310",
-      // Account service (services/accounts): ticket exchange, refresh, /v1/me.
+      // Account service: ticket exchange,
+      // refresh, /v1/me.
       // VITE_ACCOUNTS_API selects a deployed service; otherwise local dev keeps
       // the historical loopback proxy. The target is overridable because the
       // deployed account service can sit behind a path prefix such as

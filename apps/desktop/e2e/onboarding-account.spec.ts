@@ -26,6 +26,8 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // SPDX-License-Identifier: Apache-2.0
 import { expect, test, type Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 
 import { CREATED_AT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
 
@@ -137,7 +139,8 @@ async function installMockAccount(page: Page, options: AccountMockOptions = {}) 
 
     if (path === "/v1/credits/ledger") {
       ledgerCalls.push(url.search);
-      const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 20), 1), 100);
+      const all = url.searchParams.get("all") === "1";
+      const limit = all ? 1000 : Math.min(Math.max(Number(url.searchParams.get("limit") ?? 20), 1), 100);
       const before = url.searchParams.get("beforeId");
       const start = before === null ? state.ledgerRows : Math.min(Number(before) - 1, state.ledgerRows);
       const items = [];
@@ -155,9 +158,11 @@ async function installMockAccount(page: Page, options: AccountMockOptions = {}) 
           createdAt: CREATED_AT,
         });
       }
-      const nextBeforeId = items.length === limit && items[items.length - 1]!.id > 1
-        ? items[items.length - 1]!.id
-        : null;
+      const nextBeforeId = all
+        ? null
+        : items.length === limit && items[items.length - 1]!.id > 1
+          ? items[items.length - 1]!.id
+          : null;
       return route.fulfill({ json: { items, nextBeforeId } });
     }
 
@@ -240,6 +245,15 @@ async function openAccount(page: Page): Promise<void> {
   await expect(page.locator(".account-page")).toBeVisible();
 }
 
+/** Review evidence, opt-in through `REVIEW_SCREENSHOTS_DIR` like the other
+ *  journey specs: a plain test run writes nothing. */
+async function capture(page: Page, name: string): Promise<void> {
+  const dir = process.env.REVIEW_SCREENSHOTS_DIR;
+  if (!dir) return;
+  await mkdir(dir, { recursive: true });
+  await page.screenshot({ path: join(dir, `${name}.png`), animations: "disabled" });
+}
+
 test.describe("the two-step entry gate", () => {
   test("step one can be skipped, and step two cannot", async ({ page }) => {
     await page.addInitScript(
@@ -261,6 +275,7 @@ test.describe("the two-step entry gate", () => {
     await expect(instruction).toContainText("不会读取或保存华为账号的手机号");
     await expect(page.locator(".login-step-badge")).toHaveCount(0);
     await expect(page.locator(".login-credit-hint")).toHaveCount(0);
+    await capture(page, "01-sign-in-page");
 
     // The skip is a real button beside the HUAWEI button, the same height, with
     // no arrow of its own.
@@ -350,6 +365,7 @@ test.describe("the account page", () => {
 
     await expect(page.locator(".account-hero h1")).toHaveText("新昵称");
     await expect(page.locator(".account-notice")).toContainText("昵称已保存");
+    await capture(page, "02-account-page");
     expect(patches).toHaveLength(1);
     expect(account.state.displayName).toBe("新昵称");
 
@@ -480,8 +496,8 @@ test.describe("the account page", () => {
     await page.locator(".account-page-size select").selectOption("100");
     const next = page.getByRole("button", { name: "下一页" });
     const hint = page.getByText("仅显示最近 1000 条流水", { exact: false });
-    // The hint appears as the tenth chunk lands; one more press walks to the
-    // last page, where 下一页 is disabled because the ceiling is also the end.
+    // The hint appears once the local pager reaches the last page; 下一页 is
+    // disabled there because the ceiling is also the end.
     for (let attempt = 0; attempt < 15; attempt += 1) {
       if (await next.isDisabled()) break;
       await next.click();
@@ -489,8 +505,9 @@ test.describe("the account page", () => {
     }
 
     await expect(hint).toBeVisible();
-    // load() + nine cursor reads; the eleventh page is never requested.
-    expect(account.ledgerCalls.length).toBeLessThanOrEqual(10);
+    // One `all=1` read fills the local pager; the client walks no cursor.
+    expect(account.ledgerCalls.length).toBe(1);
     await expect(next).toBeDisabled();
+    await capture(page, "03-ledger-local-paging");
   });
 });

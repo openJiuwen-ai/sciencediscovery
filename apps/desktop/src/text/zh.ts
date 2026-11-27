@@ -264,7 +264,6 @@ export const ZH = {
     afterBalance: (balance: string) => `余额 ${balance}`,
     perPage: "每页",
     perPageUnit: "条",
-    pageCurrent: (page: number) => `第 ${page} 页`,
     pageOf: (page: number, total: number) => `第 ${page} / ${total} 页`,
     prevPage: "上一页",
     nextPage: "下一页",

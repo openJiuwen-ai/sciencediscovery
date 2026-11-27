@@ -14,8 +14,9 @@ import {
   fetchAccountMe,
   fetchAccountUsage,
   huaweiSignInUrl,
-  listAccountLedger,
+  listAccountLedgerAll,
   listAccountSessions,
+  MAX_LEDGER_ROWS,
   revokeAccountDevice,
   updateAccountProfile,
   type AccountLedgerRow,
@@ -48,15 +49,25 @@ interface Props {
 const WEEK_DAYS = 7;
 const DAY_MS = 86_400_000;
 const PAGE_SIZES = [10, 30, 50, 100] as const;
-/** The ledger endpoint's own ceiling; one request fills several UI pages. */
-const LEDGER_CHUNK = 100;
-/** The most rows the page will read or show. A busy account's spending history
- *  can be long, and the UI is a reading surface, not an export: the database
- *  keeps the same ceiling per kind, so this is the whole history the page ever
- *  asks for. */
-export const MAX_LEDGER_ROWS = 1000;
-/** Guard against a page number that would walk an unreasonably long ledger. */
-const MAX_CHUNK_ROUNDS = 20;
+/** The reader's page size, kept on this device. */
+const PAGE_SIZE_STORAGE_KEY = "sciencediscovery-account-page-size";
+
+function readStoredPageSize(): number {
+  try {
+    const stored = Number(globalThis.localStorage?.getItem(PAGE_SIZE_STORAGE_KEY));
+    return (PAGE_SIZES as readonly number[]).includes(stored) ? stored : PAGE_SIZES[0];
+  } catch {
+    return PAGE_SIZES[0];
+  }
+}
+
+function storePageSize(size: number): void {
+  try {
+    globalThis.localStorage?.setItem(PAGE_SIZE_STORAGE_KEY, String(size));
+  } catch {
+    // Local preference only; blocked storage must not break the page.
+  }
+}
 
 function matchesFilter(row: AccountLedgerRow, filter: Filter): boolean {
   return filter === "all" || (filter === "earned" ? row.delta > 0 : row.delta < 0);
@@ -129,9 +140,8 @@ export function AccountPage({
   // `TEXT`, so a language switch has to re-render this page (#1394).
   useLanguage();
   const [ledger, setLedger] = useState<AccountLedgerRow[]>([]);
-  const [ledgerEnd, setLedgerEnd] = useState(false);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]);
+  const [pageSize, setPageSize] = useState<number>(() => readStoredPageSize());
   const [jump, setJump] = useState("");
   const [sessions, setSessions] = useState<AccountSessionRow[]>([]);
   const [records, setRecords] = useState<AccountUsageRecord[]>([]);
@@ -166,77 +176,14 @@ export function AccountPage({
   onSignOutRef.current = onSignOut;
   const accessToken = account.accessToken;
 
-  // The ledger is cursor-paginated: the newest-first chunk can be extended as
-  // the reader walks to later pages, and the cursor stops at the oldest entry.
-  const cursorRef = useRef<number | null>(null);
-  const endRef = useRef(false);
-  const loadingRef = useRef(false);
-  /** The first page is fetched by `load` together with the other account data;
-   *  a cursor read starting at the same time would fetch that page again and
-   *  append a duplicate copy of the newest rows. */
-  const reloadingRef = useRef(false);
-  /** How many rows are already held; the cap is decided per fetch, not by a
-   *  render, because two cursor reads can be in flight from different triggers. */
-  const loadedCountRef = useRef(0);
-  const rowsRef = useRef<AccountLedgerRow[]>([]);
-  rowsRef.current = ledger;
-  const filterRef = useRef<Filter>(filter);
-  filterRef.current = filter;
-
-  const fetchLedgerChunk = useCallback(async (): Promise<AccountLedgerRow[]> => {
-    if (loadingRef.current || reloadingRef.current) return [];
-    const room = MAX_LEDGER_ROWS - loadedCountRef.current;
-    if (room <= 0) {
-      endRef.current = true;
-      setLedgerEnd(true);
-      setLedgerCapped(true);
-      return [];
-    }
-    loadingRef.current = true;
-    try {
-      const chunk = await listAccountLedger(accessToken, Math.min(LEDGER_CHUNK, room), cursorRef.current ?? undefined);
-      cursorRef.current = chunk.nextBeforeId;
-      loadedCountRef.current += chunk.items.length;
-      const capped = loadedCountRef.current >= MAX_LEDGER_ROWS;
-      endRef.current = chunk.nextBeforeId === null || capped;
-      setLedgerEnd(endRef.current);
-      setLedgerCapped(capped);
-      setLedger((previous) => [...previous, ...chunk.items]);
-      return chunk.items;
-    } finally {
-      loadingRef.current = false;
-    }
-  }, [accessToken]);
-
-  /** Walk the cursor until the wanted window is covered (or the ledger ends).
-   *  Starting from the live rows keeps a jump consistent with what is shown. */
-  const ensureRows = useCallback(async (needed: number) => {
-    let rows = rowsRef.current;
-    for (let round = 0; round < MAX_CHUNK_ROUNDS; round += 1) {
-      if (rows.filter((row) => matchesFilter(row, filterRef.current)).length > needed || endRef.current) return;
-      // Another pass is already extending the list; it will re-trigger this one.
-      if (loadingRef.current) return;
-      const chunk = await fetchLedgerChunk();
-      if (chunk.length === 0) return;
-      rows = [...rows, ...chunk];
-    }
-  }, [fetchLedgerChunk]);
+  // The whole ledger arrives in one read; paging is local from here.
 
   const load = useCallback(async () => {
     setError("");
-    // A reload starts from the newest entry again. The flag keeps the cursor
-    // reader quiet until this first page has landed.
-    reloadingRef.current = true;
-    cursorRef.current = null;
-    endRef.current = false;
-    loadedCountRef.current = 0;
-    setLedgerEnd(false);
-    setLedgerCapped(false);
-    setLedger([]);
     try {
       const [me, ledgerPage, sessionPage, usage] = await Promise.all([
         fetchAccountMe(accessToken),
-        listAccountLedger(accessToken, LEDGER_CHUNK),
+        listAccountLedgerAll(accessToken),
         listAccountSessions(accessToken),
         fetchAccountUsage(accessToken),
       ]);
@@ -248,11 +195,7 @@ export function AccountPage({
         displayName: me.user.displayName?.trim() || current.displayName,
         email: me.user.email?.trim() || undefined,
       });
-      cursorRef.current = ledgerPage.nextBeforeId;
-      loadedCountRef.current = ledgerPage.items.length;
       const capped = ledgerPage.items.length >= MAX_LEDGER_ROWS;
-      endRef.current = ledgerPage.nextBeforeId === null || capped;
-      setLedgerEnd(endRef.current);
       setLedgerCapped(capped);
       setLedger(ledgerPage.items);
       setSessions(sessionPage.items);
@@ -264,8 +207,6 @@ export function AccountPage({
     } catch (reason) {
       if (reason instanceof AccountApiError && reason.denied) onSignOutRef.current();
       else setError(reason instanceof Error ? reason.message : TEXT.account.loadFailed);
-    } finally {
-      reloadingRef.current = false;
     }
   }, [accessToken]);
 
@@ -296,16 +237,10 @@ export function AccountPage({
     [filter, ledger],
   );
 
-  // `pageCount` stays unknown until the cursor reaches the oldest entry, so the
-  // pager shows just the current page until the end is known.
-  const pageCount = ledgerEnd ? Math.max(1, Math.ceil(filteredAll.length / pageSize)) : undefined;
+  // Every row is already here, so the page count is known immediately.
+  const pageCount = Math.max(1, Math.ceil(filteredAll.length / pageSize));
   const pageRows = filteredAll.slice((page - 1) * pageSize, page * pageSize);
-  const hasNext = filteredAll.length > page * pageSize || !ledgerEnd;
-
-  // Fetch ahead whenever the window asks for rows not yet loaded.
-  useEffect(() => {
-    void ensureRows(page * pageSize + 1);
-  }, [ensureRows, filter, ledger.length, page, pageSize]);
+  const hasNext = filteredAll.length > page * pageSize;
 
   // A filter change starts a new list, and a shorter ledger pulls the reader
   // back to a page that exists.
@@ -313,12 +248,12 @@ export function AccountPage({
     setPage(1);
   }, [filter]);
   useEffect(() => {
-    if (pageCount !== undefined && page > pageCount) setPage(pageCount);
+    if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
 
   const goToPage = (target: number) => {
     const next = Math.max(1, Math.floor(target));
-    setPage(pageCount === undefined ? next : Math.min(next, pageCount));
+    setPage(Math.min(next, pageCount));
   };
   const jumpToPage = () => {
     const target = Number(jump);
@@ -532,7 +467,9 @@ export function AccountPage({
               {TEXT.account.perPage}
               <select
                 onChange={(event) => {
-                  setPageSize(Number(event.target.value));
+                  const size = Number(event.target.value);
+                  setPageSize(size);
+                  storePageSize(size);
                   setPage(1);
                 }}
                 value={pageSize}
@@ -542,7 +479,7 @@ export function AccountPage({
               {TEXT.account.perPageUnit}
             </label>
             <span className="account-page-status">
-              {pageCount === undefined ? TEXT.account.pageCurrent(page) : TEXT.account.pageOf(page, pageCount)}
+              {TEXT.account.pageOf(page, pageCount)}
             </span>
             <div className="account-page-nav">
               <button disabled={page <= 1} onClick={() => goToPage(page - 1)} type="button">{TEXT.account.prevPage}</button>

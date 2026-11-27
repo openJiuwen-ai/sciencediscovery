@@ -146,19 +146,21 @@ test("the callback carries a single-use ticket", () => {
   assert.equal(readAuthorizeFailure("#auth-ticket=t-1"), false);
 });
 
-test("ticket exchange posts the device and treats only an explicit flag as a new account", async () => {
+test("ticket exchange posts only the ticket and treats only an explicit flag as a new account", async () => {
   const calls: { url: string; body: unknown }[] = [];
   const restore = stubFetch((url, init) => {
     calls.push({ url, body: JSON.parse(String(init.body)) });
     return new Response(JSON.stringify(ACCOUNT), { status: 200, headers: { "content-type": "application/json" } });
   });
   try {
-    const session = await exchangeTicket("t-1", { platform: 2, deviceLabel: "Linux Web", deviceId: "device-1" });
+    // The body carries the ticket and nothing else: the service derives the
+    // platform and device label from the request's User-Agent.
+    const session = await exchangeTicket("t-1");
     assert.equal(session.isNewUser, false);
     assert.equal(session.credit.balanceCredits, 500);
     assert.deepEqual(calls, [{
       url: "/v1/auth/ticket",
-      body: { ticket: "t-1", platform: 2, deviceLabel: "Linux Web", deviceId: "device-1" },
+      body: { ticket: "t-1" },
     }]);
   } finally {
     restore();

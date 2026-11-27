@@ -8,7 +8,6 @@
 import {
   AccountApiError,
   accountSessionToUserSession,
-  describeDevice,
   exchangeTicket as exchangeSharedTicket,
   fetchAccountMe as fetchSharedAccountMe,
   huaweiSignInUrl as sharedHuaweiSignInUrl,
@@ -19,7 +18,6 @@ import {
 import type {
   AccountClientOptions,
   AccountCredit,
-  AccountDevice,
   AccountMe,
   AccountSession,
   AccountUser,
@@ -28,8 +26,8 @@ import type {
 import type { UserSession } from "./session.js";
 import { TEXT } from "../text.js";
 
-export type { AccountCredit, AccountDevice, AccountMe, AccountSession, AccountUser };
-export { AccountApiError, accountSessionToUserSession, describeDevice };
+export type { AccountCredit, AccountMe, AccountSession, AccountUser };
+export { AccountApiError, accountSessionToUserSession };
 
 /**
  * The product name shown when HUAWEI shares no display name for the profile.
@@ -68,8 +66,8 @@ export function huaweiSignInUrl(returnUrl: string): string {
   return sharedHuaweiSignInUrl(returnUrl, options());
 }
 
-export function exchangeTicket(ticket: string, device: AccountDevice): Promise<AccountSession> {
-  return exchangeSharedTicket(ticket, device, options());
+export function exchangeTicket(ticket: string): Promise<AccountSession> {
+  return exchangeSharedTicket(ticket, options());
 }
 
 export function refreshAccountSession(refreshToken: string): Promise<AccountSession> {
@@ -174,16 +172,42 @@ export async function revokeAccountDevice(accessToken: string, sessionId: string
   if (!response.ok) throw new AccountApiError(`account service returned ${response.status}`, response.status);
 }
 
-/** Newest-first ledger pages. The cursor is the last row's id, so a page is a
- *  stable window even while new entries are written. */
-export async function listAccountLedger(
-  accessToken: string,
-  limit = 20,
-  beforeId?: number,
-): Promise<{ items: AccountLedgerRow[]; nextBeforeId: number | null }> {
-  const query = new URLSearchParams({ limit: String(limit) });
-  if (beforeId !== undefined) query.set("beforeId", String(beforeId));
-  return getAccountJson(`/v1/credits/ledger?${query.toString()}`, accessToken);
+/** The most ledger rows this client reads or shows. A busy account's spending
+ *  history can be long, and the UI is a reading surface, not an export: the
+ *  database keeps the same ceiling per kind, so this is the whole history the
+ *  page ever asks for. */
+export const MAX_LEDGER_ROWS = 1000;
+
+/** One ledger window: newest-first rows plus the next cursor, if any. */
+interface LedgerWindow {
+  items: AccountLedgerRow[];
+  nextBeforeId: number | null;
+}
+
+/** The whole ledger in one read, so paging happens on this device.
+ *
+ *  A service that predates `all=1` ignores the flag and returns its default
+ *  page with a cursor. Following it keeps a client released before the service
+ *  from showing a single page; the ceiling still bounds the work. */
+export async function listAccountLedgerAll(accessToken: string): Promise<LedgerWindow> {
+  const first: LedgerWindow = await getAccountJson<LedgerWindow>(
+    "/v1/credits/ledger?all=1",
+    accessToken,
+  );
+  if (first.nextBeforeId === null) return first;
+  const items = [...first.items];
+  let beforeId: number | null = first.nextBeforeId;
+  while (beforeId !== null && items.length < MAX_LEDGER_ROWS) {
+    const page: LedgerWindow = await getAccountJson<LedgerWindow>(
+      `/v1/credits/ledger?limit=100&beforeId=${beforeId}`,
+      accessToken,
+    );
+    if (page.items.length === 0) break;
+    items.push(...page.items);
+    if (page.nextBeforeId === beforeId) break;
+    beforeId = page.nextBeforeId;
+  }
+  return { items: items.slice(0, MAX_LEDGER_ROWS), nextBeforeId: null };
 }
 
 export async function fetchAccountUsage(accessToken: string): Promise<{ days: AccountUsageDay[]; records: AccountUsageRecord[] }> {

@@ -9,7 +9,6 @@
 import {
   AccountApiError,
   accountSessionToUserSession,
-  describeDevice,
   exchangeTicket as exchangeSharedTicket,
   fetchAccountMe as fetchSharedAccountMe,
   buildEnv,
@@ -20,7 +19,6 @@ import {
 import type {
   AccountClientOptions,
   AccountCredit,
-  AccountDevice,
   AccountMe,
   AccountSession,
   AccountUser,
@@ -28,8 +26,8 @@ import type {
 
 import type { UserSession } from "./session.js";
 
-export type { AccountCredit, AccountDevice, AccountMe, AccountSession, AccountUser };
-export { AccountApiError, accountSessionToUserSession, describeDevice };
+export type { AccountCredit, AccountMe, AccountSession, AccountUser };
+export { AccountApiError, accountSessionToUserSession };
 
 /** Base URL of the account service; empty means "same origin as this page". */
 export function accountsBaseUrl(): string {
@@ -45,8 +43,8 @@ export function huaweiSignInUrl(returnUrl: string): string {
   return sharedHuaweiSignInUrl(returnUrl, options());
 }
 
-export function exchangeTicket(ticket: string, device: AccountDevice): Promise<AccountSession> {
-  return exchangeSharedTicket(ticket, device, options());
+export function exchangeTicket(ticket: string): Promise<AccountSession> {
+  return exchangeSharedTicket(ticket, options());
 }
 
 export function refreshAccountSession(refreshToken: string): Promise<AccountSession> {

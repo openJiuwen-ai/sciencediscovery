@@ -267,7 +267,6 @@ export const EN: Text = {
     afterBalance: (balance: string) => `Balance ${balance}`,
     perPage: "Rows per page",
     perPageUnit: "",
-    pageCurrent: (page: number) => `Page ${page}`,
     pageOf: (page: number, total: number) => `Page ${page} / ${total}`,
     prevPage: "Previous",
     nextPage: "Next",

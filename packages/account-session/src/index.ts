@@ -58,13 +58,6 @@ export interface AccountMe {
   currentSessionId: string;
 }
 
-export interface AccountDevice {
-  /** 1 Windows desktop, 2 Linux web. */
-  platform: 1 | 2;
-  deviceLabel: string;
-  deviceId: string;
-}
-
 /** `status === 0` means the request never reached the service. */
 export class AccountApiError extends Error {
   constructor(
@@ -96,7 +89,6 @@ export function buildEnv(name: string): string {
 
 /** Refresh a little early so a request never races the expiry. */
 const REFRESH_SKEW_MS = 60_000;
-const DEVICE_STORAGE_KEY = "sciencediscovery-device-id";
 const REFRESH_LOCK_NAME = "sciencediscovery-account-session-refresh";
 
 export interface ReadableStorage {
@@ -279,15 +271,16 @@ export function huaweiSignInUrl(returnUrl: string, options: AccountClientOptions
   return `${normalizedBase(options.baseUrl ?? "")}/v1/auth/huawei/start?${new URLSearchParams({ returnUrl }).toString()}`;
 }
 
-/** Exchanges the single-use ticket from the HUAWEI callback for a real session. */
+/** Exchanges the single-use ticket from the HUAWEI callback for a real session.
+ *  The service derives the platform and device label from the request's own
+ *  User-Agent, so the body carries the ticket and nothing else. */
 export async function exchangeTicket(
   ticket: string,
-  device: AccountDevice,
   options: AccountClientOptions = {},
 ): Promise<AccountSession> {
   const session = await request<Omit<AccountSession, "isNewUser"> & { isNewUser?: boolean }>(
     "/v1/auth/ticket",
-    jsonRequest({ ticket, platform: device.platform, deviceLabel: device.deviceLabel, deviceId: device.deviceId }),
+    jsonRequest({ ticket }),
     options,
   );
   return { ...session, isNewUser: session.isNewUser === true };
@@ -353,30 +346,6 @@ export async function revokeAccountSession(
     { method: "POST", headers: { authorization: `Bearer ${accessToken}` } },
     options,
   );
-}
-
-/** Stable per-installation id so the admin console can tell two machines apart. */
-function deviceId(): string {
-  try {
-    const saved = globalThis.localStorage?.getItem(DEVICE_STORAGE_KEY);
-    if (saved) return saved;
-    const created = globalThis.crypto?.randomUUID?.() ?? `device-${Math.random().toString(36).slice(2)}`;
-    globalThis.localStorage?.setItem(DEVICE_STORAGE_KEY, created);
-    return created;
-  } catch {
-    return "unknown-device";
-  }
-}
-
-/** The desktop app runs inside Electron; everything else is the Linux web build. */
-export function describeDevice(): AccountDevice {
-  const userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent;
-  const desktop = /Electron/i.test(userAgent);
-  return {
-    platform: desktop ? 1 : 2,
-    deviceLabel: `${desktop ? "Windows 桌面" : "Linux Web"} · ${userAgent.slice(0, 64) || "unknown"}`,
-    deviceId: deviceId(),
-  };
 }
 
 let refreshPromise: Promise<UserSession | undefined> | undefined;

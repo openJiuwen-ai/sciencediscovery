@@ -33,7 +33,6 @@ import { buildEnv } from "@sciencediscovery/account-session";
 import {
   AccountApiError,
   accountSessionToUserSession,
-  describeDevice,
   exchangeTicket,
   fetchAccountMe,
   huaweiSignInUrl,
@@ -94,7 +93,7 @@ export function LoginPage({ onAuthenticated }: LoginPageProps) {
         // `state` is compared here: HUAWEI returns the service state directly.
         setStep("verifying");
         try {
-          const account = await exchangeTicket(callback.ticket, describeDevice());
+          const account = await exchangeTicket(callback.ticket);
           commit(accountSessionToUserSession(account, undefined, t("login.defaultName")));
         } catch {
           setStep("error");
