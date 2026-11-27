@@ -2207,7 +2207,7 @@ body.is-resizing {
 }
 
 .session-flyout-desc {
-  color: #8c8c8c;
+  color: var(--text-hint);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -2218,7 +2218,7 @@ body.is-resizing {
   margin: 8px 10px 2px;
   padding-top: 8px;
   border-top: 1px solid #ececec;
-  color: #8c8c8c;
+  color: var(--text-hint);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -2443,7 +2443,7 @@ body.is-resizing {
 .expert-note {
   margin: 0;
   padding: 10px 8px;
-  color: #8c8c8c;
+  color: var(--text-hint);
   font-size: 12px;
   text-align: center;
 }
@@ -3000,7 +3000,7 @@ body.is-resizing {
   min-width: 0;
   max-width: 50%;
   overflow: hidden;
-  color: #a6a6a6;
+  color: var(--text-hint);
   font-size: 11px;
   text-overflow: ellipsis;
 }
@@ -4225,7 +4225,7 @@ body.is-resizing {
 }
 
 .settings-field-hint {
-  color: #808080;
+  color: var(--text-hint);
   font-size: 12.5px;
   font-weight: 400;
   line-height: 1.5;
