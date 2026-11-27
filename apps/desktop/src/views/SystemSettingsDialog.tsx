@@ -149,13 +149,13 @@ export function SystemSettingsDialog({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  // settings-panel-focus: the backdrop already makes this surface modal for the
-  // pointer. Without an effect here it was modal for the pointer only: 设置 was
-  // pressed, focus stayed on the rail, the first 23 Tabs walked the page behind
-  // the scrim, and the 47th left the dialog for `BODY` and came round again
-  // (#1485). The rule is the one 导入会话 and 我要反馈 already use — focus the
-  // panel on open, wrap Tab at its ends, hand focus back to whatever had it —
-  // so a reader who opens 设置 with the keyboard stays inside it until Escape.
+  // The backdrop makes this surface modal for the pointer; until #1485 it was
+  // modal for the pointer only. The focus stayed on the rail's 设置, #1485
+  // measured 23 Tabs through the page the scrim was hiding and the 47th to
+  // `BODY` and round again. This is the rule 导入会话 and 我要反馈 already use:
+  // the panel takes the focus on open, Tab wraps at its two ends, and closing
+  // gives the focus back to the control that opened it — so a reader who opens
+  // 设置 with the keyboard stays inside it until Escape.
   useEffect(() => {
     const node = panel.current;
     if (!node) return;
