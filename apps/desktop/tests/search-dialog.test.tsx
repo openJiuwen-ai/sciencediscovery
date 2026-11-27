@@ -123,25 +123,19 @@ test("the footer is the only filter, and it offers 全部 / 项目 / 会话 / �
   assert.equal(pressed?.[1], "全部", "全部 is the resting kind");
 });
 
-test("a failure, an empty answer and an unfinished list each say their own thing", () => {
+test("a failure and an empty answer each say their own thing", () => {
   const failed = render({ error: "boom", results: undefined });
   assert.match(failed, /class="search-panel-note is-error" role="alert">boom/u);
   assert.match(failed, />重试</u);
 
   const empty = render({ query: "晶", results: answer([]) });
   assert.match(empty, /没有匹配「晶」/u, "the empty state names the query");
-
-  const more = render({
-    query: "晶",
-    results: answer([hit("project", "材料", "2026-01-02T00:00:00.000Z")], { hasMore: true, total: 41 }),
-  });
-  assert.match(more, /还有 40 条结果/u, "the note counts what is still unseen");
 });
 
-test("a kind says more exist without counting the kinds it is not showing", () => {
-  // 全部's total belongs to the whole answer, so it can count what it held back.
-  // A kind is handed that same answer and shows one slice of it, so borrowing
-  // the number would say "7 more" beside two rows of Projects.
+test("a truncated answer adds nothing: the rows it drew are the answer", () => {
+  // The dialog used to count what it held back and tell the reader to keep
+  // typing. The owner's call is that the list is the answer and a line
+  // explaining how search works is noise around it.
   const results = answer(
     [
       hit("project", "材料", "2026-01-02T00:00:00.000Z"),
@@ -149,11 +143,14 @@ test("a kind says more exist without counting the kinds it is not showing", () =
     ],
     { hasMore: true, total: 9 },
   );
-  assert.match(render({ results }), /还有 7 条结果/u, "全部 counts what the answer holds back");
+  const all = render({ results });
+  assert.match(all, /材料/u, "the rows are still drawn");
+  assert.doesNotMatch(all, /条结果/u, "全部 counts nothing back to the reader");
+  assert.doesNotMatch(all, /继续输入/u, "and never explains how to search");
 
   const onlyProjects = render({ kind: "project", results });
-  assert.match(onlyProjects, /还有更多结果/u, "a kind still says that more exist");
-  assert.doesNotMatch(onlyProjects, /条结果/u, "and never states how many");
+  assert.match(onlyProjects, /材料/u, "a kind draws its own rows");
+  assert.doesNotMatch(onlyProjects, /继续输入/u, "and adds no note either");
 });
 
 test("nothing typed yet asks for a query instead of claiming an empty answer", () => {

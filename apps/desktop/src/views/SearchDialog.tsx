@@ -174,21 +174,6 @@ export function SearchDialog({
               </div>
             ))
           )}
-          {error === undefined && results !== undefined && hits.length > 0 ? (
-            kind === "all" ? (
-              // 全部 can count what it did not show: the answer's total is the
-              // whole answer's. A kind is handed the same answer and shows one
-              // slice of it, so it says that more exist without borrowing a
-              // count that belongs to the kinds it is not showing.
-              results.total > results.results.length ? (
-                <p className="search-panel-note">
-                  {TEXT.sidebar.searchMore(results.total - results.results.length)}
-                </p>
-              ) : null
-            ) : results.hasMore ? (
-              <p className="search-panel-note">{TEXT.sidebar.searchMoreAny}</p>
-            ) : null
-          ) : null}
         </div>
 
         <div className="search-panel-foot" role="group" aria-label={TEXT.sidebar.searchKinds}>

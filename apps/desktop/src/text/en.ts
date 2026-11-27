@@ -346,8 +346,6 @@ export const EN: Text = {
     searchArtifacts: "Artifacts",
     searchEmpty: (query: string) => `Nothing matches "${query}". Search matches names and titles, not message text.`,
     searchFailed: "Search failed. Try again.",
-    searchMore: (count: number) => `${count} more results; keep typing to narrow them.`,
-    searchMoreAny: "More results; keep typing to narrow them.",
     collapseSidebar: "Collapse sidebar",
     expandSidebar: "Show sidebar",
     renameHint: "Double-click to rename",
