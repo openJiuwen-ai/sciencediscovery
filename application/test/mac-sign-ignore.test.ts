@@ -28,7 +28,9 @@ const read = (rel: string): string => readFileSync(join(appDir, rel), "utf8");
  * uses: app-builder-lib@26.15.3 MacTargetHelper compiles each entry with
  * new RegExp(it) and tests it against the absolute file path. Parsing stops
  * at the first non-list line after the signIgnore key, so a later YAML list
- * at the same indentation (dmg contents) can never leak in. */
+ * at the same indentation (dmg contents) can never leak in. Surrounding
+ * quotes are stripped so a quoted entry ("\\.fits$") is compiled the way
+ * YAML consumers see it, not with literal quote characters. */
 function signIgnorePatterns(): string[] {
   const yml = read("electron-builder.yml");
   const m = /^  signIgnore:\n((?:    - .*\n)+)/m.exec(yml);
@@ -36,7 +38,8 @@ function signIgnorePatterns(): string[] {
   return m[1]
     .split("\n")
     .filter((l) => l.startsWith("    - "))
-    .map((l) => l.slice(6));
+    .map((l) => l.slice(6))
+    .map((p) => p.replace(/^("|')(.*)\1$/, "$2"));
 }
 
 /** The one Mach-O skip that predates W23a and is safe by design: .pyc is
@@ -100,59 +103,55 @@ test("signIgnore: no pattern matches a representative Mach-O path", () => {
   }
 });
 
-test("signIgnore: the documented W23a data cohorts still match", () => {
-  // The inverse drift: a "cleanup" that narrows a pattern (or drops one)
-  // re-sends ~2500 data files into the timestamp marathon and trips Apple's
-  // TSA rate limit again (W23a's original failure mode). One representative
-  // path per cohort documented in the yml comment block.
-  const cohortPaths: [string, string][] = [
-    [
-      "tzdata zoneinfo blob",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/tzdata/zoneinfo/America/New_York`,
-    ],
-    [
-      "pytz zoneinfo blob",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/pytz/zoneinfo/Asia/Shanghai`,
-    ],
-    [
-      "pdfminer CMap table",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/pdfminer/cmap/Adobe-Japan1.ucd.gz`,
-    ],
-    [
-      "pdfminer CMap json",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/pdfminer/cmap/Uni2JIS.json.gz`,
-    ],
-    [
-      "numpy test data (.npz)",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/numpy/_core/tests/data/astype.npy`,
-    ],
-    [
-      "scipy test data (.mat)",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/scipy/io/tests/data/test-1.0.mat`,
-    ],
-    [
-      "sklearn dataset image",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/sklearn/datasets/images/china.jpg`,
-    ],
-    [
-      "reportlab font",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/reportlab/fonts/DarkGarden-chapters.pfb`,
-    ],
-    [
-      "static lib (.a)",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/cheroot/lib/libtime.a`,
-    ],
-    [
-      "babel locale data",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/babel/locale-data/en_US.dat`,
-    ],
-    [
-      "matplotlib data (.fits)",
-      `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/matplotlib/mpl-data/matplotlibrc`,
-    ],
+test("signIgnore: every pattern is individually load-bearing", () => {
+  // F2: a probe path matched by TWO patterns guards neither — narrowing one
+  // while the other still matches leaves the suite green (bot proved this by
+  // mutating each pattern in turn). The probe table below stores only PATHS
+  // (plus a label); the patterns themselves come from the yml via
+  // signIgnorePatterns(), never restated here — a narrowed/dropped pattern
+  // loses its only probe and fails loudly.
+  //
+  // Probe construction rule: suffix patterns get a file in a neutral
+  // directory (site-packages/_cohort/) where no directory pattern applies;
+  // directory patterns get a file whose extension no suffix pattern covers.
+  // Each probe is matched by EXACTLY ONE pattern from the parsed list, and
+  // each pattern matches EXACTLY ONE probe — a bijection, so breaking any
+  // single pattern fails exactly one assertion, naming it.
+  const NEUTRAL = `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages/_cohort`;
+  const SP = `${APP_ROOT}/Contents/Resources/backend/jw/.venv/lib/python3.12/site-packages`;
+  const probes: [string, string][] = [
+    ["bytecode", `${APP_ROOT}/Contents/Resources/backend/jw/src/core/mod.cpython-312.pyc`],
+    ["numpy archive", `${NEUTRAL}/asset.npz`],
+    ["matlab data", `${NEUTRAL}/pair.mat`],
+    ["spss data", `${NEUTRAL}/asset.sav`],
+    ["audio", `${NEUTRAL}/asset.wav`],
+    ["fits image", `${NEUTRAL}/asset.fits`],
+    ["static lib", `${NEUTRAL}/libcore.a`],
+    ["type1 font", `${NEUTRAL}/font.pfb`],
+    ["tzdata blob", `${SP}/tzdata/zoneinfo/America/New_York`],
+    ["pdfminer CMap", `${SP}/pdfminer/cmap/Adobe-Japan1.ucd.gz`],
+    ["test data dir", `${SP}/numpy/_core/tests/data/astype.npy`],
+    ["sklearn dataset image", `${SP}/sklearn/datasets/images/china.jpg`],
+    ["reportlab non-pfb font", `${SP}/reportlab/fonts/DarkGardenMK.afm`],
+    ["babel locale data", `${SP}/babel/locale-data/en_US.dat`],
+    ["matplotlib data", `${SP}/matplotlib/mpl-data/matplotlibrc`],
   ];
-  for (const [what, path] of cohortPaths) {
-    assert.ok(ignores(path), `no signIgnore pattern matches the ${what} — the W23a cohort would drift back into the timestamp marathon: ${path}`);
+  assert.equal(probes.length, patterns.length, "probe table and pattern list must stay in lockstep (15 patterns, 15 probes)");
+  // Direction 1 — every probe is matched by exactly one parsed pattern.
+  for (const [what, probe] of probes) {
+    const matchers = patterns.filter((p) => new RegExp(p).test(probe));
+    assert.equal(
+      matchers.length,
+      1,
+      `probe "${what}" is matched by ${JSON.stringify(matchers)} — need exactly 1 (shadowed = guards nothing, zero = its pattern was narrowed/dropped and the cohort re-enters the timestamp marathon): ${probe}`,
+    );
+  }
+  // Direction 2 — every parsed pattern matches at least one probe, so none
+  // of the 15 can be dropped from the yml and stay green.
+  for (const p of patterns) {
+    const re = new RegExp(p);
+    const hits = probes.filter(([, probe]) => re.test(probe));
+    assert.ok(hits.length >= 1, `pattern ${p} matches no probe — it is either new (add one, in a neutral path) or narrowed past its cohort`);
   }
 });
 
