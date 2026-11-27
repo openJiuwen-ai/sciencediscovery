@@ -66,25 +66,58 @@ the product never computes — is gone with the fixture that produced it.
   before it stops; the other four finish in a few seconds.
 - Each frame is a full-viewport screenshot (`page.screenshot`, 1440×900, DPR 1)
   written with `testInfo.outputPath` and copied here unchanged, named
-  `<state>-<language>-<head>.png` where `<head>` is the short SHA of the commit
-  whose tree rendered it.
+  `<state>-<language>-<commit>.png`. The suffix is a commit a reader can
+  resolve, `2be03a75`: the one that carries these six images together with the
+  spec, the fixture and the product code that produced them. The files were
+  renamed to it without touching a byte of image data; [Provenance](#provenance)
+  shows both.
 
 ## Captures
 
 | File | Language | State | What it shows |
 | --- | --- | --- | --- |
-| `01-stalled-recalculation-zh-3919db5.png` | zh-CN | 导出会话 › 必要导出, one file unticked, recalculation pending | The stalled-preview notice and 重新计算大小, the previous 30.0 KB estimate still visible, the unticked file marked as an omission, and 开始导出 disabled |
-| `01-stalled-recalculation-en-3919db5.png` | en | Same state, same file and selection | The English stalled notice and Recalculate size, the same 30.0 KB estimate, `Not included: 1 workspace file`, and Start export disabled |
-| `02-revision-change-failure-zh-3919db5.png` | zh-CN | 导出任务失败 with `会话内容已更新，请使用最新大小预览重新导出。` | The failed row leads with 会话内容已更新，请先重新计算大小预览，再重新导出。 and 技术细节 holds the server sentence |
-| `02-revision-change-failure-en-3919db5.png` | en | Export task failed with the same server sentence | The failed row leads with "The conversation has changed. Recalculate the size preview, then export again." and Technical details holds the server sentence |
-| `03-over-limit-reacknowledged-zh-3919db5.png` | zh-CN | 超限选择已确认 仍要导出, then the file set changes | The over-limit warning is shown again for the changed selection against the product's 5.0 GB cap with a 6.0 GB selection, the confirmation line is gone, and 开始导出 is disabled |
-| `03-over-limit-reacknowledged-en-3919db5.png` | en | Same state, same bytes and selection | `Uncompressed limit: 5.0 GB`, `This selection is 6.0 GB uncompressed, over the 5.0 GB limit.`, no confirmation line, and Start export disabled |
+| `01-stalled-recalculation-zh-2be03a75.png` | zh-CN | 导出会话 › 必要导出, one file unticked, recalculation pending | The stalled-preview notice and 重新计算大小, the previous 30.0 KB estimate still visible, the unticked file marked as an omission, and 开始导出 disabled |
+| `01-stalled-recalculation-en-2be03a75.png` | en | Same state, same file and selection | The English stalled notice and Recalculate size, the same 30.0 KB estimate, `Not included: 1 workspace file`, and Start export disabled |
+| `02-revision-change-failure-zh-2be03a75.png` | zh-CN | 导出任务失败 with `会话内容已更新，请使用最新大小预览重新导出。` | The failed row leads with 会话内容已更新，请先重新计算大小预览，再重新导出。 and 技术细节 holds the server sentence |
+| `02-revision-change-failure-en-2be03a75.png` | en | Export task failed with the same server sentence | The failed row leads with "The conversation has changed. Recalculate the size preview, then export again." and Technical details holds the server sentence |
+| `03-over-limit-reacknowledged-zh-2be03a75.png` | zh-CN | 超限选择已确认 仍要导出, then the file set changes | The over-limit warning is shown again for the changed selection against the product's 5.0 GB cap with a 6.0 GB selection, the confirmation line is gone, and 开始导出 is disabled |
+| `03-over-limit-reacknowledged-en-2be03a75.png` | en | Same state, same bytes and selection | `Uncompressed limit: 5.0 GB`, `This selection is 6.0 GB uncompressed, over the 5.0 GB limit.`, no confirmation line, and Start export disabled |
 
-Every name carries `3919db5`, the commit whose tree rendered the frames: this
-commit adds only the images above and this table, so the spec, the fixture and
-the product code behind each frame are exactly those of `3919db5`. The toast
-behind the modal backdrop in the failure frames is the same message the failed
-row carries; the row is the readable record because the dialog is open over it.
+Every name carries `2be03a75`, the commit these frames belong to and the same
+one their code lives in. The toast behind the modal backdrop in the failure
+frames is the same message the failed row carries; the row is the readable
+record because the dialog is open over it.
+
+## Provenance
+
+The six files are named after `2be03a75`
+(`fix(desktop): bind export to the previewed selection and stop stale retries`),
+the squash commit of this branch. That commit adds the six images together with
+`apps/desktop/e2e/export-preview-states.spec.ts`, the fixture in
+`apps/desktop/e2e/fixtures.ts` and the product code each frame shows, so the
+suffix names the commit the images belong to and it resolves from any clone.
+
+A commit cannot contain a file named after itself: `2be03a75` added the frames,
+and this directory's own commit renamed them to carry it. The rename moves no
+image data, and nothing behind the frames changed afterwards:
+
+```bash
+git show --stat 2be03a75     # the six images, the spec, the fixture, the code
+git diff -M 2be03a75 origin/bot/issue-1440 -- docs/screenshots/1440
+git diff 2be03a75 origin/bot/issue-1440 -- apps/desktop packages
+```
+
+The first line shows the commit that owns the images; the second lists six pure
+renames plus this README; the third prints nothing, so the product code, the
+spec and the fixture that produced the frames are still the ones at
+`2be03a75`.
+
+The pixels were captured before the branch was squashed. The tree that rendered
+them differs from `2be03a75` only in these images and this README, so the spec,
+the fixture and the product code the run used are the ones `2be03a75` carries,
+and the six tests that produced the frames are the tests there (the mocked spec
+is reported passing at `2be03a75` as `6 passed`). That interim revision is not
+in the published history, and no name or sentence in this directory cites it.
 
 ## One difference between the two languages, stated
 
