@@ -486,6 +486,34 @@ why — do not weaken an assertion to get a green run.
 Check `git status` before committing: no `.tmp/`, no local editor or tooling
 config, no private notes.
 
+### UI changes need screenshots
+
+A change a reader can see in the product is not reviewable from a diff. Put
+frames in the pull request body — not only in a review comment, where the next
+push detaches them from the lines they explain — and make each one show the
+surface the change is about:
+
+- **Before and after, same view.** Same window, viewport and crop in both
+  frames, so everything that differs between them is the change. A surface that
+  did not exist before has no "before": show it next to the closest state that
+  did, and say that is what it is.
+- **Both languages.** Every user-visible string has a `zh-CN` and an `en` side,
+  so the frames come in pairs. A locale the change "does not touch" is not
+  exempt: renaming a label is exactly the change that one locale can miss, and
+  the pair is what proves it did not.
+- **Pinned to a commit.** Host the images on a branch in your own fork and link
+  the commit SHA, never the branch name; a branch moves and the body silently
+  starts showing something else. Open every link once and confirm it resolves
+  before asking for review.
+- **Self-describing.** Under each frame, name the surface, the viewport, how the
+  state was produced (real stack, mocked API, seeded session), and which part of
+  the copy on screen comes from this diff rather than from a fixture. Say what
+  the frames do not cover — a crop that hides the part a reviewer cares about is
+  worse than no frame, because it reads as evidence that was checked.
+
+Screenshots are evidence for review, not a CI gate: no check reads them. A
+change with no rendered surface states that in one line and skips the section.
+
 ### From pull request to merge
 
 The `gh pr create` above opens the pull request as a draft (`--draft`); keep
