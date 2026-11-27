@@ -594,6 +594,7 @@ test("a research the engine never created gives its grant back when it says it d
       /could not be read back/,
     );
     const researchId = tokens.ids()[0];
+    assert.ok(researchId, "the create issued a token");
     assert.ok(tokens.last(researchId), "nothing is known yet, so the grant waits for the engine");
     reachable = true;
     t.mock.timers.tick(5_000);
@@ -662,7 +663,9 @@ test("a non-JSON answer that refuses the command is still a refusal", async () =
   try {
     await assert.rejects(client.command("s1", "create", { objective: "Compare treatments" }), /HTTP 409/);
     assert.deepEqual(operations, ["create"], "an answered refusal needs no read-back");
-    assert.equal(tokens.last(tokens.ids()[0]), undefined, "nothing started, so the grant goes back");
+    const researchId = tokens.ids()[0];
+    assert.ok(researchId, "the create issued a token");
+    assert.equal(tokens.last(researchId), undefined, "nothing started, so the grant goes back");
   } finally {
     client.close();
     globalThis.fetch = original;
