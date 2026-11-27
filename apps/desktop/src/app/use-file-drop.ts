@@ -16,6 +16,15 @@ import { useEffect, useRef, useState } from "react";
 
 import { carriesFiles } from "./upload.js";
 
+/** The surfaces a drop belongs to instead of the window: a modal dialog, the
+ *  settings surface, and any element that declares itself modal. */
+const DIALOG_SURFACE = '.modal-backdrop, .config-backdrop, [aria-modal="true"]';
+
+/** Whether a drag or a drop happened on a dialog rather than on the page. */
+function insideDialog(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(DIALOG_SURFACE) !== null;
+}
+
 /**
  * Take a file drop anywhere in the window, and report whether one is hovering.
  *
@@ -40,15 +49,6 @@ import { carriesFiles } from "./upload.js";
  * a `.sdresearch` package the reader was importing, and then cancelled, into the
  * composer as a chat attachment.
  */
-/** The surfaces a drop belongs to instead of the window: a modal dialog, the
- *  settings surface, and any element that declares itself modal. */
-const DIALOG_SURFACE = '.modal-backdrop, .config-backdrop, [aria-modal="true"]';
-
-/** Whether a drag or a drop happened on a dialog rather than on the page. */
-function insideDialog(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(DIALOG_SURFACE) !== null;
-}
-
 export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean): boolean {
   const [dragging, setDragging] = useState(false);
   const depth = useRef(0);

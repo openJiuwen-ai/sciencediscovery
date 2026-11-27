@@ -7,7 +7,12 @@ import { TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixture
 /**
  * E2E-META
  * Purpose: A package dropped on the import dialog stays the dialog's file and is not uploaded as a chat attachment.
- * Steps: 1. Open the import dialog. 2. Drop a .sdresearch package on its drop zone. 3. Read the dialog, the tray and the mocked upload log.
+ * Steps:
+ *   1. Open the import dialog on a resumed Session and drop a `.sdresearch` package on its dashed zone: the dialog's file card names it and the tray stays empty.
+ *   2. Drop a package on the rest of the dialog (`.modal-panel`, `.modal-backdrop`) and cancel: nothing is uploaded and the dialog stays open.
+ *   3. Drop a package the control plane cannot inspect, then cancel: the error line goes with the dialog.
+ *   4. Drag over the open 搜索 palette: no overlay is raised and releasing uploads nothing.
+ *   5. Drop a package on the zone and cancel: the composer ends with no attachment card and no upload.
  * Environment: Desktop app with a mocked control plane; no service, no filesystem.
  * Type: mocked
  * LLM: none. WebSearch: none. PaperSources: none. MCP: none.
