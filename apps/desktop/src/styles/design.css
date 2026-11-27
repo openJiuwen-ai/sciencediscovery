@@ -4219,7 +4219,7 @@ body.is-resizing {
 }
 
 .settings-field-count {
-  color: #a6a6a6;
+  color: var(--text-hint);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -4264,7 +4264,7 @@ body.is-resizing {
   position: absolute;
   right: 18px;
   bottom: 8px;
-  color: #a6a6a6;
+  color: var(--text-hint);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
@@ -4336,7 +4336,7 @@ body.is-resizing {
 }
 
 .settings-ability-option-hint {
-  color: #808080;
+  color: var(--text-hint);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -4345,7 +4345,7 @@ body.is-resizing {
   display: flex;
   align-items: center;
   gap: 12px;
-  color: #a6a6a6;
+  color: var(--text-hint);
   font-size: 12px;
 }
 
