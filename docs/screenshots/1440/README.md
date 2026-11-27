@@ -93,16 +93,21 @@ record because the dialog is open over it.
 The six files are named after `2be03a75`
 (`fix(desktop): bind export to the previewed selection and stop stale retries`),
 the squash commit of this branch. That commit adds the six images together with
-`apps/desktop/e2e/export-preview-states.spec.ts`, the fixture in
-`apps/desktop/e2e/fixtures.ts` and the product code each frame shows, so the
+`apps/desktop/e2e/export-preview-states.spec.ts`, the zh/en copy in
+`apps/desktop/src/text/zh.ts` and `apps/desktop/src/text/en.ts`,
+`apps/desktop/src/views/ResearchPackage.tsx`,
+`apps/desktop/tests/research-package-trim.test.tsx` and this README, so the
 suffix names the commit the images belong to and it resolves from any clone.
+The frames use the fixture the branch already had, `apps/desktop/e2e/fixtures.ts`;
+`2be03a75` neither adds nor changes it, so no `fixtures.ts` line belongs in
+`git show --stat 2be03a75`.
 
 A commit cannot contain a file named after itself: `2be03a75` added the frames,
 and this directory's own commit renamed them to carry it. The rename moves no
 image data, and nothing behind the frames changed afterwards:
 
 ```bash
-git show --stat 2be03a75     # the six images, the spec, the fixture, the code
+git show --stat 2be03a75     # the six images, the spec, the zh/en copy, the view, the trim test, this README
 git diff -M 2be03a75 origin/bot/issue-1440 -- docs/screenshots/1440
 git diff 2be03a75 origin/bot/issue-1440 -- apps/desktop packages
 ```
