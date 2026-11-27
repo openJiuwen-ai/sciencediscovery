@@ -15,6 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   AA_NORMAL_TEXT,
   baseRules,
@@ -32,6 +33,13 @@ import {
 
 const TOKENS = stylesheet(import.meta.url, "tokens.css");
 const INDEX = stylesheet(import.meta.url, "index.css");
+/** The form that owns the settings block: one hint under a field, one inside
+ *  the selected capability option. Read as source so the pairing asserted
+ *  below is the DOM's, not a claim made in a comment. */
+const SPECIALIST_FORM = readFileSync(
+  new URL("../src/views/settings/system/SpecialistForm.tsx", import.meta.url),
+  "utf8",
+);
 
 /** The sheets in the order the renderer loads them, from `index.css`. */
 function importOrder(): string[] {
@@ -87,9 +95,9 @@ function token(name: string): string {
  * resolved through the load order rather than retyped here.
  */
 const SURFACES = {
-  /** The settings surface the hint sits in. */
+  /** The settings surface every one of these hints sits in. */
   settings: declaredBackground("design.css", ".settings-main"),
-  /** The selected capability/specialist option, painted `--primary-softer`. */
+  /** The selected capability option, painted `--primary-softer`. */
   selectedOption: declaredBackground("design.css", ".settings-ability-option.is-selected"),
   /** The session flyout, which also hosts the 专家 and 会话设置 rows. */
   flyout: declaredBackground("design.css", ".session-menu-flyout"),
@@ -98,10 +106,11 @@ const SURFACES = {
   /** The workspace panel as the renderer ends up painting it. */
   panel: opaque(cascadeBackground(".workspace-panel").value, ".workspace-panel"),
   /**
-   * `--surface-sunk`, which a `workspace.css` rule paints the panel with before
-   * `design.css` overrides it. The panel is `#ffffff` today; the document tab's
-   * folder line sits on `#f0f0f0` again the moment that order changes, so the
-   * value is held to the darker of the two rather than to the one shipping.
+   * `--surface-sunk`, which `workspace.css:18` paints the panel with before
+   * `workspace.css:169` and `design.css` repaint it. The panel ships white, so
+   * this surface is held **defensively**: it is the colour the folder line goes
+   * back to if those later declarations are ever removed, and the value is
+   * chosen to clear AA there too rather than only on white.
    */
   sunk: opaque(token("--surface-sunk"), "--surface-sunk"),
 } as const;
@@ -110,13 +119,17 @@ type SurfaceName = keyof typeof SURFACES;
 
 /**
  * The hint rules this report is about, each with the surfaces it is actually
- * painted on. The two that appear on more than one background — the settings
- * hint on the selected option, the flyout description on a hovered row, the
- * document tab on the sunk panel — are why the ratio is checked per surface
- * instead of once against white.
+ * painted on. The pairing is the point: `.settings-ability-option-hint` is the
+ * hint that renders inside the selected option, and `.settings-field-hint` is
+ * not — a suite that measured the wrong one would report a ratio for a
+ * combination no reader ever sees.
  */
 const HINTS: { selector: string; surfaces: SurfaceName[] }[] = [
-  { selector: ".settings-field-hint", surfaces: ["settings", "selectedOption"] },
+  { selector: ".settings-field-hint", surfaces: ["settings"] },
+  { selector: ".settings-ability-option-hint", surfaces: ["settings", "selectedOption"] },
+  { selector: ".settings-field-count", surfaces: ["settings"] },
+  { selector: ".settings-textarea-count", surfaces: ["settings"] },
+  { selector: ".settings-ability-divider", surfaces: ["settings"] },
   { selector: ".session-flyout-desc", surfaces: ["flyout", "flyoutHover"] },
   { selector: ".session-flyout-note", surfaces: ["flyout"] },
   { selector: ".expert-note", surfaces: ["flyout"] },
@@ -149,14 +162,14 @@ test("every hint in the report is the one hint colour", () => {
   }
   const colours = new Set(HINTS.map(hint => hintColour(hint.selector).toLowerCase()));
   assert.equal(colours.size, 1, `the hints declare ${[...colours].join(", ")}; one colour keeps the intent in one place`);
-  console.log(`\nhint colour: ${[...colours].join(", ")} (--text-hint)`);
+  console.log(`\nhint colour: ${[...colours].join(", ")} (--text-hint), ${HINTS.length} rules`);
 });
 
 test("every hint clears WCAG AA on every surface it is painted on", () => {
   // Each hint is measured against each surface it is drawn on, not against
-  // white alone: `#666666` is 5.04:1 on the sunk `#f0f0f0` and 5.27:1 on the
-  // hovered row, while a grey picked to just clear white (`#767676`, 4.54:1)
-  // falls to 4.31:1 there. That is the regression this test exists to catch.
+  // white alone: `#666666` is 5.27:1 on the hovered flyout row and 5.39:1 on
+  // the selected option, while a grey picked to just clear white (`#767676`,
+  // 4.54:1) falls to 4.26:1 there. That is the regression this test catches.
   const reported: string[] = [];
   for (const hint of HINTS) {
     const colour = hintColour(hint.selector);
@@ -171,6 +184,28 @@ test("every hint clears WCAG AA on every surface it is painted on", () => {
     }
   }
   console.log(`\nWCAG AA hint contrast (threshold ${AA_NORMAL_TEXT}:1)\n${reported.join("\n")}`);
+});
+
+test("the hint paired with the selected option is the one rendered inside it", () => {
+  // The setting form is `<label class="settings-ability-option…"><input/><span>
+  // <span class="settings-ability-option-title">…</span><span class="
+  // settings-ability-option-hint">…</span></span></label>`. The label is what
+  // turns `--primary-softer` when chosen, so only the hint inside it is painted
+  // on that surface; `.settings-field-hint` sits one level up, in
+  // `.settings-ability`, and never lands on `#f4f8ff`. Asserting the source
+  // keeps the surface lists above honest.
+  const start = SPECIALIST_FORM.indexOf("<label className={`settings-ability-option");
+  assert.ok(start >= 0, "the capability option's <label> was not found");
+  const opening = SPECIALIST_FORM.slice(start, SPECIALIST_FORM.indexOf(">", start));
+  assert.ok(opening.includes("is-selected"), `the option is no longer given \`is-selected\`: ${opening}`);
+  const label = SPECIALIST_FORM.slice(start);
+  const option = label.slice(0, label.indexOf("</label>"));
+  assert.ok(option.length > 0 && option.length < label.length, "the capability option's </label> was not found");
+  assert.ok(option.includes("settings-ability-option-hint"), "the option's own hint is not inside the option");
+  assert.ok(
+    !option.includes("settings-field-hint"),
+    "a settings-field-hint is inside the capability option; the surface lists in this test would be wrong",
+  );
 });
 
 test("the surfaces measured here are the ones the sheets paint", () => {
@@ -193,23 +228,23 @@ test("the surfaces measured here are the ones the sheets paint", () => {
 });
 
 test("the workspace panel is the surface design.css paints, not the sunk one", () => {
-  // Three sheets name `.workspace-panel`; `workspace.css` paints it
-  // `--surface-sunk` (#f0f0f0) in two rules and `design.css` paints it `#fff`.
-  // `design.css` is imported after `workspace.css`, so the panel a reader sees
-  // is white and the folder line on it is 2.43:1 rather than the 2.14:1 the
-  // report quotes from the losing rule. The defect stands either way, which is
-  // why the fix is held to the darker of the two surfaces above — but the
-  // number in the record has to be the one that is painted.
-  assert.ok(ORDER.indexOf("design.css") > ORDER.indexOf("workspace.css"),
-    `design.css is imported before workspace.css (${ORDER.join(" > ")}); the panel would be the sunk surface`);
-  const sunkRules = baseRules(stylesheet(import.meta.url, "workspace.css"), ".workspace-panel")
+  // Three sheets name `.workspace-panel`: `workspace.css` paints it
+  // `--surface-sunk` (#f0f0f0) in one rule and `--surface` (#fff) in another,
+  // and `design.css` paints it `#fff` last. The panel a reader sees is
+  // therefore white, and the folder line on it is 2.43:1 rather than the
+  // 2.14:1 the report quotes from the losing rule. The fix is still held to the
+  // darker surface above, which is why it clears AA either way — but the number
+  // in the record has to be the one that is painted.
+  const painted = baseRules(stylesheet(import.meta.url, "workspace.css"), ".workspace-panel")
     .map(rule => declaration(rule, "background"))
     .filter((value): value is string => value !== undefined);
-  assert.ok(sunkRules.includes("var(--surface-sunk)"),
-    "workspace.css no longer paints the panel with --surface-sunk; re-read which surface the folder line sits on");
+  assert.ok(painted.includes("var(--surface-sunk)"), "workspace.css no longer paints the panel with --surface-sunk");
+  assert.ok(painted.includes("var(--surface)"), "workspace.css no longer repaints the panel with --surface");
+  assert.ok(ORDER.indexOf("design.css") > ORDER.indexOf("workspace.css"),
+    `design.css is imported before workspace.css (${ORDER.join(" > ")}); the panel would be the sunk surface`);
   const winner = cascadeBackground(".workspace-panel");
   assert.equal(winner.sheet, "design.css", `.workspace-panel is painted by ${winner.sheet}, so the surface moved`);
-  console.log(`\n.workspace-panel: ${sunkRules.join(" / ")} in workspace.css, overridden by ${winner.sheet} ${winner.value}`);
+  console.log(`\n.workspace-panel: ${painted.join(" / ")} in workspace.css, overridden by ${winner.sheet} ${winner.value}`);
 });
 
 test("no rule repaints a hint, so one colour cannot be traded for another", () => {
@@ -240,8 +275,8 @@ test("no rule repaints a hint, so one colour cannot be traded for another", () =
 test("the fix does not reach into the shared muted tokens", () => {
   // `--muted`, `--muted-light` and `--text-faint` have roughly 250 call sites,
   // several of them not text at all, so lifting them would repaint the shell to
-  // fix five hint rules. Their values are asserted to stay put, and the hint
-  // colour is asserted to be its own token.
+  // fix these rules. Their values are asserted to stay put, and the hint colour
+  // is asserted to be its own token.
   assert.equal(token("--muted"), "#777777");
   assert.equal(token("--muted-light"), "#a6a6a6");
   assert.equal(token("--text-faint"), "#8c8c8c");
