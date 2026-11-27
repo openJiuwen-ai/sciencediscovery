@@ -3084,7 +3084,8 @@ body.is-resizing {
   top: calc(100% + 6px);
   right: 0;
   z-index: 40;
-  min-width: 92px;
+  min-width: 200px;
+  max-width: 320px;
   padding: 4px;
   border: 1px solid #ececec;
   border-radius: 10px;
@@ -3121,6 +3122,20 @@ body.is-resizing {
 .doc-version-option svg {
   color: #191919;
   flex: 0 0 12px;
+}
+
+/* The producing Session and the time, so v4 is attributable at a glance: a
+   version number alone cannot say whether it is this conversation's work. */
+.doc-version-meta {
+  flex: 1;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: #8c8c8c;
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .doc-body {

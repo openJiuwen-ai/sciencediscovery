@@ -449,10 +449,16 @@ export interface WorkspaceToolOptions {
   declareArtifact?: (input: {
     artifactId?: string; baseVersionId?: string; toolCallId?: string;
     description?: string;
+    forceNewArtifact?: boolean;
     forceNewVersion?: boolean;
     name?: string;
     path: string;
-  }) => Promise<{ artifact: ScientificArtifact; version: ScientificArtifactVersion; instruction?: string }>;
+  }) => Promise<{
+    artifact: ScientificArtifact;
+    continuedFrom?: { sessionId: string; sessionTitle: string; version: number };
+    version: ScientificArtifactVersion;
+    instruction?: string;
+  }>;
   enabledConnectorIds: ConnectorId[];
   /** `machine` names one of `remoteRunners`; omitted or "local" runs on this machine. */
   executePython: (code: string, signal?: AbortSignal, toolCallId?: string, machine?: string) => Promise<PythonExecutionResult>;
@@ -1150,6 +1156,9 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       description: Type.Optional(Type.String({ maxLength: 2_000 })),
       force_new_version: Type.Optional(Type.Boolean({ description: "Set true only to force a new version number when the file bytes are unchanged, for example an annotation-only republish. A normal republish of identical bytes returns the existing newest version." })),
       name: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
+      new_artifact: Type.Optional(Type.Boolean({
+        description: "Publish this file as a new Artifact even when a same-named Artifact exists in the Project. Use this after an ARTIFACT_SESSION_CONFLICT when the work is not a revision of the other Session's product.",
+      })),
       path: Type.Optional(Type.String({ maxLength: 2_000, minLength: 1 })),
       paths: Type.Optional(Type.Array(Type.String({ maxLength: 2_000, minLength: 1 }), {
         maxItems: MAX_DECLARE_ARTIFACT_PATHS,
@@ -1157,7 +1166,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
       })),
     });
     const declareArtifact: AgentTool<typeof parameters> = {
-      description: "Declare existing files in your writable workspace as user-visible Project artifacts. To publish an edit of an existing Artifact, supply artifact_id and base_version_id together with one path (not paths/name). A stale base fails with ARTIFACT_VERSION_CONFLICT and preserves your local file. Republishing unchanged bytes returns the existing newest version instead of adding a duplicate; set force_new_version only when an annotation-only republish really needs a new number. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: if declare_claim is available and a markdown/text artifact carries [alias] citation tokens, call declare_artifact(output) AFTER its declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
+      description: "Declare existing files in your writable workspace as user-visible Project artifacts. To publish an edit of an existing Artifact, supply artifact_id and base_version_id together with one path (not paths/name). A stale base fails with ARTIFACT_VERSION_CONFLICT and preserves your local file. Republishing unchanged bytes returns the existing newest version instead of adding a duplicate; set force_new_version only when an annotation-only republish really needs a new number. A path-only call whose name already belongs to an Artifact created in another Session fails with ARTIFACT_SESSION_CONFLICT instead of silently appending to that Session's chain; the message names both the resolved artifact_id and its current version_id. Either retry with that artifact_id and base_version_id to continue the chain deliberately, or pass new_artifact=true to publish this file as a separate Artifact. A result may also carry continuedFrom {sessionId, sessionTitle, version} when it continued another Session's chain: state that provenance in your answer instead of describing the version as a new product. Use path for one file or paths for 1-50 files; paths takes priority when both are present. A single-file name defaults to its workspace-relative path. Batch items also use their full relative paths and ignore top-level name/description. Batch failures are returned per item while successful items remain declared. Call this for every useful output, including the final output files. ORDER: if declare_claim is available and a markdown/text artifact carries [alias] citation tokens, call declare_artifact(output) AFTER its declare_claim calls — the chip references accumulated by declare_claim are drained onto this version at call time, so declaring the output before declare_claim ships a version with no references and the [alias] chips will not render. Do NOT declare files produced by other subagents that you only read as inputs — query/list the existing Artifact id and cite it instead, to avoid creating a duplicate node and a false produces edge.",
       execute: async (_toolCallId, params) => {
         const pathGuidance = 'Use path for one file, paths for an array of file paths, or artifacts: [{path: "relative/file"}] with a nonempty artifacts[].path.';
         let paths = params.paths;
@@ -1171,6 +1180,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
           });
         }
         if (!!params.artifact_id !== !!params.base_version_id) throw new Error("artifact_id and base_version_id are required together");
+        if (params.new_artifact && params.artifact_id) throw new Error("new_artifact cannot be combined with artifact_id/base_version_id");
         if (params.artifact_id && (paths !== undefined || params.name !== undefined)) throw new Error("Artifact revision requires one path and cannot rename or batch");
         if (paths !== undefined) {
           if (paths.length === 0 || paths.some((path) => typeof path !== "string" || !path.trim())) throw new Error(`paths must contain at least one path and no empty paths. ${pathGuidance}`);
@@ -1178,14 +1188,21 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
             throw new Error(`paths must contain at most ${MAX_DECLARE_ARTIFACT_PATHS} paths. ${pathGuidance}`);
           }
           const artifacts: Array<
-            | { artifact_id: string; name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string }
+            | {
+              artifact_id: string; continuedFrom?: { sessionId: string; sessionTitle: string; version: number };
+              name: string; ok: true; origin: ScientificArtifact["origin"]; path: string; version: number; version_id: string;
+            }
             | { error: string; ok: false; path: string }
           > = [];
           for (const path of paths) {
             try {
-              const result = await options.declareArtifact!({ path });
+              const result = await options.declareArtifact!({
+                path,
+                ...(params.new_artifact ? { forceNewArtifact: true } : {}),
+              });
               artifacts.push({
                 artifact_id: result.artifact.id,
+                ...(result.continuedFrom ? { continuedFrom: result.continuedFrom } : {}),
                 name: result.artifact.name,
                 ok: true,
                 origin: result.artifact.origin,
@@ -1208,6 +1225,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         const result = await options.declareArtifact!({
           ...(params.artifact_id ? { artifactId: params.artifact_id, baseVersionId: params.base_version_id, toolCallId: _toolCallId } : {}),
           ...(params.description ? { description: params.description } : {}),
+          ...(params.new_artifact ? { forceNewArtifact: true } : {}),
           ...(params.force_new_version ? { forceNewVersion: true } : {}),
           ...(params.name ? { name: params.name } : {}),
           path: params.path,
@@ -1215,6 +1233,7 @@ export function createWorkspaceTools(workspaceRoot: string, options: WorkspaceTo
         return { content: [{ type: "text", text: JSON.stringify({
           artifact_id: result.artifact.id,
           content: result.version.content,
+          ...(result.continuedFrom ? { continuedFrom: result.continuedFrom } : {}),
           name: result.artifact.name,
           origin: result.artifact.origin,
           version: result.version.version,

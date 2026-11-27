@@ -1609,3 +1609,44 @@ test("a repeated settled shell receipt leaves execution-runs bytes, inode and ti
   assert.notEqual(grown.ino, before.ino, "a new run must still write the ledger");
   assert.deepEqual((await store.listExecutionRuns(session.id)).map(run => run.id).sort(), ["execution-1", "execution-2"]);
 });
+
+test("a declare result discloses the Session whose Artifact chain it continued", async (context) => {
+  const dataDir = resolve(process.cwd(), ".tmp", `continued-from-${process.pid}-${Date.now()}`);
+  context.after(() => rm(dataDir, { force: true, recursive: true }));
+  const store = new SessionStore(dataDir);
+  store.setAvailableSkillIds([]);
+  await store.load();
+  const project = await store.createProject("Continuation disclosure");
+  const first = await store.createSession(project.id, "Report writer", {}, {}, { allowUnconfiguredModel: true });
+  const second = await store.createSession(project.id, "Run log", {}, {}, { allowUnconfiguredModel: true });
+  const recorder = new ProvenanceRecorder(dataDir, store);
+  const workspaceRoot = store.workspacePath(second.id);
+  await mkdir(workspaceRoot, { recursive: true });
+  await writeFile(resolve(workspaceRoot, "report.md"), "# First\n", "utf8");
+  const declare = (sessionId: string, extra: { artifactId?: string; baseVersionId?: string } = {}) =>
+    recorder.declareWorkspaceArtifact({
+      ...extra, name: "report.md", path: "report.md", sessionId, sourcePath: "report.md", workspaceRoot,
+    });
+
+  const own = await declare(first.id);
+  assert.equal(own.version.version, 1);
+  assert.equal(own.continuedFrom, undefined, "a chain's own first version is not a continuation");
+
+  // Only the path, from another Session: refused, with the identity the model
+  // needs to answer the conflict in the same turn.
+  await assert.rejects(declare(second.id), /ARTIFACT_SESSION_CONFLICT/);
+
+  // The deliberate continuation reports where the chain came from, so the
+  // model can say "v2 of the report started in ..." instead of presenting it
+  // as its own first product. Change the bytes first: an explicit republish of
+  // unchanged content is now a no-op that returns the newest version.
+  await writeFile(resolve(workspaceRoot, "report.md"), "# Revised\n", "utf8");
+  const continued = await declare(second.id, { artifactId: own.artifact.id, baseVersionId: own.version.id });
+  assert.deepEqual(continued.continuedFrom, {
+    sessionId: first.id,
+    sessionTitle: "Report writer",
+    version: 1,
+  });
+  assert.equal(continued.version.version, 2);
+  assert.equal(continued.artifact.createdInSessionId, first.id);
+});

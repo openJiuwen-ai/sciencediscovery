@@ -5869,10 +5869,53 @@ export class SessionStore {
       throw new Error("Artifact dependency must reference a version in the same Project");
     }
     const now = new Date().toISOString();
-    let artifact = explicit ?? (input.forceNewArtifact ? undefined : this.catalog.artifacts.find((candidate) =>
+    const implicitCandidates = explicit || input.forceNewArtifact ? [] : this.catalog.artifacts.filter((candidate) =>
       candidate.projectId === projectId && candidate.name === logicalName && !candidate.deletedAt
       && this.artifactSharesResearchScope(input.sessionId, candidate.createdInSessionId)
-      && (!isEvidenceSessionReadOnly(this.getSession(candidate.createdInSessionId)) || this.isResearchRestoring(candidate.createdInSessionId))));
+      && (!isEvidenceSessionReadOnly(this.getSession(candidate.createdInSessionId)) || this.isResearchRestoring(candidate.createdInSessionId)));
+    // Prefer the Artifact this Session already created, as getArtifactByName
+    // does. Without that order, new_artifact=true could publish a Session's own
+    // product and the next path-only declaration in the same Session would still
+    // resolve to the other Session's older same-named Artifact and be refused.
+    const implicit = implicitCandidates.find((candidate) => candidate.createdInSessionId === input.sessionId)
+      ?? implicitCandidates[0];
+    // A path-only agent declaration used to join any same-named Artifact in the
+    // Project, whichever Session had created it: a fresh conversation's first
+    // product silently became v4 of another conversation's chain, and the
+    // owning Session's product changed underneath it. The chain stays
+    // Project-level, but the join is now a decision: continue deliberately with
+    // the resolved artifact_id plus its current version as base_version_id (so
+    // CAS applies), or ask for a separate Artifact. Without this gate the tool
+    // error could not be answered at all, because artifact_id and
+    // base_version_id must be supplied together. Uploads (and other explicit
+    // non-agent origins) keep their documented Project-chain behaviour: the
+    // user chose that file, and the upload surface has its own conflict policy.
+    if ((input.origin ?? "llm_declared") === "llm_declared"
+      && implicit && implicit.createdInSessionId !== input.sessionId) {
+      // The current version record may be missing from the catalog; fall back to
+      // the newest stored version so the suggested base_version_id is never an
+      // empty string (the tool schema requires at least one character).
+      const current = this.catalog.artifactVersions.find((version) =>
+        version.artifactId === implicit.id && version.projectId === projectId && version.version === implicit.currentVersion)
+        ?? this.catalog.artifactVersions
+          .filter((version) => version.artifactId === implicit.id && version.projectId === projectId)
+          .reduce<ScientificArtifactVersion | undefined>((newest, version) =>
+            !newest || version.version > newest.version ? version : newest, undefined);
+      const continueAdvice = current
+        ? `To continue it deliberately, call declare_artifact with path plus artifact_id=${JSON.stringify(implicit.id)} and base_version_id=${JSON.stringify(current.id)} `
+          + `(the base makes a stale write fail instead of overwriting). `
+        : "";
+      throw new SessionStoreHttpError(
+        `ARTIFACT_SESSION_CONFLICT: ${JSON.stringify(implicit.name)} resolves to Artifact ${implicit.id}, created in another Session `
+        + `(${JSON.stringify(implicit.createdInSessionTitle)}, ${implicit.createdInSessionId}), now at v${implicit.currentVersion}. `
+        + `Appending here would silently continue that Session's version chain. `
+        + continueAdvice
+        + `To publish this work as a new Artifact instead, call declare_artifact with path and new_artifact=true.`,
+        409,
+        "ARTIFACT_SESSION_CONFLICT",
+      );
+    }
+    let artifact = explicit ?? implicit;
     if (artifact && artifact.kind !== input.kind) throw new Error("Artifact kind cannot change across versions");
     if (artifact?.origin === "server_generated" && (input.origin ?? "llm_declared") !== "server_generated") {
       throw new Error("Server-generated Artifacts accept new versions only from a server-generated writer");

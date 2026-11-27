@@ -70,4 +70,4 @@ agent 随后用适合格式的工具修改文件，或重新运行生成工具�
 
 发布要求基准版本仍为最新；否则返回 `ARTIFACT_VERSION_CONFLICT`，本地编辑保留。agent 应获取最新版本到另一条路径并显式合并，不能静默覆盖。相同工具调用的重放复用已发布版本（持久化 publication ID），不同内容的重放报冲突。比较与目录更新在当前单进程 SessionStore 内同步完成，沿用现有目录持久化机制，不提供多 API 写进程之间的分布式锁。
 
-旧的 `declare_artifact(path/name/paths)` 调用保持兼容。显式修订只接受单文件 path，不接受 name 或 paths。本接口不共享父子目录，不自动分发依赖，不限制工具生成文件；远端 Runner 的文件应先通过已有 workspace transfer 流程转入本地工作区。
+旧的 `declare_artifact(path/name/paths)` 调用在同一 Session 的链上保持兼容。Project 级链仍然保留：同 path 同名产物在同一研究范围内是一个产物。仅凭 path 的声明若解析到的产物由另一个 Session 创建，则不再静默追加，而是返回 `ARTIFACT_SESSION_CONFLICT`，消息中给出解析到的 `artifact_id` 与当前版本 ID；同时提供 `artifact_id` + `base_version_id` 续写该链（CAS 生效），或传 `new_artifact: true` 声明为独立产物。显式修订只接受单文件 path，不接受 name 或 paths。本接口不共享父子目录，不自动分发依赖，不限制工具生成文件；远端 Runner 的文件应先通过已有 workspace transfer 流程转入本地工作区。

@@ -13,7 +13,7 @@
 | `get_file_provenance` | `path` | 返回后端已记录的文件身份、当前来源、修订历史、执行上下文、上游来源链和关联产物版本；`origin: unknown` 表示来源不可证实，Agent 不得自行推断 |
 | `list_artifacts` | 无 | 列出当前 Project 中跨 Session 的用户可见产物，包含来源、创建 Session 快照和最新版本元数据 |
 | `read_artifact` | `artifact_id` 或 `name`，可选 `version`、`offset`、`limit` | 按 Project 产物身份分页读取指定版本：文本返回 UTF-8，单页最多 2000 行或 40 KiB，并给出行范围与下一 `offset`；二进制版本只返回 `binary: true` 与媒体类型、大小，不返回正文或 base64 |
-| `declare_artifact` | `path` 或 `paths`（1–50 项），可选 `name`、`description` | 将当前 Agent 可写工作区内的文件显式声明为 Project 产物。单 `path` 保留原返回，`name` 默认等于规范化后的工作区相对 `path`，可显式覆盖为其它安全逻辑路径；`paths` 优先且逐项返回 `ok/error`，成功项不回滚，每项使用自身完整相对 path 并忽略顶层 `name/description`；name 中的 `/` 在产物侧边栏显示为虚拟目录，不创建或移动物理文件；预览 kind 由服务端内部推断，最终报告也必须声明 |
+| `declare_artifact` | `path` 或 `paths`（1–50 项），可选 `name`、`description`、`new_artifact`；修订需同时给 `artifact_id` 与 `base_version_id` | 将当前 Agent 可写工作区内的文件显式声明为 Project 产物。仅凭 path 且同名产物由另一个 Session 创建时返回 `ARTIFACT_SESSION_CONFLICT`，并给出解析到的 `artifact_id` 与当前版本：同时带上二者重试即有意续写该链（CAS 生效），或传 `new_artifact: true` 声明为独立产物。单 `path` 保留原返回，`name` 默认等于规范化后的工作区相对 `path`，可显式覆盖为其它安全逻辑路径；`paths` 优先且逐项返回 `ok/error`，成功项不回滚，每项使用自身完整相对 path 并忽略顶层 `name/description`；name 中的 `/` 在产物侧边栏显示为虚拟目录，不创建或移动物理文件；预览 kind 由服务端内部推断，最终报告也必须声明 |
 | `run_shell` | `command` 或 `scriptPath` 二选一，可选 `arguments`、`runner_id`、`environment_id`、`wait_ms`、`background` | Agent × Runner Workspace 中的新沙箱进程；按环境 ID 使用最新版，无跨调用 cd/export/解释器内存；等待到期不停止进程 |
 | `execution_status` / `execution_logs` / `execution_cancel` | Execution ID；状态支持列举/等待，日志支持 cursor | 独立管理通道，不另起 Shell、不取 Workspace 写锁 |
 | `workspace_transfer` | workspaces/start/list/status/cancel；显式 Workspace ID 与文件映射 | 复制已提交快照，记录逐文件结果与部分成功，不自动声明 Artifact |

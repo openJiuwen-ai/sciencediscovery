@@ -3635,10 +3635,15 @@ test("listSessionArtifactOutputs returns only declared, live Artifact versions f
     content: { hash: "b".repeat(64), size: 1 }, kind: "dataset", logicalName: "legacy.csv", mediaType: "text/csv",
     sessionId: first.id,
   });
+  // The same file name in another Session is a separate product, not a silent
+  // version of the first Session's Artifact (see ARTIFACT_SESSION_CONFLICT).
   const secondOutput = await store.createArtifactVersion({
-    content: { hash: "c".repeat(64), size: 1 }, kind: "dataset", logicalName: "result.csv", mediaType: "text/csv",
-    sessionId: second.id, turnId: "run-second",
+    content: { hash: "c".repeat(64), size: 1 }, forceNewArtifact: true, kind: "dataset", logicalName: "result.csv",
+    mediaType: "text/csv", sessionId: second.id, turnId: "run-second",
   });
+  assert.notEqual(secondOutput.artifact.id, firstOutput.artifact.id);
+  assert.equal(secondOutput.artifact.createdInSessionId, second.id);
+  assert.equal(secondOutput.version.version, 1);
   const removed = await store.createArtifactVersion({
     content: { hash: "d".repeat(64), size: 1 }, kind: "dataset", logicalName: "removed.csv", mediaType: "text/csv",
     sessionId: first.id, turnId: "run-first",
@@ -3660,6 +3665,96 @@ test("listSessionArtifactOutputs returns only declared, live Artifact versions f
   }]);
   assert.deepEqual(store.listSessionArtifactOutputs(second.id).map((item) => item.version.id), [secondOutput.version.id]);
   assert.throws(() => store.listSessionArtifactOutputs("missing"), /Session not found/);
+});
+
+test("a new Session cannot silently continue another Session's Artifact chain by path", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `artifact-session-conflict-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+  const project = await store.createProject("Artifact session gate");
+  const reportWriter = await store.createSession(project.id, "Report writer", {}, {}, { allowUnconfiguredModel: true });
+  const runLog = await store.createSession(project.id, "Run log", {}, {}, { allowUnconfiguredModel: true });
+  const bystander = await store.createSession(project.id, "Bystander", {}, {}, { allowUnconfiguredModel: true });
+  const write = (sessionId: string, hash: string, extra: { artifactId?: string; baseVersionId?: string; forceNewArtifact?: boolean } = {}) =>
+    store.createArtifactVersion({
+      ...extra,
+      content: { hash: hash.repeat(64), size: 4 },
+      kind: "markdown",
+      logicalName: "report.md",
+      mediaType: "text/markdown",
+      origin: "llm_declared",
+      sessionId,
+      sourcePath: "report.md",
+    });
+
+  const v1 = await write(reportWriter.id, "1");
+  const v2 = await write(reportWriter.id, "2", { artifactId: v1.artifact.id, baseVersionId: v1.version.id });
+  const v3 = await write(reportWriter.id, "3", { artifactId: v1.artifact.id, baseVersionId: v2.version.id });
+  assert.equal(v3.version.version, 3);
+
+  // A fresh Session only knows the path; before the gate this became v4 of the
+  // other Session's chain without telling anyone.
+  await assert.rejects(
+    write(runLog.id, "4"),
+    (error: unknown) => {
+      assert.ok(error instanceof SessionStoreHttpError);
+      assert.equal(error.statusCode, 409);
+      assert.equal(error.code, "ARTIFACT_SESSION_CONFLICT");
+      assert.match(error.message, new RegExp(v1.artifact.id));
+      assert.match(error.message, /v3/);
+      assert.match(error.message, /Report writer/);
+      assert.match(error.message, /base_version_id/);
+      assert.doesNotMatch(error.message, /base_version_id=""/, "an empty base cannot satisfy the tool schema");
+      assert.match(error.message, /new_artifact=true/);
+      return true;
+    },
+  );
+  assert.deepEqual(store.listProjectArtifactVersions(project.id, v1.artifact.id).map((version) => version.version), [1, 2, 3]);
+  assert.equal(store.getProjectArtifact(project.id, v1.artifact.id)?.currentVersion, 3, "the refused write changed nothing");
+
+  // Continuing deliberately carries the base version, so CAS applies.
+  const continued = await write(runLog.id, "4", { artifactId: v1.artifact.id, baseVersionId: v3.version.id });
+  assert.equal(continued.version.version, 4);
+  assert.equal(continued.version.sessionId, runLog.id);
+  assert.equal(continued.version.baseVersionId, v3.version.id);
+  assert.equal(continued.artifact.createdInSessionId, reportWriter.id);
+  await assert.rejects(
+    write(runLog.id, "5", { artifactId: v1.artifact.id, baseVersionId: v1.version.id }),
+    /ARTIFACT_VERSION_CONFLICT/,
+  );
+
+  // The other answer to the conflict: publish a separate Artifact.
+  const separate = await write(runLog.id, "6", { forceNewArtifact: true });
+  assert.notEqual(separate.artifact.id, v1.artifact.id);
+  assert.equal(separate.artifact.createdInSessionId, runLog.id);
+  assert.equal(separate.version.version, 1);
+
+  // Once new_artifact gave this Session its own product, a later path-only
+  // declaration must extend that product. Resolving to the Project's first
+  // same-named Artifact would refuse work the Session had just published.
+  const ownSeparate = await write(runLog.id, "8");
+  assert.equal(ownSeparate.artifact.id, separate.artifact.id);
+  assert.equal(ownSeparate.artifact.createdInSessionId, runLog.id);
+  assert.equal(ownSeparate.version.version, 2);
+
+  // A Session with no same-named Artifact of its own still falls back to the
+  // cross-Session candidate, where the gate keeps applying.
+  await assert.rejects(
+    write(bystander.id, "9"),
+    (error: unknown) => {
+      assert.ok(error instanceof SessionStoreHttpError);
+      assert.equal(error.code, "ARTIFACT_SESSION_CONFLICT");
+      return true;
+    },
+  );
+
+  // The chain's own Session still appends without a base: the Project-level
+  // chain is intended, only the cross-Session join became a decision.
+  const own = await write(reportWriter.id, "7");
+  assert.equal(own.artifact.id, v1.artifact.id);
+  assert.equal(own.version.version, 5);
 });
 
 test("deleting a Session removes the stored tool output its history still references", async (context) => {
