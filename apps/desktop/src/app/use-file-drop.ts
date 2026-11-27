@@ -40,6 +40,15 @@ import { carriesFiles } from "./upload.js";
  * a `.sdresearch` package the reader was importing, and then cancelled, into the
  * composer as a chat attachment.
  */
+/** The surfaces a drop belongs to instead of the window: a modal dialog, the
+ *  settings surface, and any element that declares itself modal. */
+const DIALOG_SURFACE = '.modal-backdrop, .config-backdrop, [aria-modal="true"]';
+
+/** Whether a drag or a drop happened on a dialog rather than on the page. */
+function insideDialog(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(DIALOG_SURFACE) !== null;
+}
+
 export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean): boolean {
   const [dragging, setDragging] = useState(false);
   const depth = useRef(0);
@@ -54,6 +63,10 @@ export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean):
     };
     const onDragEnter = (event: DragEvent) => {
       if (!carriesFiles([...(event.dataTransfer?.types ?? [])])) return;
+      // The card this would paint says "release to upload". Over a dialog that is
+      // no longer true — the drop belongs to the dialog — so the promise is not
+      // made in the first place.
+      if (insideDialog(event.target)) return;
       depth.current += 1;
       // Reported even when the drop is not accepted: the overlay is how the app
       // answers a drag, and a refused drop it never mentions is the one outcome
@@ -64,8 +77,9 @@ export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean):
       const transfer = event.dataTransfer;
       if (transfer === null || !carriesFiles([...transfer.types])) return;
       // Without this the browser refuses the drop and opens the file instead.
+      // It stays for a dialog too: the drop is discarded, not navigated to.
       event.preventDefault();
-      if (latest.current.enabled) transfer.dropEffect = "copy";
+      if (!insideDialog(event.target) && latest.current.enabled) transfer.dropEffect = "copy";
     };
     // Deliberately unchecked: a `dragleave` whose `types` came back empty would
     // leave the counter stuck above zero and the overlay on screen forever. A
@@ -88,10 +102,7 @@ export function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean):
       // lands on the header, the footer, the scrim or the file card that replaces
       // the zone. Uploading that would put a file the reader never imported into
       // the conversation behind the dialog — the very symptom that started this.
-      const target = event.target;
-      const insideDialog = target instanceof Element
-        && target.closest('.modal-backdrop, .config-backdrop, [aria-modal="true"]') !== null;
-      if (taken || insideDialog) return;
+      if (taken || insideDialog(event.target)) return;
       if (latest.current.enabled) latest.current.onFiles(files);
     };
     // Bind each handler once and keep its own unbind, so the four listeners
