@@ -34,6 +34,13 @@
   --muted: #777777;
   --muted-light: #a6a6a6;
   --text-faint: #8c8c8c;
+  /* Hint text that has to clear WCAG AA (4.5:1) on the surface it is drawn on:
+     the settings panel #ffffff, the selected option #f4f8ff, the session
+     flyout #ffffff and its hovered row #f5f5f5, the workspace panel #f0f0f0
+     and a section inside it #ffffff. --muted (#777777, 4.48:1 on white) and
+     --text-faint (#8c8c8c, 3.36:1) do not clear the floor on the darker ones,
+     and both have call sites that are not text, so this is its own token. */
+  --text-hint: #666666;
 
   --primary: #1476ff;
   --primary-strong: #0f63d8;
