@@ -490,8 +490,8 @@ config, no private notes.
 
 A change a reader can see in the product is not reviewable from a diff. Put
 frames in the pull request body — not only in a review comment, where the next
-push detaches them from the lines they explain — and keep them in the change
-itself:
+push detaches them from the lines they explain — and keep them out of the
+repository:
 
 - **Before and after, same view.** Same window, viewport and crop in both
   frames, so everything that differs between them is the change. A surface that
@@ -500,17 +500,18 @@ itself:
 - **Both languages.** `zh-CN` and `en` are separate dictionaries, so a rename
   reaches one and misses the other unless both are captured; the pair is what
   proves it did not.
-- **Under `docs/screenshots/<topic>/`.** That is where review evidence already
-  lives: ten directories, six of them (`1275`, `1305`, `1399`, `1401`, `1412`,
-  `proxy-settings-ui`) with a `README.md` that records how the frames were
-  captured, what is mocked and what each one shows; the other four hold
-  images only and are not the model. New evidence follows that README shape
-  rather than any older directory, and names its files for locale and state
-  (`01-zh-<state>.png`, `05-en-<state>.png`) — the existing directories each
-  number and order theirs differently, so the naming is a rule for new evidence
-  and not a description of the old. Embed the frames in the body from
-  `raw.githubusercontent.com` URLs pinned to a commit SHA — not to a branch,
-  which moves.
+- **Outside the repository.** Frames are review evidence, not artifacts, so they
+  are not committed: host them on a branch in your own fork, or anywhere that
+  serves a stable URL, and embed them in the body from URLs pinned to a commit
+  SHA — a branch name moves and the body silently starts showing something else.
+  Ten directories under `docs/screenshots/` did commit theirs; that is history,
+  not the rule, and a frame committed by mistake stays in the repository's
+  history after the pull request is reverted.
+- **Self-describing.** Under each frame, say what it shows, the viewport and
+  device scale, the harness, what is mocked, and which part of the copy on
+  screen comes from this diff rather than from a fixture. Those older
+  directories kept that in a `README.md`; with the frames outside the tree it
+  belongs in the body beside them.
 - **Redacted.** A frame of a real stack shows what the stack shows: keys on the
   settings page, bearer tokens in a log panel, `/home/<user>` and
   `C:\Users\<name>` paths, hostnames, other people's session titles. Journey
