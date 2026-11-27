@@ -83,10 +83,9 @@ body.is-resizing {
   z-index: 3;
 }
 
-/* The application mark: its own dark tile and gradient monogram, so the rail
-   draws the artwork rather than a coloured box around a glyph. 128px is four
-   times the 32px it is shown at, which keeps the gradient smooth on a retina
-   screen. */
+/* The application mark: transparent artwork, so the rail draws the mark itself
+   rather than a tile around a glyph. 128px is four times the 32px it is shown
+   at, which keeps the gradient smooth on a retina screen. */
 .rail-logo {
   width: 32px;
   height: 32px;
