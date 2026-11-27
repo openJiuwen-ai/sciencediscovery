@@ -44,9 +44,9 @@
  * the two dictionaries are separate: the same states must hold when every
  * label on the pane is a different string.
  *
- * The screenshots each run writes are copied unchanged into
- * `docs/screenshots/1399/` as the PR's review evidence; they are captures, not
- * assertions, so a failed run can still fail before any of them exists.
+ * The screenshots each run writes are the frames attached to the pull request
+ * as its review evidence, not committed to this repository; they are captures,
+ * not assertions, so a failed run can still fail before any of them exists.
  */
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
