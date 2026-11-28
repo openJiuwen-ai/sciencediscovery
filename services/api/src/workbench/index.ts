@@ -26,9 +26,13 @@ const MAX_SEARCH_RESULTS = 250;
  *  A query that exactly names an existing Session is a lookup, not a content
  *  search, and reads nothing. */
 const MAX_CONTENT_SCAN_SESSIONS = 200;
-/** Messages read per Session before the scan stops. */
+/** Messages scanned per Session before the scan stops, counted from the newest
+ *  turn backwards: a transcript is stored oldest-first, and the end of it is
+ *  what a reader is likely to remember saying. */
 const MAX_CONTENT_SCAN_MESSAGES = 500;
-/** Message-body characters scanned per Session. */
+/** Message-body characters scanned per Session, spent from the newest message
+ *  backwards for the same reason, so a long Session loses its oldest text to
+ *  the budget rather than its newest. */
 const MAX_CONTENT_SCAN_CHARS = 2_000_000;
 /** Across the whole query, at most this many bytes of serialized transcripts
  *  are charged. A Session is charged for the whole file `readMessages` parsed,
@@ -46,20 +50,45 @@ function boundedInteger(value: number | undefined, fallback: number, minimum: nu
   return maximum === undefined ? integer : Math.min(maximum, integer);
 }
 
-/** The first line of `content` that carries `needle`, clipped around the match.
- *  Only the message body is searched: keys of the stored JSON never are. */
-function matchingSnippet(content: string, needle: string): string | undefined {
-  for (const line of content.split(/\r?\n/u)) {
+/** True when `text` holds the second half of a surrogate pair at `index`. */
+function splitsSurrogatePair(text: string, index: number): boolean {
+  if (index <= 0 || index >= text.length) return false;
+  const code = text.charCodeAt(index);
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** `text` cut to at most `limit` code points, never between the halves of a
+ *  surrogate pair: an emoji at the cut must not become half a glyph. */
+function clipCodePoints(text: string, limit: number): string {
+  let used = 0;
+  let index = 0;
+  while (index < text.length && used < limit) {
+    index += (text.codePointAt(index) ?? 0) > 0xffff ? 2 : 1;
+    used += 1;
+  }
+  return text.slice(0, index);
+}
+
+/** The matching line of `content`, clipped around the match. `fromEnd` walks the
+ *  lines newest first, so a body that repeats the needle reports the turn that
+ *  came later. Only the message body is searched: keys of the stored JSON never
+ *  are. Cuts land on code points, so a surrogate pair is never split. */
+function matchingSnippet(content: string, needle: string, fromEnd = false): string | undefined {
+  const lines = content.split(/\r?\n/u);
+  for (let cursor = fromEnd ? lines.length - 1 : 0; fromEnd ? cursor >= 0 : cursor < lines.length; cursor += fromEnd ? -1 : 1) {
+    const line = lines[cursor]!;
     if (!line) continue;
     const at = line.toLocaleLowerCase().indexOf(needle);
     if (at < 0) continue;
     const before = Math.min(30, at);
     const after = Math.max(0, MAX_SNIPPET_CHARS - before - needle.length - 2);
-    const start = at - before;
-    const end = Math.min(line.length, at + needle.length + after);
-    const body = line.slice(start, end).replace(/\s+/gu, " ").trim();
+    const start = splitsSurrogatePair(line, at - before) ? at - before - 1 : at - before;
+    const end = splitsSurrogatePair(line, Math.min(line.length, at + needle.length + after))
+      ? Math.min(line.length, at + needle.length + after) - 1
+      : Math.min(line.length, at + needle.length + after);
+    const body = clipCodePoints(line.slice(start, end).replace(/\s+/gu, " ").trim(), MAX_SNIPPET_CHARS - 2);
     if (!body) continue;
-    return `${start > 0 ? "…" : ""}${body}${end < line.length ? "…" : ""}`.slice(0, MAX_SNIPPET_CHARS);
+    return `${start > 0 ? "…" : ""}${body}${end < line.length ? "…" : ""}`;
   }
   return undefined;
 }
@@ -83,16 +112,19 @@ async function transcriptSnippet(
   // character cap below only limits how much body text is scanned for the
   // needle; the whole file still had to be read, so a hit cannot under-count.
   const charged = Buffer.byteLength(JSON.stringify(messages), "utf8");
-  const loaded = messages.slice(0, MAX_CONTENT_SCAN_MESSAGES);
+  // A transcript is stored oldest-first, so the newest turns are the last
+  // entries: the message cap and the character budget are both spent from that
+  // end, and a body longer than what is left is cut from its start.
+  const loaded = messages.slice(-MAX_CONTENT_SCAN_MESSAGES);
   const limit = Math.min(MAX_CONTENT_SCAN_CHARS, remaining);
   let scanned = 0;
-  for (const message of loaded) {
+  for (let index = loaded.length - 1; index >= 0; index -= 1) {
     const room = limit - scanned;
     if (room <= 0) break;
-    const content = typeof message.content === "string" ? message.content : "";
-    const body = content.length > room ? content.slice(0, room) : content;
+    const content = typeof loaded[index]!.content === "string" ? loaded[index]!.content as string : "";
+    const body = content.length > room ? content.slice(content.length - room) : content;
     scanned += body.length;
-    const snippet = matchingSnippet(body, needle);
+    const snippet = matchingSnippet(body, needle, true);
     if (snippet) return { charged, snippet };
   }
   return { charged };

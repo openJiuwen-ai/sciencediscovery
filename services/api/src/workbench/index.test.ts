@@ -356,9 +356,10 @@ test("the aggregate budget also stops after hits, because each read is charged i
   })).toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const reads: string[] = [];
   // 500 × 4,000-character messages ≈ 2M characters per Session, the documented
-  // cap; the needle is in the first message, so a hit returns almost at once.
+  // cap; the needle is in the newest message, so a hit returns at once even
+  // when the aggregate budget has already shrunk what this Session may scan.
   const transcript = Array.from({ length: 500 }, (_, index) => message(
-    index === 0 ? `needle ${"y".repeat(3_993)}` : "y".repeat(4_000),
+    index === 499 ? `needle ${"y".repeat(3_993)}` : "y".repeat(4_000),
     index,
   ));
   const store = {
@@ -447,4 +448,56 @@ test("an ordinary 200-Session corpus still reaches the oldest content hit", asyn
   assert.equal(reads.length, 200, "the whole 200 × ~36k corpus (~7.2 MB) fits the budget");
   assert.ok(answer.results.some((result) => result.id === "session:session-0"),
     "the oldest Session is still reached when the ordinary corpus fits");
+});
+
+test("a Session longer than the message cap is searched from its newest turn", async () => {
+  const transcript = Array.from({ length: 600 }, (_, index) => message(`observation ${index}`));
+  transcript[599] = message("the newest turn mentions the needle");
+  const store = {
+    listProjectArtifacts: () => [],
+    listProjects: () => [project],
+    listSessions: () => [session(0)],
+    readMessages: async () => transcript,
+  } as unknown as SessionStore;
+
+  // A transcript is stored oldest-first: the turn that carries the needle is
+  // #599, so only a scan that starts from the newest end can find it.
+  const answer = await searchWorkbench(store, "the needle");
+  assert.deepEqual(answer.results.map((result) => result.id), ["session:session-0"]);
+  assert.match(answer.results[0]?.snippet ?? "", /newest turn/u);
+});
+
+test("the per-Session character budget is spent from the newest message", async () => {
+  const filler = "observation ".repeat(500_000);
+  const store = {
+    listProjectArtifacts: () => [],
+    listProjects: () => [project],
+    listSessions: () => [session(0)],
+    readMessages: async () => [
+      message(filler),
+      message(filler),
+      message("closing remark carries the needle"),
+    ],
+  } as unknown as SessionStore;
+
+  // The two filler turns hold 6 MB of body, far past the 2M character cap, so
+  // spending the budget on the oldest text first would never reach the needle.
+  const answer = await searchWorkbench(store, "carries the needle");
+  assert.deepEqual(answer.results.map((result) => result.id), ["session:session-0"]);
+  assert.match(answer.results[0]?.snippet ?? "", /closing remark/u);
+});
+
+test("a clipped snippet never splits an emoji in half", async () => {
+  const line = `${"a".repeat(30)}needles${"\u{1F642}".repeat(200)}`;
+  const store = {
+    listProjectArtifacts: () => [],
+    listProjects: () => [project],
+    listSessions: () => [session(0)],
+    readMessages: async () => [message(line)],
+  } as unknown as SessionStore;
+
+  const snippet = (await searchWorkbench(store, "needles")).results[0]?.snippet ?? "";
+  assert.ok(snippet.includes("needles"));
+  assert.doesNotMatch(snippet, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    "a surrogate pair is never cut in half");
 });
