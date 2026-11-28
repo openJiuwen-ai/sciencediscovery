@@ -409,6 +409,39 @@ test("declareClaim forwards cites_artifact_versions + artifact_version and parse
   }
 });
 
+test("declareClaim keeps the owning Session on each chip", async () => {
+  const server = await startFakeMemoryGraph(() => ({
+    status: 200,
+    json: {
+      status: "ok",
+      claim_id: "cl-cross",
+      // A report citing Evidence gathered in another Session: the sidecar
+      // returns that Evidence's own session_id alongside the chip.
+      chip_map: {
+        evidence1: { kind: "evidence", id: "ev-cross", label: "evidence1", session_id: "session-gathered" },
+        // The sidecar does not pin an owning Session on an Artifact chip (the
+        // artifact dialog resolves it through the project).
+        fig1: { kind: "artifact", id: "art-fig", label: "fig1", version: 2 },
+      },
+      cited_targets: [],
+    },
+  }));
+  try {
+    const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "t" });
+    const result = await client.declareClaim({
+      content: "cross-session citation", claimType: "STATISTICAL", confidence: "HIGH", locator: "abstract",
+      citesEvidenceAliases: { evidence1: "ev-cross" }, citesArtifactAliases: {},
+    }, "session-report");
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") throw new Error("unreachable");
+    assert.equal(result.chipMap["evidence1"]!.sessionId, "session-gathered");
+    assert.equal(result.chipMap["fig1"]!.sessionId, undefined);
+    assert.equal(result.chipMap["fig1"]!.version, 2);
+  } finally {
+    await close(server);
+  }
+});
+
 test("linkClaimsToReport posts artifact_version with the composite key", async () => {
   let captured: { path: string; body: unknown } | null = null;
   const server = await startFakeMemoryGraph((path, body) => {

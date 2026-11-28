@@ -1325,13 +1325,19 @@ export class MemoryGraphClient {
     return { status: "error", code: "internal_error", message: String(error) };
   }
 
-  /** Shape the sidecar's chip_map {alias: {kind,id,label}} into the typed form. */
+  /** Shape the sidecar's chip_map {alias: {kind,id,label,session_id}} into the
+   *  typed form. */
   private toChipMap(raw: unknown): Record<string, DeclareChipEntry> {
     const map = (raw ?? {}) as Record<string, Record<string, unknown>>;
     const out: Record<string, DeclareChipEntry> = {};
     for (const [alias, entry] of Object.entries(map)) {
       if (!entry || typeof entry.id !== "string" || typeof entry.kind !== "string") continue;
       const chip: DeclareChipEntry = { id: entry.id, kind: entry.kind as ComposerReferenceKind, label: (entry.label as string) ?? entry.id };
+      // The node's owning Session: the chip's card reads the node there instead
+      // of in the report's Session, where a node created elsewhere is absent.
+      if (typeof entry.session_id === "string" && entry.session_id !== "") {
+        chip.sessionId = entry.session_id;
+      }
       // artifact chips carry the cited version so the frontend opens that
       // version instead of the latest (which would drift on regeneration).
       if (entry.kind === "artifact" && typeof entry.version === "number") {
