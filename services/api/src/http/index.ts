@@ -362,6 +362,7 @@ import { readBytes, readBytesToFile, readJson, readMultipartSkill, readOptionalJ
 import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
+import { researchPackageRefusal } from "./research-package-refusal.js";
 import { ApiStatusError } from "./api-status-error.js";
 import { send, sendError, sendJson } from "./response.js";
 import { handleCustomMcpRequest, handleMcpOAuthCallback } from "./custom-mcp.js";
@@ -5216,6 +5217,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const code = (error as NodeJS.ErrnoException).code;
       const message = error instanceof Error ? error.message : "Request failed";
+      // A `.sdresearch` upload the parser refused is the caller's file: the
+      // status and the sentence the dialog shows follow that file, not the
+      // generic 500 an unclassified fault gets (#1540).
+      const packageRefusal = researchPackageRefusal(error, requestPath);
       if (error instanceof ApiStatusError) sendError(response, error.statusCode, message, error.code, error.details);
       else if (error instanceof StartupUnavailableError) {
         // The reason is logged for an operator; the caller gets the state, not
@@ -5259,6 +5264,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       else if (code === RESEARCH_PACKAGE_TOO_LARGE_CODE || message === RESEARCH_PACKAGE_TOO_LARGE_MESSAGE)
         sendError(response, 413, RESEARCH_PACKAGE_TOO_LARGE_MESSAGE, RESEARCH_PACKAGE_TOO_LARGE_CODE);
+      else if (packageRefusal !== undefined)
+        sendError(response, packageRefusal.status, packageRefusal.message, packageRefusal.code);
       else if (code === "CONFLICT") sendError(response, 409, message);
       else if (code === "UNSUPPORTED_MEDIA_TYPE") sendError(response, 415, message);
       else if (code === "SKILL_NOT_FOUND") sendError(response, 404, message);
