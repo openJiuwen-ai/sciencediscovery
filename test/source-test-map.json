@@ -991,6 +991,23 @@
       ]
     },
     {
+      "source": "packages/model/src/empty-turn-recovery.ts",
+      "risk": "P2",
+      "owner": "model",
+      "tests": [
+        {
+          "source": "packages/model/src/empty-turn-recovery.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "services/api/src/native-agent/empty-turn-replay.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "packages/model/src/runtime-client.ts",
       "risk": "P2",
       "owner": "model",

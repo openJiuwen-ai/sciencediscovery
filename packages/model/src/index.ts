@@ -4,6 +4,7 @@
 export * from "./catalog-source.js";
 export * from "./client.js";
 export * from "./discovery.js";
+export * from "./empty-turn-recovery.js";
 export * from "./runtime-client.js";
 export type { AgentConfig, ModelUsage } from "./types.js";
 
