@@ -358,7 +358,7 @@ import { modelUsageAnalyticsToCsv } from "../model-usage.js";
 import { UsageExchangeRateProvider } from "../exchange-rates.js";
 import { timeoutFailure, timeoutMessage } from "../timeouts/index.js";
 import { isAuthorized } from "./auth.js";
-import { readBytes, readBytesToFile, readJson, readMultipartSkill, readOptionalJson } from "./body.js";
+import { readBytes, readBytesToFile, readJson, readJsonValue, readMultipartSkill, readOptionalJson } from "./body.js";
 import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
 import { isKnownClientInputError } from "./error-classification.js";
@@ -3154,7 +3154,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const environmentInstallMatch = url.pathname.match(/^\/api\/environments\/([^/]+)\/install$/);
       if (environmentInstallMatch && request.method === "POST") {
-        const body = await readJson<InstallEnvironmentRequest>(request);
+        const body = await readJsonValue<InstallEnvironmentRequest>(request);
         const packages = readEnvironmentPackages(body);
         const environmentId = decodePathParam(environmentInstallMatch[1]!, "environmentId");
         if (packages.some((value) => value.trim().toLowerCase().endsWith(".whl"))) {
@@ -3178,7 +3178,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const environmentUninstallMatch = url.pathname.match(/^\/api\/environments\/([^/]+)\/uninstall$/);
       if (environmentUninstallMatch && request.method === "POST") {
-        const body = await readJson<UninstallEnvironmentRequest>(request);
+        const body = await readJsonValue<UninstallEnvironmentRequest>(request);
         const packages = readEnvironmentPackages(body);
         const environmentId = decodePathParam(environmentUninstallMatch[1]!, "environmentId");
         const revision = await runnerClient.uninstallEnvironment(environmentId, { packages });

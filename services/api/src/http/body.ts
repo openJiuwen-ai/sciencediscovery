@@ -69,23 +69,34 @@ export async function readBytesToFile(request: IncomingMessage, maxBytes: number
 }
 
 /**
+ * Parse the JSON body without requiring an object.
+ *
+ * Routes that define their own body-shape contract read the value and answer
+ * with their own message: the environment install/uninstall routes validate
+ * `packages` and answer `packages must be an array of strings` for `{}`, a
+ * `null` body or a non-list, which is the contract `main` pins.
+ */
+export async function readJsonValue<T>(request: IncomingMessage): Promise<T> {
+  const bytes = await readBytes(request, MAX_BODY_BYTES, "Request body");
+  try {
+    return JSON.parse(bytes.toString("utf8")) as T;
+  } catch {
+    throw new Error("Request body must be valid JSON");
+  }
+}
+
+/**
  * Read a request body that has to be a JSON object.
  *
  * `JSON.parse` returns whatever the bytes say, so a bare `null`, an array or a
  * number used to reach the handler and fail on a property read or a
  * destructuring. With #1533 that `TypeError` is an internal fault, so the
  * caller's own malformed body would have been answered as a server fault; the
- * shape is refused here, at the one place every JSON body enters, with an
+ * shape is refused here, at the one place every object body enters, with an
  * error that knows the input was wrong.
  */
 export async function readJson<T>(request: IncomingMessage): Promise<T> {
-  const bytes = await readBytes(request, MAX_BODY_BYTES, "Request body");
-  let body: unknown;
-  try {
-    body = JSON.parse(bytes.toString("utf8"));
-  } catch {
-    throw new Error("Request body must be valid JSON");
-  }
+  const body = await readJsonValue<unknown>(request);
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
     throw new ApiStatusError(400, "Request body must be a JSON object");
   }
