@@ -8,7 +8,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { IdeaResearchView } from "@sciencediscovery/schema";
 import { evolveShortTitle } from "../src/evolve/model.js";
 import { TITLE_COLUMNS, columnsOf } from "../src/text/columns.js";
-import { IdeaResearchCard, IdeaResearchCards, ideaCardTitle } from "../src/views/idea/IdeaResearchCard.js";
+import { IdeaResearchCard, IdeaResearchCards, ideaCardTitle, ideaPhaseLabel } from "../src/views/idea/IdeaResearchCard.js";
 import { TEXT } from "../src/text.js";
 
 const t = TEXT.ideaTree;
@@ -16,7 +16,7 @@ const t = TEXT.ideaTree;
 function view(patch: Partial<IdeaResearchView["research"]> = {}): IdeaResearchView {
   return {
     research: {
-      id: "research-1", objective: "提升水处理膜的膜通量，同时保持截留率", status: "running", phase: "building_tree",
+      id: "research-1", objective: "提升水处理膜的膜通量，同时保持截留率", status: "running", phase: "ideate",
       round: 2, batch: ["a", "b", "c", "d"], batchCompleted: 1, tokens: 0, usageKnown: false,
       reason: null, modelId: "model-x", currentNodeId: null,
       settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2 },
@@ -59,7 +59,8 @@ test("the card carries the engine's phase, round, batch and an honest token coun
   let card!: ReactTestRenderer;
   await act(async () => { card = create(React.createElement(IdeaResearchCard, { onOpen: () => undefined, view: view() })); });
   const text = JSON.stringify(card.toJSON());
-  assert.ok(text.includes(t.phase.building_tree));
+  assert.ok(text.includes(t.phase.ideate), "the engine's ideate role is printed as its localized label");
+  assert.equal(text.includes("ideate"), false, "the raw engine token is not shown");
   assert.ok(text.includes(t.round(2)));
   assert.ok(text.includes(t.batch(1, 4)));
   assert.ok(text.includes(t.tokensUnknown), "reported as unknown, not as 0");
@@ -78,6 +79,14 @@ test("a live research shows the working state, a finished one its own status", a
   assert.ok(done.includes(t.status.completed));
   assert.equal(done.includes(TEXT.evolve.working), false);
   assert.ok(done.includes(t.tokens(268290)));
+});
+
+test("every phase the engine writes has a label, and an unknown phase stays verbatim", () => {
+  for (const role of ["ideate", "select_directions", "design", "aggregate", "propagate", "complete", "scientificValidity", "evidenceReadiness", "feasibility"]) {
+    assert.notEqual(ideaPhaseLabel(role), role, `${role} must not be printed as its raw token`);
+    assert.equal(ideaPhaseLabel(role), (t.phase as Record<string, string | undefined>)[role]);
+  }
+  assert.equal(ideaPhaseLabel("future_engine_phase"), "future_engine_phase", "an unmapped phase is shown verbatim");
 });
 
 test("the title is the objective folded to one short line", () => {

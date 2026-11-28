@@ -11,7 +11,7 @@ import { IdeaResearchPanel } from "../src/views/idea/IdeaResearchPanel.js";
 function view(hypothesis: string, status = "running", revision = 1) {
   return {
     research: {
-      id: "research-1", objective: "目标", status, phase: "building_tree", round: 1, batch: [],
+      id: "research-1", objective: "目标", status, phase: "ideate", round: 1, batch: [],
       batchCompleted: 0, tokens: 0, usageKnown: false, reason: null, modelId: "m", currentNodeId: null,
       settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2 },
     },

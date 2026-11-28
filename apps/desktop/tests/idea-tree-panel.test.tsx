@@ -19,7 +19,7 @@ function view(
 ) {
   return {
     research: {
-      id: "research-1", objective, status, phase: "building_tree", round: 1,
+      id: "research-1", objective, status, phase: "ideate", round: 1,
       batch: [], batchCompleted: 0, tokens: 0, usageKnown: false, reason: null, modelId: "m",
       currentNodeId: null,
       settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2, maxTokens: null },
@@ -62,8 +62,26 @@ test("the panel renders the persisted research it was opened on", async () => {
   await act(async () => { await flush(); });
   const text = JSON.stringify(panel.toJSON());
   assert.match(text, /提升膜通量/);
-  assert.match(text, /构建假设树/);
+  assert.ok(text.includes(t.phase.ideate), "the engine's ideate role is printed as its localized label");
+  assert.equal(text.includes("ideate"), false, "the raw engine token is not shown");
   assert.match(text, /token 用量未上报/);
+  panel.unmount();
+});
+
+test("the panel localizes a frozen assessor id and still prints an unknown phase verbatim", async () => {
+  const assessor = fakeClient({ researchPatch: { phase: "scientificValidity" } });
+  let panel!: ReactTestRenderer;
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: assessor, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  const labelled = JSON.stringify(panel.toJSON());
+  assert.ok(labelled.includes(t.phase.scientificValidity), "a frozen template assessor id has a fallback label");
+  assert.equal(labelled.includes("scientificValidity"), false, "the raw assessor id is not shown");
+  panel.unmount();
+
+  const unknown = fakeClient({ researchPatch: { phase: "future_engine_phase" } });
+  await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: unknown, sessionId: "s1", researchId: "research-1" })); });
+  await act(async () => { await flush(); });
+  assert.ok(JSON.stringify(panel.toJSON()).includes("future_engine_phase"), "an unmapped phase is shown verbatim");
   panel.unmount();
 });
 

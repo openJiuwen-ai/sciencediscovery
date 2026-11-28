@@ -710,7 +710,7 @@ test("an untyped standalone timeout notice does not invent a terminated run", ()
 function research(id: string, objective: string): IdeaResearchView {
   return {
     research: {
-      id, objective, status: "running", phase: "building_tree", round: 1, batch: [], batchCompleted: 0,
+      id, objective, status: "running", phase: "ideate", round: 1, batch: [], batchCompleted: 0,
       tokens: 0, usageKnown: false, reason: null, modelId: "model-x", currentNodeId: null,
       settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2 },
     },
