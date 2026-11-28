@@ -46,7 +46,9 @@ test("a stream frame replaces the selected node's detail instead of leaving a st
   await act(async () => { panel = create(React.createElement(IdeaResearchPanel, { client: api, sessionId: "s1", researchId: "research-1" })); });
   await act(async () => { await flush(); });
 
-  const nodeButton = panel.root.findAll((node) => node.type === "button")[0]!;
+  // The node's own button, not the first button in the tree: the zoom controls
+  // sit before it and pressing one of those selects nothing.
+  const nodeButton = panel.root.findAll((node) => node.type === "button" && String(node.props.className).includes("idea-tree-node-button"))[0]!;
   await act(async () => { nodeButton.props.onClick(); });
   assert.match(JSON.stringify(panel.toJSON()), /第一版假设/);
 

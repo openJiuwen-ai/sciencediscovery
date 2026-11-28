@@ -84,6 +84,9 @@ test("the legacy panel draws the tree with no lifecycle controls", async () => {
   const text = JSON.stringify(renderer.toJSON());
   assert.match(text, /旧版目标/);
   assert.match(text, /旧版根节点/);
-  assert.equal(renderer.root.findAll((node) => node.type === "button").length, 2, "only the tree's own node buttons");
+  // The tree's own buttons only: the view's zoom controls are buttons too, and
+  // counting every button would say this panel grew a control it does not have.
+  const nodes = renderer.root.findAll((node) => node.type === "button" && String(node.props.className).includes("idea-tree-node-button"));
+  assert.equal(nodes.length, 2, "only the tree's own node buttons");
   renderer.unmount();
 });
