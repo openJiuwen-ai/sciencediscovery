@@ -345,7 +345,13 @@ export function createPlatformServices(
       // subsystem's stores and the session store that owns artifacts.
       publishResult: async ({ run, winnerCodeHash }) => {
         const winner = await evolveCandidates.read(run.id, winnerCodeHash);
-        if (winner === undefined) return;
+        if (winner === undefined) {
+          // The winning candidate's own source is the one thing publication
+          // cannot reconstruct. Name the miss instead of returning as if the
+          // result had been delivered.
+          apiLog.info("evolve_publish_skipped", { reason: "candidate_read_miss", runId: run.id, winnerCodeHash });
+          return;
+        }
         const name = evolveArtifactName(run);
         const kind = name.endsWith(".md") || name.endsWith(".txt") ? "markdown" : "other";
         // The seed first, so it is version 1 and the winner is version 2: a

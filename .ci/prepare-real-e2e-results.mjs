@@ -38,12 +38,33 @@ function scoreFields(doc) {
   for (const key of ["race", "fact"]) if (doc?.[key] && typeof doc[key] === "object") out[key] = scoreFields(doc[key]);
   return out;
 }
+// Delivery carries artifact identifiers and version lineages that the score
+// artifact does not need, and prompt/judge proof text that must never leave the
+// evidence bundle. Project only the decision: was a result published, and when
+// not, which product rule skipped it.
+function deliveryOutcome(doc) {
+  if (!doc || Array.isArray(doc) || typeof doc !== "object") return undefined;
+  const out = {};
+  if (typeof doc.skipped === "boolean") out.skipped = doc.skipped;
+  if (typeof doc.reason === "string" && /^[a-z][a-z0-9_]{0,39}$/.test(doc.reason)) out.reason = doc.reason;
+  return Object.keys(out).length ? out : undefined;
+}
+// The searching run's terminal state and result node are what distinguish a
+// legitimate no-delivery finish from a missing delivery.
+function searchOutcome(doc) {
+  const out = {};
+  if (typeof doc.search_status === "string" && /^[a-z][a-z0-9_-]{0,39}$/.test(doc.search_status)) out.search_status = doc.search_status;
+  if (Number.isInteger(doc.best_node_index) && doc.best_node_index >= 0) out.best_node_index = doc.best_node_index;
+  const delivery = deliveryOutcome(doc.delivery);
+  if (delivery) out.delivery = delivery;
+  return out;
+}
 function scoreDocument(doc, name) {
   if (!doc || Array.isArray(doc) || typeof doc !== "object") throw new SyntaxError("Expected an object");
   if (metrics.has(name)) {
-    const out = doc.benchmark === "biomnibench-da" ? projectMetrics(doc) : pick(doc, ["schema_version", "case", "case_id", "key", "integration_status", "integration",
+    const out = doc.benchmark === "biomnibench-da" ? projectMetrics(doc) : {...pick(doc, ["schema_version", "case", "case_id", "key", "integration_status", "integration",
       "started_at", "finished_at", "generation_duration_ms", "budget_ms",
-      "budget_exceeded", "cancel_requested", "cancel_http_status"]);
+      "budget_exceeded", "cancel_requested", "cancel_http_status"]), ...searchOutcome(doc)};
     // Biomni's score projection has its own gate contract. Preserve existing
     // timing when present, without substituting its end-to-end measurement.
     for (const key of ["started_at", "generation_duration_ms"]) if (doc[key] !== undefined) out[key] = doc[key];
