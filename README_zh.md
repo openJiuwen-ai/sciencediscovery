@@ -77,7 +77,7 @@ ScienceDiscovery 本地完成：智能体阅读文献、编写并运行代码、
 
 ### 连接模型
 
-ScienceDiscovery 不内置模型，需要接入你自己的 API。在 Linux 下，打开左侧栏底部的 **系统配置（System configuration）**，进入 **模型库（Model registry）**，选择预设提供方或手动添加，填写服务信息与 API Key，然后点击 **保存并连接（Save & connect）**。第一个模型同时会成为默认任务模型，之后可在 **全局默认任务模型** 中修改。协议支持范围与连接测试的费用说明见 [模型 API 兼容性](docs/zh/model-api-compatibility.md)。
+ScienceDiscovery 不内置模型，需要接入你自己的 API。在 Linux 下，打开 **系统设置 → 模型注册表**，选择预置服务商或手动添加，填写服务信息和 API Key。等待模型列表加载后勾选要注册的模型；列表中没有对应模型时可直接输入准确的模型 ID。然后点击 **添加服务商**。第一个注册的模型同时会成为默认任务模型，之后可在 **全局默认值 → 任务模型** 中修改。协议支持范围与连接测试的费用说明见 [模型 API 兼容性](docs/zh/model-api-compatibility.md)。
 
 ### 运行第一个任务
 
