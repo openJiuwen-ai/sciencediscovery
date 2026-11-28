@@ -196,6 +196,38 @@ def test_capped_empty_reply_is_not_retried_by_openevolve():
     assert calls == [1, 1]
     assert [e["tokens"] for e in collector.events if e["type"] == "cost"] == [16010, 32020]
 
+def test_cancellation_during_completion_does_not_report_empty_reply():
+    from types import SimpleNamespace
+
+    stopped = False
+    empty_calls = []
+
+    def factory(_spec, _usage, _should_stop):
+        def complete(_prompt, _sink=None, _on_failure=None):
+            nonlocal stopped
+            stopped = True
+            return ""
+        return complete
+
+    archive = SimpleNamespace(candidate_limit=10)
+    reporter = SimpleNamespace(
+        archive=archive,
+        note_failure=lambda *_args: None,
+        note_empty=lambda *args: empty_calls.append(args),
+    )
+
+    engine = OpenEvolveEngine(completion_factory=factory)
+
+    call = engine._model_call(
+        _spec(), MagicMock(), reporter, lambda: stopped
+    )
+
+    result = call("test prompt", 1)
+
+    assert result == ("", "")
+    assert archive.candidate_limit == 0
+    assert empty_calls == []
+
 
 
 class _Collector:

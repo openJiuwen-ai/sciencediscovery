@@ -298,6 +298,37 @@ class Harness:
         return [event["type"] for event in self.events]
 
 
+def test_cancellation_during_completion_does_not_report_empty_reply():
+    from types import SimpleNamespace
+
+    stopped = False
+    empty_calls = []
+
+    def factory(_spec, _usage, _should_stop):
+        def complete(_prompt, _sink=None, _on_failure=None):
+            nonlocal stopped
+            stopped = True
+            return ""
+        return complete
+
+    engine = PuctEngine(completion_factory=factory)
+    usage = puct_engine._Usage()
+    reporter = SimpleNamespace(
+        note_failure=lambda *_args: None,
+        note_empty=lambda *args: empty_calls.append(args),
+    )
+    tree = SimpleNamespace(candidate_limit=10)
+
+    call = engine._model_call(
+        spec(), usage, reporter, lambda: stopped, tree
+    )
+
+    result = call("test prompt", 1)
+
+    assert result == ("", "", None)
+    assert tree.candidate_limit == 0
+    assert empty_calls == []
+
 @pytest.fixture(autouse=True)
 def staged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The dataset and the candidate runtime are other files' contracts."""
