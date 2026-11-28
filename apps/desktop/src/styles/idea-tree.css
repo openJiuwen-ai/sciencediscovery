@@ -21,6 +21,25 @@
   gap: 8px;
 }
 
+/* An idea card is the shared 60px Evolve card, so its meta row must stay inside
+ * the chat column's floor. The counters beside the wait may wrap; the row clips
+ * at its own box rather than letting content paint over the state chip. */
+.idea-run-card .evolve-run-meta {
+  overflow: hidden;
+}
+
+.idea-run-wait {
+  /* The duration is short and must stay readable: it keeps its width while the
+   * counters beside it shrink first. A maximum bounds an unusually long
+   * duration to the row, where the ellipsis takes over. */
+  flex: 0 0 auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A list that could not be read is said at the foot of the transcript, after
  * the cards: an empty column would otherwise read as "nothing was ever
  * started". */
@@ -101,6 +120,28 @@
   margin: 0;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* A pause is only observed between steps: while the engine waits for the
+ * in-flight model call, this block names the call and counts locally. */
+.idea-panel-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.idea-panel-waiting p {
+  margin: 0;
+}
+
+.idea-panel-waiting-stop {
+  color: var(--warning);
 }
 
 /* The drawing scrolls by itself and the detail scrolls under it, so a deep tree

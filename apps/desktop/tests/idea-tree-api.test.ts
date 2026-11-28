@@ -10,7 +10,7 @@ import {
 
 const VIEW = {
   research: {
-    id: "research-1", objective: "提升膜通量", status: "running", phase: "building_tree",
+    id: "research-1", objective: "提升膜通量", status: "running", phase: "design",
     round: 2, batch: [], batchCompleted: 0, tokens: 0, usageKnown: false, reason: null,
     modelId: "model-x", currentNodeId: null,
     settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2 },

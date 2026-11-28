@@ -19,7 +19,7 @@ function view(
 ) {
   return {
     research: {
-      id: "research-1", objective, status, phase: "building_tree", round: 1,
+      id: "research-1", objective, status, phase: "design", round: 1,
       batch: [], batchCompleted: 0, tokens: 0, usageKnown: false, reason: null, modelId: "m",
       currentNodeId: null,
       settings: { maxRounds: 3, candidatesPerRound: 2, maxSearchRounds: 2, maxNodes: 20, maxDepth: 3, maxActiveDirections: 2, pruneThreshold: 0.2, maxTokens: null },
@@ -62,7 +62,7 @@ test("the panel renders the persisted research it was opened on", async () => {
   await act(async () => { await flush(); });
   const text = JSON.stringify(panel.toJSON());
   assert.match(text, /提升膜通量/);
-  assert.match(text, /构建假设树/);
+  assert.match(text, /设计候选/);
   assert.match(text, /token 用量未上报/);
   panel.unmount();
 });
@@ -224,6 +224,106 @@ test("a budget-exhausted research is finished, not resumable, and names the toke
   assert.match(text, /200000/, "the note names the used and limit token counts");
   assert.equal(text.includes("Remaining token budget cannot fund the next stage"), false, "the engine's English reason is not shown verbatim");
   assert.equal(api.calls.filter((call) => (call.body as { operation?: string } | undefined)?.operation === "continue").length, 0);
+  panel.unmount();
+});
+
+test("a pausing research names the model call it waits for, and counts on its own clock", async (context) => {
+  context.mock.timers.enable({ apis: ["Date", "setInterval"], now: Date.parse("2026-11-18T00:00:42.000Z") });
+  const api = fakeClient({
+    status: "pausing",
+    researchPatch: {
+      activities: [{
+        error: null, finishedAt: null, nodeId: "node-7", role: "ideate", round: 1,
+        startedAt: "2026-11-18T00:00:00Z", status: "running",
+      }],
+      pendingStop: "pause",
+    },
+  });
+  const panel = await renderPanel(api);
+  const text = JSON.stringify(panel.toJSON());
+
+  assert.ok(text.includes(t.waiting.call(t.phase.ideate, 42)), "the wait names the in-flight call and its 42 s elapsed time");
+  assert.ok(text.includes(t.waiting.node("node-7")), "the node is named when the activity carries one");
+  assert.ok(text.includes(t.waiting.note("pause")), "it says the request is not aborted and what a queued stop does");
+  assert.ok(text.includes("「暂停」会在这次调用返回后生效"), "a queued pause is described as a pause, not as an end");
+  assert.equal(text.includes("「结束」会在这次调用返回后生效"), false, "the pause note does not promise an end");
+  assert.ok(text.includes(t.waiting.pendingPause), "the queued pause is visible, not implied");
+  assert.equal(text.includes("1230"), false, "the transport timeout is not printed as a maximum wait");
+  assert.equal(text.includes("20 分钟"), false, "the proxy ceiling is not printed as a maximum wait");
+
+  const reads = api.calls.length;
+  await act(async () => { context.mock.timers.tick(1_000); });
+  assert.ok(
+    JSON.stringify(panel.toJSON()).includes(t.waiting.call(t.phase.ideate, 43)),
+    "the elapsed time advances a second without a new research frame",
+  );
+  assert.equal(api.calls.length, reads, "the tick needed neither a refetch nor a frame");
+  panel.unmount();
+});
+
+test("a queued end is distinguishable from a pause the engine has not noticed", async () => {
+  const api = fakeClient({
+    status: "pausing",
+    researchPatch: {
+      activities: [{
+        error: null, finishedAt: null, nodeId: null, role: "design", round: 1,
+        startedAt: "2026-11-18T00:00:00Z", status: "running",
+      }],
+      pendingStop: "end",
+    },
+  });
+  const panel = await renderPanel(api);
+  const text = JSON.stringify(panel.toJSON());
+  assert.ok(text.includes(t.waiting.pendingEnd), "the end is shown as queued for the return of the call");
+  assert.equal(text.includes(t.waiting.pendingPause), false, "it is not mistaken for a queued pause");
+  assert.ok(text.includes("「结束」会在这次调用返回后生效"), "the note says the queued end applies when the call returns");
+  assert.equal(text.includes("「暂停」会在这次调用返回后生效"), false, "the end note does not promise a pause");
+  panel.unmount();
+});
+
+test("a paused research shows neither the wait nor a queued stop", async () => {
+  const api = fakeClient({
+    status: "paused",
+    researchPatch: {
+      // Leftovers from the pause request: the status, not the payload, decides
+      // that the wait is over.
+      activities: [{
+        error: null, finishedAt: "2026-11-18T00:00:42Z", nodeId: null, role: "ideate", round: 1,
+        startedAt: "2026-11-18T00:00:00Z", status: "stopped",
+      }],
+      pendingStop: "end",
+    },
+  });
+  const panel = await renderPanel(api);
+  const text = JSON.stringify(panel.toJSON());
+  assert.equal(text.includes(t.waiting.note("pause")), false, "the wait line is gone");
+  assert.equal(text.includes(t.waiting.note("end")), false, "neither queued-stop sentence is left behind");
+  assert.equal(text.includes(t.waiting.pendingEnd), false, "the queued-end line is gone");
+  assert.equal(/已等待 \d+ 秒/.test(text), false, "no elapsed count is left behind");
+  panel.unmount();
+});
+
+test("an emitted engine phase renders its localized label, not the raw token", async () => {
+  const api = fakeClient({ status: "completed", researchPatch: { phase: "ideate" } });
+  const panel = await renderPanel(api);
+  const text = JSON.stringify(panel.toJSON());
+  assert.ok(text.includes(t.phase.ideate), "the ideate phase is translated");
+  assert.equal(text.includes("ideate"), false, "the raw engine token is not printed");
+  panel.unmount();
+});
+
+test("an assessor template id renders the label frozen on the research template", async () => {
+  const api = fakeClient({
+    status: "completed",
+    researchPatch: {
+      phase: "novelty",
+      template: { id: "water", label: "水处理材料", assessors: [{ id: "novelty", label: "新颖性" }] },
+    },
+  });
+  const panel = await renderPanel(api);
+  const text = JSON.stringify(panel.toJSON());
+  assert.ok(text.includes("新颖性"), "the assessor id is resolved through research.template.assessors");
+  assert.equal(text.includes("novelty"), false, "the raw assessor id is not printed");
   panel.unmount();
 });
 

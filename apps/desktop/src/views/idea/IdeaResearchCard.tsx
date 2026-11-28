@@ -29,6 +29,7 @@ import type { IdeaResearchState, IdeaResearchView } from "@sciencediscovery/sche
 import { TITLE_COLUMNS, truncateColumns } from "../../text/columns.js";
 import { TEXT } from "../../text.js";
 import { EvolveTreeGlyph } from "../evolve/glyphs.js";
+import { elapsedSeconds, inFlightActivity, useElapsedClock } from "./researchWaiting.js";
 
 const t = TEXT.ideaTree;
 
@@ -41,9 +42,13 @@ export function ideaCardTitle(objective: string): string {
   return truncateColumns(line, TITLE_COLUMNS);
 }
 
-/** The engine's phase names are a closed set; an unknown one is shown verbatim. */
-export function ideaPhaseLabel(phase: string): string {
-  return (t.phase as Record<string, string | undefined>)[phase] ?? phase;
+/** The engine's stage names are a closed set plus template-defined assessor ids;
+ *  an unknown one is shown verbatim. An assessor carries its label on the frozen
+ *  template, which is why the lookup falls through to `assessors`. */
+export function ideaPhaseLabel(phase: string, research: IdeaResearchState): string {
+  const label = (t.phase as Record<string, string | undefined>)[phase];
+  if (label !== undefined) return label;
+  return research.template?.assessors.find((assessor) => assessor.id === phase)?.label ?? phase;
 }
 
 export function ideaStatusLabel(status: IdeaResearchState["status"]): string {
@@ -104,6 +109,13 @@ export function IdeaResearchCard({ onOpen, view }: { onOpen: (researchId: string
   const research = view.research;
   const active = isIdeaResearchActive(research.status);
   const batchTotal = research.batch.length;
+  // A pause is only observed between steps, so the card names the call being
+  // waited for and counts locally; the stream sends no frame during that call.
+  const waiting = research.status === "pausing" ? inFlightActivity(research) : undefined;
+  const now = useElapsedClock(waiting !== undefined);
+  const chip = research.status === "pausing"
+    ? (research.pendingStop === "end" ? t.waiting.pendingEndShort : ideaStatusLabel("pausing"))
+    : active ? TEXT.evolve.working : ideaStatusLabel(research.status);
   return (
     <button
       className={`evolve-run-card idea-run-card is-${research.status}`}
@@ -117,15 +129,18 @@ export function IdeaResearchCard({ onOpen, view }: { onOpen: (researchId: string
       <span className="evolve-run-text">
         <span className="evolve-run-title">{ideaCardTitle(research.objective)}</span>
         <span className="evolve-run-meta">
-          <span>{ideaPhaseLabel(research.phase)}</span>
+          {/* While pausing, this names the call the engine is blocked on, so the
+            * elided duration beside it never hides which call is awaited. */}
+          <span>{ideaPhaseLabel(waiting?.role ?? research.phase, research)}</span>
           <span>{t.round(research.round)}</span>
+          {waiting ? <span className="idea-run-wait">{t.waiting.card(elapsedSeconds(waiting.startedAt, now))}</span> : null}
           {batchTotal > 0 ? <span>{t.batch(research.batchCompleted, batchTotal)}</span> : null}
           <span>{research.usageKnown ? t.tokens(research.tokens) : t.tokensUnknown}</span>
         </span>
       </span>
       <span className={`evolve-run-state is-${ideaStatusTone(research.status)}`}>
         {active ? <span aria-hidden="true" className="evolve-run-spin"><BurstGlyph /></span> : null}
-        {active ? TEXT.evolve.working : ideaStatusLabel(research.status)}
+        {chip}
       </span>
     </button>
   );

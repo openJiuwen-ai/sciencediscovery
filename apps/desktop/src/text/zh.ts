@@ -2636,11 +2636,33 @@ export const ZH = {
       budget_exhausted: "已结束（预算用尽）",
     },
     phase: {
-      preflight_research: "准备研究",
-      building_tree: "构建假设树",
-      executing_leaf: "执行叶子",
-      aggregating_score: "汇总评分",
-      propagating_insight: "传播洞见",
+      /* The engine writes the stage role into `phase` (research.py), not the
+       * legacy tree workflow's phase names. Wording follows apps/web's
+       * ideaResearch.role.* labels so the two clients say the same thing. */
+      ideate: "构思方向与改进",
+      select_directions: "选择研究方向",
+      design: "设计候选",
+      aggregate: "聚合评估",
+      propagate: "汇总研究发现",
+      complete: "已完成",
+    },
+    /** While a research is `pausing`, the engine is blocked in a model call it
+     *  only observes a stop between steps: the panel says what it is waiting
+     *  for instead of showing a bare status. No maximum is named, because none
+     *  is enforced here. */
+    waiting: {
+      call: (call: string, seconds: number) => `正在等待模型调用「${call}」返回，已等待 ${seconds} 秒`,
+      card: (seconds: number) => `${seconds} 秒`,
+      node: (id: string) => `节点 ${id}`,
+      /** A queued stop is one of the two controls, so the sentence names the
+       *  one that will actually be applied when the call returns. */
+      note: (stop: "pause" | "end"): string => stop === "end"
+        ? "已经发出的请求不会中止；「结束」会在这次调用返回后生效。"
+        : "已经发出的请求不会中止；「暂停」会在这次调用返回后生效。",
+      settling: "正在等待当前阶段结束，随后应用暂停或结束请求。",
+      pendingEnd: "结束请求已记录：当前调用返回后研究即结束。",
+      pendingPause: "暂停请求已记录：当前调用返回后研究暂停。",
+      pendingEndShort: "结束已排队",
     },
     round: (round: number) => `第 ${round} 轮`,
     batch: (done: number, total: number) => `本轮 ${done}/${total}`,
