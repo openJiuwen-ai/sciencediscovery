@@ -317,18 +317,22 @@ another button. Post-merge pushes to `main` do not re-trigger `ci.yml`;
 Nightly and Release cover `main` and version tags via `workflow_call`.
 
 An optional repository variable `CI_SELF_HOSTED_MERGE_QUEUE` (default unset /
-off) routes only `merge_group` runs of `UT` and the three heavy L2 mocked E2E
-shards (`standard-config`, `standard-journeys`, `research`) to self-hosted
-Docker runners labelled `[self-hosted, Linux, X64, sciencediscovery]`. When
-enabled, those four jobs skip cross-region GitHub Actions caches, rely on the
-container's local `/ci-cache` volume (pnpm store, uv cache, pre-warmed
-Chromium, and `.ci/use-local-swarm-cache.sh` for a read-only shared
-JiuwenSwarm tree with per-job `JIUWENSWARM_HOME` isolation), and skip `sudo`
-bubblewrap provisioning when `bwrap` already works. `pull_request` (including
-forks), `workflow_dispatch`, `schedule`, `push`, light mocked shards
-(`governed`, `literature`), `ST`, desktop jobs, and real E2E jobs always stay
-on GitHub-hosted runners. Clearing or changing `CI_SELF_HOSTED_MERGE_QUEUE`
-immediately returns merge-queue runs to `ubuntu-latest`.
+off) routes only `merge_group` runs of `UT`, `ST`, all five L2 mocked E2E
+shards (`standard-config`, `standard-journeys`, `research`, `governed`,
+`literature`) and `Desktop UI-ST and mocked E2E` to self-hosted Docker runners
+labelled `[self-hosted, Linux, X64, sciencediscovery]`. When enabled, those
+jobs skip cross-region GitHub Actions caches and rely on the container's local
+`/ci-cache` volume (pnpm store, uv cache, pre-warmed Chromium, the verified
+CPython archive for ST in `/ci-cache/binary-cache`, and
+`.ci/use-local-swarm-cache.sh` for a read-only shared JiuwenSwarm tree with
+per-job `JIUWENSWARM_HOME` isolation). They also skip `sudo`: bubblewrap
+provisioning is skipped when `bwrap` already works, and the Desktop job installs
+only the pinned Chromium because the runner image already carries its system
+libraries. `pull_request` (including forks), `workflow_dispatch`, `schedule`,
+`push`, credentialed real E2E jobs and distribution jobs (binaries, Docker,
+Windows and macOS installers) always stay on GitHub-hosted runners. Clearing or
+changing `CI_SELF_HOSTED_MERGE_QUEUE` returns newly created merge-queue runs to
+`ubuntu-latest`.
 
 GitHub's behavior is documented in
 [Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).

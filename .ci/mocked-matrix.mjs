@@ -6,15 +6,20 @@ import { validatePlan } from '../test/support/tagged/plan.mjs';
 import { mockedShards, PARALLEL_MOCKED_SHARDS } from '../test/support/tagged/execution.mjs';
 import { SELF_HOSTED_RUNNER } from './tier-policy.mjs';
 
-export const HEAVY_MOCKED_SHARDS = Object.freeze(new Set([
+// Every mocked shard runs on the self-hosted pool once merge-queue routing is on. The
+// short `governed` and `literature` shards were the ones still waiting for hosted
+// capacity at the end of L2. A new shard stays hosted until it is listed here.
+export const SELF_HOSTED_MOCKED_SHARDS = Object.freeze(new Set([
   'standard-config',
   'standard-journeys',
   'research',
+  'governed',
+  'literature',
 ]));
 
 export function buildMockedMatrix(plan, { selfHostedMergeQueue = false } = {}) {
   const include = mockedShards(plan).map(({ name }) => {
-    const selfHosted = selfHostedMergeQueue === true && HEAVY_MOCKED_SHARDS.has(name);
+    const selfHosted = selfHostedMergeQueue === true && SELF_HOSTED_MOCKED_SHARDS.has(name);
     return {
       shard: name,
       runner: selfHosted ? [...SELF_HOSTED_RUNNER] : 'ubuntu-latest',
