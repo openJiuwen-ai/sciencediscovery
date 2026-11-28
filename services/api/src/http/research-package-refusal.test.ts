@@ -45,6 +45,16 @@ test("a decompressor refusal is the caller's file, with a stable code and a sent
   assert.equal(notGzip?.status, 400);
   assert.equal(notGzip?.code, RESEARCH_PACKAGE_INVALID_CODE);
   assert.match(notGzip?.message ?? "", /not a gzip archive/u);
+
+  // `Z_DATA_ERROR` also covers a gzip whose header is intact and whose deflate
+  // stream or CRC is damaged; those must not be told they are "not an archive".
+  for (const message of ["invalid bit length repeat", "incorrect data check"]) {
+    const corrupt = refusalOf(message, "Z_DATA_ERROR");
+    assert.equal(corrupt?.status, 400, message);
+    assert.equal(corrupt?.code, RESEARCH_PACKAGE_INVALID_CODE, message);
+    assert.match(corrupt?.message ?? "", /archive is corrupt/u, message);
+    assert.doesNotMatch(corrupt?.message ?? "", /not a gzip archive/u, message);
+  }
 });
 
 test("a package the parser refused answers 400 with the parser's own reason", () => {
@@ -74,6 +84,9 @@ test("failures that are not the caller's file keep their 500", () => {
   for (const message of [
     "A synchronous export cannot stream package objects",
     "Package object size changed while hashing",
+    // Thrown by `tarHeader`, which only the export writers call.
+    "Package path is too long: pkg/a.txt",
+    "Package entry is too large for a tar header: pkg/a.txt",
     "Some unrelated server failure",
   ]) {
     assert.equal(refusalOf(message), undefined, message);
@@ -188,7 +201,12 @@ test("a malformed package answers 4xx on both package endpoints, not 500", async
   // happy and the parser refuses the archive's own structure, which no zlib code
   // would classify.
   const wrongFile = { name: "a gzipped folder, not a package", bytes: archiveWithDirectoryEntry() };
-  for (const payload of [...malformedPayloads(archive), wrongFile]) {
+  // A gzip whose header is intact and whose CRC is damaged: the decompressor
+  // reports `incorrect data check`, which is corruption, not "wrong file type".
+  const corruptCrc = Buffer.from(archive);
+  corruptCrc[corruptCrc.length - 5] ^= 0xff;
+  const corrupt = { name: "a gzip with a damaged CRC", bytes: corruptCrc };
+  for (const payload of [...malformedPayloads(archive), wrongFile, corrupt]) {
     for (const endpoint of endpoints) {
       const response = await request(endpoint.path, { method: endpoint.method, body: payload.bytes });
       const body = await response.json() as { code?: string; error?: string };
@@ -197,6 +215,7 @@ test("a malformed package answers 4xx on both package endpoints, not 500", async
       assert.ok([RESEARCH_PACKAGE_INVALID_CODE, RESEARCH_PACKAGE_TRUNCATED_CODE].includes(body.code ?? ""), `${where} code=${body.code}`);
       assert.match(body.error ?? "", /not a valid research package/u, where);
       assert.doesNotMatch(body.error ?? "", /Internal server error/u, where);
+      if (payload === corrupt) assert.match(body.error ?? "", /archive is corrupt/u, where);
     }
   }
 });

@@ -38,7 +38,6 @@ const RESEARCH_PACKAGE_UPLOAD_PATH = /^\/api\/projects\/[^/]+\/research-package\
 const PARSER_REFUSAL = new RegExp([
   String.raw`^(?:Invalid|Unsafe|Unsupported|Duplicate) (?:\.sdresearch |research package|package)\b`,
   String.raw`^Research package (?:is missing|inventory is incomplete|carries data|exceeds its limits|metadata entry|contains a non-regular file)`,
-  String.raw`^Package (?:path is too long|entry is too large for a tar header)`,
   String.raw`^Package (?:checksum mismatch|inventory entry is missing): `,
   String.raw`^File is not listed in the package inventory: `,
 ].join("|"), "u");
@@ -53,6 +52,16 @@ const NOT_AN_ARCHIVE_REFUSAL: ResearchPackageRefusal = {
   status: 400,
   code: RESEARCH_PACKAGE_INVALID_CODE,
   message: "This file is not a valid research package: it is not a gzip archive.",
+};
+
+/** A `.sdresearch` whose gzip magic is intact but whose deflate stream or CRC is
+ *  damaged: `Z_DATA_ERROR` also carries "invalid bit length repeat" and
+ *  "incorrect data check", so the sentence must not claim the file is not an
+ *  archive at all. */
+const CORRUPT_REFUSAL: ResearchPackageRefusal = {
+  status: 400,
+  code: RESEARCH_PACKAGE_INVALID_CODE,
+  message: "This file is not a valid research package: its archive is corrupt.",
 };
 
 const METADATA_TOO_LARGE_REFUSAL: ResearchPackageRefusal = {
@@ -74,9 +83,11 @@ export function researchPackageRefusal(error: unknown, path: string): ResearchPa
   if (!RESEARCH_PACKAGE_UPLOAD_PATH.test(path)) return undefined;
   const code = (error as NodeJS.ErrnoException).code;
   if (code === "Z_BUF_ERROR" || /\bunexpected end of file\b/iu.test(error.message)) return TRUNCATED_REFUSAL;
-  if (code === "Z_DATA_ERROR" || code === "Z_NEED_DICT" || /\bincorrect header check\b|\bnot in gzip format\b/iu.test(error.message)) {
-    return NOT_AN_ARCHIVE_REFUSAL;
-  }
+  // A file that never had the gzip header says so with these two messages; every
+  // other decompressor refusal is a stream that started as gzip and is damaged.
+  if (/\bincorrect header check\b|\bnot in gzip format\b/iu.test(error.message)) return NOT_AN_ARCHIVE_REFUSAL;
+  if (code === "Z_DATA_ERROR" || code === "Z_NEED_DICT"
+    || /\binvalid bit length repeat\b|\bincorrect data check\b/iu.test(error.message)) return CORRUPT_REFUSAL;
   if (/\bmetadata entry is too large\b/iu.test(error.message)) return METADATA_TOO_LARGE_REFUSAL;
   if (PARSER_REFUSAL.test(error.message)) {
     return {
