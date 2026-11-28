@@ -3080,6 +3080,10 @@ export class SessionStore {
   }
 
   private applyWebSettingsSync(input: UpdateWebSettingsRequest): void {
+    // `normalizeWebSettings` rejects a non-record with this same sentence, but the
+    // destructuring below runs first: a `null` body used to crash it with a
+    // `TypeError` that only the prose fallback turned into a 400 (#1533).
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Web settings must be an object");
     const { providerApiKeys, ...settingsInput } = input;
     const nextSettings = normalizeWebSettings({ ...this.catalog.webSettings, ...settingsInput });
     this.assertProxyPolicyKnown(nextSettings.proxyPolicy, "proxyPolicy");

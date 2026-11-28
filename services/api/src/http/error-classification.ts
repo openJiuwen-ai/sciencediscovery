@@ -13,12 +13,33 @@
 // limitations under the License.
 
 /**
+ * Is this exception this server's own fault rather than the caller's mistake?
+ *
+ * A JavaScript runtime error means a handler dereferenced something that was
+ * not there, and a `code` is a stable marker written by Node, the filesystem or
+ * a dependency: neither is vocabulary a validator uses to address a reader.
+ * They are decided before any prose is read (#1533), so an internal
+ * `TypeError: Cannot read properties of undefined` cannot become a 400 that
+ * echoes raw JavaScript text.
+ */
+export function isInternalFault(error: unknown): boolean {
+  if (error instanceof TypeError || error instanceof RangeError || error instanceof ReferenceError) return true;
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "string" && code.length > 0;
+}
+
+/**
  * Legacy validators still throw plain Error objects. Keep their established
  * 400 responses while allowing genuinely unclassified faults to surface as
  * 500. New handlers should prefer ApiStatusError or a stable error code.
+ *
+ * The runtime/system gate is repeated here so a caller that asks this question
+ * directly cannot reintroduce the inversion; the request catch-all also asks
+ * `isInternalFault` first, before it falls back to the list below.
  */
 export function isKnownClientInputError(error: unknown): boolean {
   if (error instanceof SyntaxError) return true;
+  if (isInternalFault(error)) return false;
   if (!(error instanceof Error)) return false;
   return [
     /\bis required\b/i,
