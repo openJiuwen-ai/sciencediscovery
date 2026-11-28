@@ -230,4 +230,4 @@ acting.
 | API test expects `runner_exec`, gets `undefined` | An execution never ran; check sandbox availability first. |
 | `BLOCKED: isolated E2E stack did not become healthy` | The Runner refused to serve; inspect the sandbox probe before application logs. |
 | `ERR_PNPM_OUTDATED_LOCKFILE` | `pnpm-lock.yaml` is behind a `package.json`; regenerate it with `pnpm install --lockfile-only`. |
-| The E2E job spends its first minute downloading conda packages | Expected. `E2E_SCIENTIFIC_ENVS=1` provisions the managed Python base so the environment journey runs instead of reporting a skip; it is about 330 MB on a runner with no cache. |
+| The E2E job spends its first minute downloading conda packages | Expected for the J3-bearing mocked lane. That lane runs with `E2E_SCIENTIFIC_ENVS=1`, so the environment journey runs instead of reporting a skip; it is about 330 MB on a runner with no cache. Other mocked lanes use `E2E_SCIENTIFIC_ENVS=0`. |

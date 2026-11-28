@@ -163,12 +163,14 @@ table above).
   now an isolation failure and asserted as one.
 - **`SCIENTIFIC_ENVS`** — `test/journey-prepare-environment.spec.ts` (J3) was
   skipped in every default CI run, because the layer set `SCIENTIFIC_ENVS=0`
-  and the journey reported its unmet precondition. The shared E2E slice sets
-  `E2E_SCIENTIFIC_ENVS=1` and the journey asserts the managed Python base is
-  ready. This is the one migration change that adds work to the merge gate:
-  the layer now provisions a managed environment, which reaches the configured
-  package channels. Keeping the old behaviour would have meant a planned
-  journey that can only report a skip, which the plan counts as a failure.
+  and the journey reported its unmet precondition. The mocked E2E slice now
+  enables `E2E_SCIENTIFIC_ENVS=1` only for a batch whose entries include J3
+  (the local concurrency split may place it in either global lane), and the
+  journey asserts the managed Python base is ready. This is the one migration
+  change that adds work to the merge gate: that batch provisions a managed
+  environment, which reaches the configured package channels. Keeping the old
+  behaviour would have meant a planned journey that can only report a skip,
+  which the plan counts as a failure.
 
 ## Reading a run back
 

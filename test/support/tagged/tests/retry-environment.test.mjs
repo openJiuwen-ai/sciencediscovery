@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { batchLaunchEnvironment, ensureCleanCheckout, isolatedRetryConfig } from '../retry-runner.mjs';
+import { batchLaunchConfig, batchLaunchEnvironment, ensureCleanCheckout, isolatedRetryConfig } from '../retry-runner.mjs';
 import { swarmChecks } from '../execution.mjs';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('../../../../', import.meta.url)));
@@ -48,17 +48,81 @@ const retryInputs = {
   slice: 'e2e',
 };
 
+const j3Source = 'test/journey-prepare-environment.spec.ts';
+
 test('isolated retry config preserves a non-standard fixture', () => {
   const config = isolatedRetryConfig({
     ...retryInputs,
-    batch: { group: 'mocked', fixture: 'research', checks: [] },
+    batch: { group: 'mocked', fixture: 'research', checks: [], entries: [] },
   });
 
   assert.deepEqual(batchLaunchEnvironment(config.launchConfig), {
     CI_E2E_FIXTURE: 'research',
     CI_E2E_SWARM_CHECKS: 'off',
-    E2E_SCIENTIFIC_ENVS: '1',
+    E2E_SCIENTIFIC_ENVS: '0',
   });
+});
+
+test('only a batch that actually carries J3 requests managed scientific environments', () => {
+  const j3Entry = { key: 'test/journey-prepare-environment.spec.ts::J3', source: j3Source };
+  const otherEntry = { key: 'test/journey-open-session.spec.ts::other', source: 'test/journey-open-session.spec.ts' };
+  // The concurrency split may name either key; the contents decide, not the key.
+  for (const key of ['mocked-standard-config-global', 'mocked-standard-config-global-2']) {
+    assert.equal(
+      batchLaunchConfig({ group: 'mocked', fixture: 'standard', checks: [], key, entries: [otherEntry, j3Entry] }, 'e2e').scientificEnvs,
+      '1',
+      `${key} carries J3`,
+    );
+    assert.equal(
+      batchLaunchConfig({ group: 'mocked', fixture: 'standard', checks: [], key, entries: [otherEntry] }, 'e2e').scientificEnvs,
+      '0',
+      `${key} does not carry J3`,
+    );
+  }
+  assert.equal(
+    batchLaunchConfig({ group: 'mocked', fixture: 'standard', checks: [], entries: [] }, 'e2e').scientificEnvs,
+    '0',
+  );
+});
+
+test('a J5 real batch keeps managed scientific environments while other real batches skip them', () => {
+  const config = isolatedRetryConfig({
+    ...retryInputs,
+    batch: {
+      group: 'real',
+      fixture: 'standard',
+      checks: [],
+      key: 'real-standard',
+      entries: [{ key: 'test/journey-real-request.spec.ts::J5', source: 'test/journey-real-request.spec.ts' }],
+    },
+    slice: 'e2e-real',
+  });
+
+  assert.equal(config.launchConfig.scientificEnvs, '1');
+  assert.equal(batchLaunchEnvironment(config.launchConfig).E2E_SCIENTIFIC_ENVS, '1');
+  assert.equal(batchLaunchConfig({
+    group: 'real',
+    fixture: 'standard',
+    checks: [],
+    key: 'real-standard',
+    entries: [{ key: 'test/literature-review.spec.ts::lit', source: 'test/literature-review.spec.ts' }],
+  }, 'e2e-real').scientificEnvs, '0');
+});
+
+test('a J3 retry keeps managed scientific environments enabled', () => {
+  const config = isolatedRetryConfig({
+    ...retryInputs,
+    batch: {
+      group: 'mocked',
+      fixture: 'standard',
+      checks: [],
+      key: 'mocked-standard-config-global-2',
+      entries: [{ key: 'test/journey-prepare-environment.spec.ts::J3', source: j3Source }],
+    },
+  });
+
+  assert.equal(config.launchConfig.scientificEnvs, '1');
+  assert.equal(batchLaunchEnvironment(config.launchConfig).E2E_SCIENTIFIC_ENVS, '1');
 });
 
 test('isolated retry config preserves disabled swarm checks', () => {
