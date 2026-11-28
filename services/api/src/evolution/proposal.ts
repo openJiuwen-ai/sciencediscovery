@@ -163,6 +163,95 @@ const MAX_EVALUATOR_CHARS = 200_000;
  *  file it writes its result to. */
 const EVALUATOR_MARKERS = ["SCIENCE_AGENT_SHARDS", "SCIENCE_AGENT_RESULT"] as const;
 
+/** The framework's per-call helper, staged beside the evaluator in the scratch
+ *  directory. Only a real `import evaluator_support` opts a script into its
+ *  contract: a comment that mentions it, or a script that defines its own
+ *  `call_with_deadline`, is a legacy script and is left alone. */
+const EVALUATOR_SUPPORT = "evaluator_support";
+
+/** The deadline call, whose `timeout` is a required keyword-only argument, so a
+ *  script that uses it without one is refused here rather than at its first
+ *  case. */
+const SUPPORT_DEADLINE = "call_with_deadline";
+
+/** What the helper offers. One of them has to be used, or the import is dead
+ *  code and the script still has no per-call limit and no separated copy. */
+const SUPPORT_ENTRY_POINTS = [SUPPORT_DEADLINE, "candidate_copy", "pristine"] as const;
+
+/** What a script imports from the staged helper, under the names it uses. */
+interface SupportImports {
+  /** Local names bound to the module: `import evaluator_support as support`. */
+  modules: string[];
+  /** Local name to imported member: `from evaluator_support import pristine as p`. */
+  members: Map<string, string>;
+  /** `from evaluator_support import *`. */
+  star: boolean;
+}
+
+function splitImportClause(clause: string): string[] {
+  return clause.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+/** Read the helper's import forms rather than looking for its name anywhere.
+ *
+ *  A raw substring cannot tell an import from a comment, and misses the shapes
+ *  that are ordinary Python: a parenthesized multi-line `from … import (a, b)`,
+ *  `import … as`, commas in one `import` statement, and `import *`. Each of
+ *  those decides whether the script opted into the contract at all. */
+function supportImports(text: string): SupportImports {
+  const imports: SupportImports = { modules: [], members: new Map(), star: false };
+
+  for (const match of text.matchAll(/^[ \t]*import[ \t]+([^\n;]+)/gm)) {
+    // A trailing comment belongs to the line, not to the alias: without this,
+    // `import evaluator_support as support  # staged` yields the alias
+    // "support  # staged" and the script is either misread or not seen at all.
+    const clause = (match[1] ?? "").replace(/#[^\n]*/g, " ");
+    for (const part of splitImportClause(clause)) {
+      const [name, alias] = part.split(/\s+as\s+/).map((piece) => piece.trim());
+      if (name === EVALUATOR_SUPPORT) imports.modules.push(alias || name!);
+    }
+  }
+
+  const from = /^[ \t]*from[ \t]+evaluator_support[ \t]+import[ \t]+(\([\s\S]*?\)|[^\n;]+)/gm;
+  for (const match of text.matchAll(from)) {
+    const body = (match[1] ?? "").replace(/#[^\n]*/g, " ").replace(/[()]/g, " ");
+    if (body.trim() === "*") {
+      imports.star = true;
+      continue;
+    }
+    for (const part of splitImportClause(body)) {
+      const [name, alias] = part.split(/\s+as\s+/).map((piece) => piece.trim());
+      if (name && name !== "*") imports.members.set(alias || name, name);
+    }
+  }
+  return imports;
+}
+
+/** Which of the helper's entry points the script actually calls.
+ *
+ *  Deliberately about imports and calls rather than substrings. A script that
+ *  carries `# evaluator_support.call_with_deadline is not used here`, or defines
+ *  its own `def call_with_deadline(func, args, limit)` and calls it
+ *  positionally, is right to do so, works, and must not be refused — the
+ *  measured legacy shapes are precisely scripts that predate the helper. */
+function supportUse(imports: SupportImports, text: string): { used: string[]; deadline: boolean } {
+  const used: string[] = [];
+  let deadline = false;
+  const calls = (name: string) => new RegExp(`\\b${name}\\s*\\(`).test(text);
+  for (const entry of SUPPORT_ENTRY_POINTS) {
+    const viaModule = imports.modules.some((local) =>
+      new RegExp(`\\b${local}\\s*\\.\\s*${entry}\\b`).test(text));
+    // The imported name may be aliased, so the call is looked for under the
+    // local name rather than under the helper's own.
+    const viaMember = [...imports.members].some(
+      ([local, imported]) => imported === entry && calls(local));
+    const viaStar = imports.star && calls(entry);
+    if (viaModule || viaMember || viaStar) used.push(entry);
+    if (entry === SUPPORT_DEADLINE && (viaModule || viaMember || viaStar)) deadline = true;
+  }
+  return { used, deadline };
+}
+
 /** Which proposal field a path came from, so a refusal can name it. */
 async function storePath(
   deps: ProposalDeps, field: string, path: string,
@@ -200,6 +289,31 @@ function checkEvaluator(text: string): void {
         + "to the result file",
       );
     }
+  }
+  // The per-call part is checked only where the script imports the staged
+  // helper. A script that waits on a thread with a timeout is *not* refused for
+  // that: it keeps working, the probe discloses what it could not observe, and
+  // the guidance recommends migrating. A script that does import the helper is
+  // held to its contract, because there the two mistakes are cheap to catch and
+  // expensive to discover mid-run.
+  const imports = supportImports(text);
+  const optedIn = imports.modules.length > 0 || imports.members.size > 0 || imports.star;
+  const usage = supportUse(imports, text);
+  if (optedIn && usage.used.length === 0) {
+    throw new ProposalRefusal(
+      `the evaluator imports ${EVALUATOR_SUPPORT} but uses nothing from it. It is staged beside `
+      + `the script and offers ${SUPPORT_ENTRY_POINTS.join(", ")}: a hard per-call deadline, and `
+      + "the copy to score from / the copy to hand over. Either call one of them — the probe "
+      + "refuses a script that a single non-returning call can hold open, and one whose score "
+      + "moves when the candidate damages its own input — or leave the import out",
+    );
+  }
+  if (usage.deadline && !/timeout\s*=/.test(text)) {
+    throw new ProposalRefusal(
+      "the evaluator calls call_with_deadline without a timeout. The deadline is a required "
+      + "keyword argument — `call_with_deadline(candidate.solve, value, timeout=1.0)` — because a "
+      + "call with no limit is what lets one slow candidate hold the whole evaluation open",
+    );
   }
 }
 

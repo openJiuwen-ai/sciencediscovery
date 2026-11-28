@@ -1101,6 +1101,17 @@ jobs:
           UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}\.sciencediscovery-data\envs\sd-services
         run: uv sync --locked --extra candidates
 
+      # The custom-script per-call deadline is a Windows-shaped defect: no
+      # SIGALRM, `direct` execution, and a daemon thread whose wait timeout is
+      # not a stop (#1437). No PR gate runs Python on Windows, so the focused
+      # regression runs here — the only job that provisions the shared Python
+      # environment on a Windows runner. `--no-sync` reuses the environment the
+      # step above built; the file is platform-neutral and needs no bubblewrap.
+      - name: Test the custom-script per-call facility
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}\.sciencediscovery-data\envs\sd-services
+        run: uv run --frozen --no-sync pytest services/evolve/tests/test_evaluator_support.py -q
+
       - name: Install the pinned JiuwenSwarm runtime
         run: node scripts/jiuwenswarm.mjs setup
 

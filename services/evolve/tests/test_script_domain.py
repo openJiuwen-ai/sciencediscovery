@@ -434,12 +434,15 @@ def test_the_evaluator_is_alone_with_the_candidate(tmp_path):
 
     assert ok, error
     present = set(error.split(","))
-    # The two programs are there; the sandbox and the runner add their own
-    # plumbing. What matters is that nothing data-shaped can arrive.
-    assert {"candidate.py", "evaluate.py"} <= present
+    # The two programs are there, plus the framework's own per-call helper —
+    # staged rather than installed, because the evaluator has to be runnable in a
+    # throwaway directory and `import evaluator_support` has to work there. The
+    # sandbox and the runner add their own plumbing. What matters is that nothing
+    # data-shaped can arrive.
+    assert {"candidate.py", "evaluate.py", "evaluator_support.py"} <= present
     assert not [name for name in present if name.endswith((".json", ".csv", ".txt"))]
 
-def test_the_probe_pays_for_four_evaluations_and_no_more():
+def test_the_probe_pays_for_seven_evaluations_and_no_more():
     """Each gate was added on its own, and one of them re-ran a measurement.
 
     `_refuse_nameless_diagnosis` needed the failure text that `_score` had just
@@ -447,8 +450,10 @@ def test_the_probe_pays_for_four_evaluations_and_no_more():
     sandbox runs where four do. Counting them here means the next gate has to be
     deliberate about its cost rather than quietly adding one.
 
-    The four: the starting point, a damaged copy, one that cannot be imported,
-    and the starting point again to read the repeat noise.
+    The seven: the starting point, a damaged copy, one that cannot be imported,
+    the starting point again to read the repeat noise, a candidate that damages
+    its own inputs, and a candidate whose first call never returns — twice, since
+    the second run is what shows the timed-out case behaves the same way twice.
     """
     from sciencediscovery_evolve import probe as probe_module
 
@@ -468,9 +473,11 @@ def test_the_probe_pays_for_four_evaluations_and_no_more():
     worsened, _dr, damaged_why = probe_module._measure(evaluate, damaged, (0, 1))
     probe_module._refuse_nameless_diagnosis(damaged_why)
     probe_module._refuse_rewarding_the_unimportable(evaluate, (0, 1), baseline)
+    probe_module._refuse_input_mutation(evaluate, "def f():\n    return 1\n", (0, 1), baseline)
+    probe_module._refuse_ineffective_timeout(evaluate, "def f():\n    return 1\n", (0, 1))
     probe_module._refuse_noisy(evaluate, "def f():\n    return 1\n", (0, 1), baseline, worsened)
 
-    assert len(calls) == 4, [c[:30] for c in calls]
+    assert len(calls) == 7, [c[:30] for c in calls]
 
 
 def test_every_code_template_asks_for_one_change_not_a_rewrite():

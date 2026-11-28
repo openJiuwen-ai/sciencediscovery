@@ -445,8 +445,9 @@ def test_a_semantic_failure_needs_no_line_number():
 def test_the_location_gate_costs_no_extra_evaluation():
     """It reads the text the damaged-candidate scoring already produced.
 
-    The probe's cost is pinned at four evaluations; a gate that paid for a
-    fifth would be charging every run for a check on the run's own reporting.
+    It has to stay free: the probe already spends seven evaluations, and a gate
+    that paid for an eighth would be charging every run for a check on the run's
+    own reporting.
     """
     import inspect
 
@@ -473,3 +474,343 @@ def test_run_probe_actually_runs_the_location_gate():
     # Beside its sibling, on the text the damaged-candidate scoring produced.
     assert "_refuse_nameless_diagnosis(damaged_why)" in source
     assert "_refuse_locationless_diagnosis(damaged_why)" in source
+
+
+#: A starting point the behavioural gates can wrap: Python, with one
+#: module-level function, which is all they need to know about a candidate.
+BASELINE_SOURCE = "def solve(values):\n    return sum(values)\n"
+
+
+def test_a_scoring_that_pays_a_candidate_for_damaging_its_input_is_refused():
+    """The reported exploit: a perfect score for wrecking the data being scored.
+
+    A candidate that returns the starting point's own answer and zeroes the
+    numbers it was handed must score what the starting point scores. When it
+    scores better, the evaluator is validating or calculating from the
+    candidate's own object — which one real evaluator did by measuring its
+    baseline before the call and the candidate's total after it, from the same
+    mutable list.
+    """
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_input_mutation
+
+    with pytest.raises(ProbeError) as caught:
+        _refuse_input_mutation(lambda _code, _shards: (True, {"score": 1.0}, ""),
+                               BASELINE_SOURCE, (0, 1), 0.5000)
+
+    said = str(caught.value)
+    assert "1.0000" in said and "0.5000" in said      # both numbers, checkable
+    assert "candidate_copy" in said                    # and what to change
+
+
+def test_a_scoring_that_resists_input_damage_is_left_alone():
+    from sciencediscovery_evolve.probe import _refuse_input_mutation
+
+    # Equal to the starting point: the candidate's edits never reached the data.
+    _refuse_input_mutation(lambda _code, _shards: (True, {"score": 0.5}, ""),
+                           BASELINE_SOURCE, (0, 1), 0.5)
+    # Lower: a candidate that loses points by damaging its own input is a bad
+    # candidate, not a broken measuring apparatus.
+    _refuse_input_mutation(lambda _code, _shards: (True, {"score": 0.2}, ""),
+                           BASELINE_SOURCE, (0, 1), 0.5)
+
+
+def test_a_small_wobble_above_the_start_is_not_called_input_damage():
+    """The allowance is relative to the damage signal, as for the timeout gate.
+
+    A scoring that wobbles by a hundredth is inside what `_refuse_noisy` accepts
+    against a 0.5 signal, so refusing it as "the score comes from the
+    candidate's own data" would be a false accusation. The measured shape:
+    `_refuse_noisy` passes 0.52 against a 0.5 baseline, so this gate must too.
+    """
+    from sciencediscovery_evolve.probe import _refuse_input_mutation
+
+    _refuse_input_mutation(lambda _code, _shards: (True, {"score": 0.52}, ""),
+                           BASELINE_SOURCE, (0, 1), 0.50, signal=0.5)
+    # And a real inflation is still refused with the same signal in hand.
+    with pytest.raises(ProbeError):
+        _refuse_input_mutation(lambda _code, _shards: (True, {"score": 1.0}, ""),
+                               BASELINE_SOURCE, (0, 1), 0.50, signal=0.5)
+
+
+def test_an_evaluator_that_a_single_non_returning_call_takes_down_is_refused():
+    """No per-call limit at all: the whole evaluation runs into the outer timeout."""
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_ineffective_timeout
+    from sciencediscovery_evolve.script_domain import ScriptError
+
+    def evaluate(_code, _shards):
+        raise ScriptError("the evaluator ran for over 90s without finishing")
+
+    with pytest.raises(ProbeError) as caught:
+        _refuse_ineffective_timeout(evaluate, BASELINE_SOURCE, (0, 1))
+
+    said = str(caught.value)
+    assert "never returns" in said
+    assert "call_with_deadline" in said      # the fix, by name
+    assert "stops waiting" in said           # and why a thread wait is not it
+
+
+def test_a_timeout_that_invalidates_the_whole_run_is_refused():
+    """A timed-out case is a failed case, not a failed run.
+
+    Marking the evaluation invalid throws away every other case's score, so a
+    partially-timed-out candidate is reported as no measurement at all.
+    """
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_ineffective_timeout
+
+    with pytest.raises(ProbeError) as caught:
+        _refuse_ineffective_timeout(
+            lambda _code, _shards: (False, {"score": float("-inf")}, "case 3: timed out"),
+            BASELINE_SOURCE, (0, 1))
+
+    assert "failed case, not a failed run" in str(caught.value)
+
+
+def test_a_timeout_whose_handling_is_not_repeatable_is_refused():
+    """Leftover work from a timed-out call shows up as an unstable next score."""
+    from sciencediscovery_evolve.probe import ProbeError, _refuse_ineffective_timeout
+
+    scores = iter([0.5, 0.9])
+
+    with pytest.raises(ProbeError) as caught:
+        _refuse_ineffective_timeout(lambda _code, _shards: (True, {"score": next(scores)}, ""),
+                                    BASELINE_SOURCE, (0, 1))
+
+    said = str(caught.value)
+    assert "0.5000" in said and "0.9000" in said
+    assert "not repeatable" in said
+
+
+def test_a_repeatable_partial_score_after_a_timeout_is_left_alone():
+    """The legacy shape: a daemon-thread watchdog survives and repeats.
+
+    Existing scripts are not refused for not using the framework's facility —
+    that absence is disclosed instead, because nothing outside the process can
+    tell a stopped thread from a sleeping one.
+    """
+    from sciencediscovery_evolve.probe import _refuse_ineffective_timeout
+
+    _refuse_ineffective_timeout(lambda _code, _shards: (True, {"score": 0.25}, ""),
+                                BASELINE_SOURCE, (0, 1), [[]])
+
+
+def test_the_probe_says_which_timeout_checks_it_could_not_perform(monkeypatch):
+    """Not performed is not the same as passed, and saying which is the point."""
+    from sciencediscovery_evolve import probe
+
+    said: List[str] = []
+    monkeypatch.setattr(probe.log, "info",
+                        lambda message, *args: said.append(message % args if args else message))
+
+    probe._report_timeout_observations([], [])           # no staged facility at all
+    assert "could not be observed" in said[-1]
+    probe._report_timeout_observations([{"outcome": "ok"}], [])   # the deadline never fired
+    assert "never fired" in said[-1]
+    probe._report_timeout_observations(
+        [{"outcome": "deadline", "target": "candidate.solve"}], [])
+    assert "no later candidate call completed" in said[-1]
+    probe._report_timeout_observations(
+        [{"outcome": "deadline", "target": "candidate.solve"}, {"outcome": "ok"}], [])
+    assert "later candidate call(s) completed" in said[-1]
+
+
+def test_run_probe_actually_runs_the_behavioural_gates():
+    """Named wiring for the two gates #1437 needs, as for the diagnosis gates.
+
+    They are cheap to leave out and impossible to notice: everything else in the
+    probe still passes without them, and the defect they exist for only appears
+    in a run.
+    """
+    import inspect
+
+    from sciencediscovery_evolve import probe
+
+    source = inspect.getsource(probe.run_probe)
+    assert "_refuse_input_mutation(" in source
+    assert "_refuse_ineffective_timeout(" in source
+    # The timeout gate reads the records the domain collected, not a guess.
+    assert "observations" in source
+
+
+def test_a_small_wobble_on_a_timed_candidate_is_not_called_leftover_work():
+    """The repeatability allowance is relative to what a real change is worth.
+
+    A scoring that discriminates strongly can still wobble by a hundredth. The
+    allowance is a tenth of the damage signal (never below `TOLERANCE`), so
+    ordinary jitter is not mistaken for a timed-out call's leftover work — 0.02
+    apart against a 0.5 signal is inside it.
+    """
+    from sciencediscovery_evolve.probe import _refuse_ineffective_timeout
+
+    scores = iter([0.50, 0.52])
+    _refuse_ineffective_timeout(lambda _code, _shards: (True, {"score": next(scores)}, ""),
+                                BASELINE_SOURCE, (0, 1), signal=0.5)
+
+
+def test_a_constraint_relative_to_the_baseline_does_not_invalidate_the_timeout_check(monkeypatch):
+    """The timeout check scores a deliberately broken candidate, so it drops the card's constraints.
+
+    Merge-time regression (#1453 vs main): the timeout check has to normalise
+    against the frozen starting point, but once it does, a constraint relative to
+    that baseline ("no slower than 1.5x the starting point") is legitimately
+    violated by the hostile candidate the check builds. `script_domain` reports a
+    violated constraint as `valid: false`, `_measure` folds that to `None`, and
+    `_refuse_ineffective_timeout` then refuses with "one timed-out case turned the
+    whole evaluation invalid" — a false accusation against an evaluator that does
+    keep its per-call deadline. The check therefore runs on a constraint-free copy
+    of the card while still using the real frozen reference.
+    """
+    from sciencediscovery_evolve import probe as probe_module
+    from sciencediscovery_evolve import script_domain as script_module
+    from sciencediscovery_evolve.engine import RunSpec
+    from sciencediscovery_evolve.outcome import SCORE_KEY, VIOLATED_KEY, build_outcome
+    from sciencediscovery_evolve.scorecard import score_candidate
+    from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
+    from test_outcome import clamp_card
+
+    card = clamp_card(
+        "score", kind="custom_script", normalize={"kind": "relative_to_baseline"},
+        split={"gateShards": 1, "rolloutShards": 1, "seed": 0, "shardRows": 0, "testShards": 0},
+        constraints=[{"id": "too-slow", "criterionId": "score", "op": "<=",
+                      "value": {"relativeToBaseline": 1.5}}],
+    )
+    card["criteria"][0]["direction"] = "minimize"
+    baseline_code = "def solve(x):\n    return x + 1\n"
+    domains: List[Dict[str, Any]] = []
+
+    class _Domain:
+        def __init__(self, scorecard: Dict[str, Any], reference: Dict[str, float]) -> None:
+            self.scorecard = scorecard
+            self.reference = reference
+            self.rewards: List[float] = []
+
+        def evaluate(self, code: str, _shards: Any):
+            # The starting point measures 0.6, every deliberately broken
+            # candidate 1.2, and each is normalised against the reference this
+            # domain was handed — the same arithmetic `script_domain` does, with
+            # its constraint-to-invalid mapping on top.
+            raw = {"score": 0.6 if code == baseline_code else 1.2}
+            scored = score_candidate(self.scorecard, raw, self.reference or raw)
+            metrics = build_outcome(raw=raw, scored=scored)
+            self.rewards.append(scored.reward)
+            if scored.violations:
+                metrics[SCORE_KEY] = float("-inf")
+                metrics[VIOLATED_KEY] = scored.violations[0].constraint_id
+                return False, metrics, scored.violations[0].detail
+            return True, metrics, ""
+
+    def fake_script_domain(*, scorecard: Dict[str, Any], baseline: Dict[str, float],
+                           **_kwargs: Any) -> _Domain:
+        domain = _Domain(scorecard, baseline)
+        domains.append({"scorecard": scorecard, "baseline": baseline, "domain": domain})
+        return domain
+
+    monkeypatch.setattr(script_module, "script_domain", fake_script_domain)
+    spec = RunSpec(
+        search_id="probe-custom", algorithm="puct", expansions=1, scorecard_hash="sha256:score",
+        scorecard=card, statement="sort it", baseline_code=baseline_code, script="evaluator",
+        sandbox=SandboxCapability(),
+    )
+
+    # Not refused: the run reaches its result, and the card itself still carries
+    # the constraint the run was created with.
+    result = probe_module.run_probe(spec)
+    assert result["baseline"] == pytest.approx(0.5)
+    assert card["constraints"], "the run's own scorecard must not be mutated"
+
+    main_domain, timeout_domain = domains[0], domains[-1]
+    # The main domain keeps the card's constraints; only the timeout check drops them.
+    assert main_domain["scorecard"]["constraints"] == card["constraints"]
+    assert timeout_domain["scorecard"]["constraints"] == []
+    # And the timeout check still normalises against the frozen starting point:
+    # 1.2 against a 0.6 baseline is 1/3, not the self-normalised 0.5 an empty
+    # reference would give.
+    assert timeout_domain["baseline"] == {"score": pytest.approx(0.6)}
+    assert timeout_domain["domain"].rewards
+    assert all(reward == pytest.approx(1 / 3) for reward in timeout_domain["domain"].rewards)
+
+
+#: An evaluator with a real per-call deadline: the shape the guidance asks for,
+#: and the one the timeout check must not refuse. A failed case scores zero, so a
+#: candidate that hangs once and raises once measures below the starting point.
+DEADLINE_EVALUATOR = '''
+"""solve(shard) -> float: the score for that shard, 0.0 being worst."""
+import json, os
+import candidate
+import evaluator_support
+
+shards = [int(part) for part in os.environ["SCIENCE_AGENT_SHARDS"].split(",") if part != ""]
+total, failures = 0.0, []
+for shard in shards:
+    try:
+        total += float(evaluator_support.call_with_deadline(candidate.solve, shard, timeout=0.5))
+    except (evaluator_support.DeadlineExceeded, evaluator_support.CallFailed) as error:
+        failures.append("case %d: %s" % (shard, error))
+with open(os.environ["SCIENCE_AGENT_RESULT"], "w") as handle:
+    json.dump({"valid": True, "metrics": {"score": total / max(len(shards), 1)},
+               "error": "; ".join(failures)}, handle)
+'''
+
+#: The starting point every case of the deadline evaluator scores 1.0 on.
+DEADLINE_BASELINE = "def solve(shard):\n    return 1.0\n"
+
+
+def test_a_relative_constraint_does_not_refuse_a_deadline_evaluator_in_the_real_domain():
+    """The real second domain, the real evaluator: no refusal, same arithmetic.
+
+    The unit test above pins the wiring; this one runs `script_domain` itself
+    (through the `direct` backend, as `test_evaluator_support` does) on a card
+    whose `relativeToBaseline` constraint the check's deliberately broken
+    candidate genuinely violates. The card's constraint still rejects that
+    candidate — that is what a run's own scoring is for — but the timeout check
+    must not read it as an invalid run, and it must still divide by the frozen
+    starting point.
+    """
+    from sciencediscovery_evolve import probe as probe_module
+    from sciencediscovery_evolve.engine import RunSpec
+    from sciencediscovery_evolve.outcome import VIOLATED_KEY
+    from sciencediscovery_evolve.script_domain import script_domain
+    from sciencediscovery_evolve.vendor.puct.sandbox import SandboxCapability
+    from test_outcome import clamp_card
+
+    card = clamp_card(
+        "score", kind="custom_script", normalize={"kind": "relative_to_baseline"},
+        split={"gateShards": 4, "rolloutShards": 1, "seed": 0, "shardRows": 0, "testShards": 0},
+        constraints=[{"id": "no-sacrifice", "criterionId": "score", "op": ">=",
+                      "value": {"relativeToBaseline": 0.8}}],
+    )
+    shards = (0, 1, 2, 3)
+    spec = RunSpec(
+        search_id="probe-custom", algorithm="puct", expansions=1, scorecard_hash="sha256:score",
+        scorecard=card, statement="sort it", baseline_code=DEADLINE_BASELINE,
+        script=DEADLINE_EVALUATOR, candidate_timeout_seconds=10.0,
+        sandbox=SandboxCapability(backend="direct"),
+    )
+    observations: List[List[Dict[str, Any]]] = []
+
+    # The run's own scoring does reject the broken candidate: it keeps two of the
+    # four cases and lands at half the starting point, under the card's 0.8x
+    # floor. That is the `valid: false` the timeout check must not inherit.
+    with_constraints = script_domain(
+        scorecard=card, script=DEADLINE_EVALUATOR, capability=SandboxCapability(backend="direct"),
+        baseline_code=DEADLINE_BASELINE, candidate_timeout=10.0, baseline={"score": 1.0},
+    )
+    hostile = probe_module._hostile_candidate(DEADLINE_BASELINE, hang_first=True)
+    assert hostile is not None
+    valid, metrics, detail = with_constraints.evaluate(hostile, shards)
+    assert valid is False
+    assert metrics[VIOLATED_KEY] == "no-sacrifice"
+    assert "does not satisfy >= 0.8" in detail
+
+    timeout_domain, limit, bound = probe_module._timeout_check_domain(
+        spec, observations, 0.0, reference={"score": 1.0},
+    )
+    # The check still divides by the frozen starting point: a candidate at 0.5
+    # against a 1.0 baseline is 2/3, where an empty reference would read 0.5.
+    worse = probe_module._score(timeout_domain.evaluate, "def solve(shard):\n    return 0.5\n", shards)
+    assert worse == pytest.approx(2 / 3, abs=1e-6)
+    # And a correct per-call deadline is not refused for the broken candidate's
+    # quality: the check answers only "alive inside the bound, same twice".
+    probe_module._refuse_ineffective_timeout(
+        timeout_domain.evaluate, DEADLINE_BASELINE, shards,
+        observations=observations, limit=limit, bound=bound, baseline_seconds=0.0,
+    )
