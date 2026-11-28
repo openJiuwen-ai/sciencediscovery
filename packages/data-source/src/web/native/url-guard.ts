@@ -94,7 +94,10 @@ function dottedTailToHextets(value: string): string {
 }
 
 function ipv6Blocked(address: string): boolean {
-  const value = normalizeIpv6(address);
+  // Drop a zone id first: it names an interface on the same address, so it must not hide a
+  // trailing dotted quad from the rewrite below (the hex spelling of the same literal already
+  // blocks). Link-local, unique-local and multicast zone literals keep rejecting on their prefix.
+  const value = normalizeIpv6(address).split("%")[0] ?? "";
   if (value === "::" || value === "::1") return true;          // unspecified / loopback
   if (value.startsWith("fe8") || value.startsWith("fe9")
     || value.startsWith("fea") || value.startsWith("feb")) return true; // link-local
@@ -120,6 +123,11 @@ function ipv6Blocked(address: string): boolean {
     && hextets[3] === 0 && hextets[4] === 0 && hextets[5] === 0) {
     return ipv4Blocked(embeddedIpv4(high, low));                // NAT64 64:ff9b::/96, 64:ff9b:1::/96
   }
+  // The rest of the local-use 64:ff9b:1::/48 prefix is default-denied. RFC 8215 lets a deployment
+  // choose that prefix's length, so the embedded IPv4 of a non-canonical suffix sits at a position
+  // this guard cannot know. Guessing hextets 6-7 would read the wrong bits and can report a private
+  // address public, so only the canonical /96 layout above is decoded and the remainder is refused.
+  if (hextets[0] === 0x0064 && hextets[1] === 0xff9b && hextets[2] === 0x0001) return true;
   if (hextets[0] === 0x2002) return ipv4Blocked(embeddedIpv4(hextets[1]!, hextets[2]!)); // 6to4 2002::/16
   if (hextets[0] === 0x2001 && hextets[1] === 0) {
     // Teredo 2001:0::/32 obfuscates the client IPv4 by inverting its bits.

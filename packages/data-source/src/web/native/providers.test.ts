@@ -331,6 +331,53 @@ test("web_fetch judges dotted and hex spellings of an embedded IPv4 alike", asyn
   assert.equal(await assertPublicUrl("http://[::ffff:8.8.8.8]/"), "http://[::ffff:8.8.8.8]/");
 });
 
+test("web_fetch strips a zone id before judging dotted and hex spellings", async () => {
+  // A zone id names an interface on the same address; it must not hide the embedded IPv4 from
+  // either the dotted rewrite or the family decoding. The hex spellings of these already block.
+  for (const address of [
+    "::ffff:127.0.0.1%eth0",
+    "2002:a9fe:a9fe::1.1.1.1%eth0",
+    "64:ff9b:1:0:7f00:1:1.1.1.1%eth0",
+  ]) {
+    assert.equal(isBlockedAddress(address), true, address);
+  }
+  assert.equal(isBlockedAddress("::ffff:7f00:1%eth0"), true);
+  assert.equal(isBlockedAddress("2002:a9fe:a9fe::101:101%eth0"), true);
+  // Public zoned values stay allowed, dotted or hex.
+  for (const address of ["2002:808:808::8.8.8.8%eth0", "2002:808:808::808:808%eth0"]) {
+    assert.equal(isBlockedAddress(address), false, address);
+  }
+  // Link-local, unique-local and multicast zoned literals stay blocked.
+  for (const address of ["fe80::1%eth0", "fd00::1%eth0", "ff02::1%eth0"]) {
+    assert.equal(isBlockedAddress(address), true, address);
+  }
+});
+
+test("web_fetch default-denies the non-canonical remainder of the local-use NAT64 prefix", async () => {
+  // 64:ff9b:1::/48 is a local-use prefix whose NSP length is deployment-chosen (RFC 8215), so the
+  // embedded IPv4 of a non-canonical suffix sits at a position this guard cannot know. A public
+  // verdict there would be a guess that can hide a private address, so the remainder is denied
+  // while the canonical /96 layout keeps being decoded.
+  for (const address of [
+    "64:ff9b:1:0:7f00:1:808:808", // non-canonical suffix: the embedded position is unknowable
+    "64:ff9b:1:0:a9:fea9:fe00::", // non-canonical suffix: the embedded position is unknowable
+    "64:ff9b:1:0:7f:0:100:0",     // conforming /64-NSP encoding of 127.0.0.1
+  ]) {
+    assert.equal(isBlockedAddress(address), true, address);
+    await assert.rejects(assertPublicUrl(`http://[${address}]/`), PublicUrlError, address);
+  }
+  // The resolver path applies the same verdict.
+  await assert.rejects(
+    assertPublicUrl("http://example.com/", async () => ["64:ff9b:1:0:7f00:1:808:808"]),
+    PublicUrlError,
+  );
+  // The canonical /96 layout is still decoded, so public NAT64 egress keeps working.
+  for (const address of ["64:ff9b::808:808", "64:ff9b:1::808:808"]) {
+    assert.equal(isBlockedAddress(address), false, address);
+    assert.equal(await assertPublicUrl(`http://[${address}]/`), `http://[${address}]/`, address);
+  }
+});
+
 test("web_fetch applies the same judgement to resolved addresses, not only literals", async () => {
   // The DNS path runs the same predicate, so a mapped literal returned by a resolver must reject.
   await assert.rejects(
