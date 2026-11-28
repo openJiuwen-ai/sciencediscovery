@@ -73,3 +73,25 @@ test("a length rejection is client input only when it is the whole message", () 
   // Mentioning a length alone is not a validation shape either.
   assert.equal(isKnownClientInputError(new Error("Chunk length 16384 exceeds the internal buffer budget")), false);
 });
+
+test("a runtime fault is never client input, whatever its message says", () => {
+  // #1533: these are the interpreter reporting a defect in this server, not the
+  // caller's bytes. Before this gate the first one matched /cannot/ and the
+  // client received `400` with that JavaScript text as the error body.
+  for (const fault of [
+    new TypeError("Cannot read properties of undefined (reading 'match')"),
+    new TypeError("Cannot convert undefined or null to object"),
+    new TypeError("Invalid value used as weak map key"),
+    new RangeError("Invalid array length"),
+    new ReferenceError("params is not defined"),
+    new EvalError("invalid eval"),
+  ]) {
+    assert.equal(isKnownClientInputError(fault), false, `${fault.constructor.name}: ${fault.message}`);
+  }
+
+  // The same vocabulary on a plain Error is still the legacy validators' shape,
+  // which is the whole reason the wording list is kept.
+  assert.equal(isKnownClientInputError(new Error("A model in use cannot be deleted")), true);
+  // A body that does not parse is the caller's own bytes.
+  assert.equal(isKnownClientInputError(new SyntaxError("Unexpected token in JSON")), true);
+});
