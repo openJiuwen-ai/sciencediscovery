@@ -30,7 +30,9 @@ import type { ApiClient } from "../../api/client.js";
 import { ApiRequestError } from "../../api/client.js";
 import { controlIdeaResearch, getIdeaResearch, subscribeIdeaResearchEvents } from "../../api/idea-tree.js";
 import { TEXT } from "../../text.js";
+import { ideaPhaseLabel } from "./IdeaResearchCard.js";
 import { IdeaNodeDetail, IdeaTreeView } from "./IdeaTree.js";
+import { elapsedSeconds, inFlightActivity, useElapsedClock } from "./researchWaiting.js";
 
 const t = TEXT.ideaTree;
 
@@ -74,6 +76,10 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose, onRe
    *  carries, so holding the old object would show a node that no longer matches the
    *  tree. */
   const [selectedId, setSelectedId] = useState<string>();
+  /** The call a pause is waiting for, named and counted locally while the stream
+   *  is silent: a stop is observed only after the in-flight request returns. */
+  const waiting = view?.research.status === "pausing" ? inFlightActivity(view.research) : undefined;
+  const now = useElapsedClock(waiting !== undefined);
   const live = useRef<AbortController | undefined>(undefined);
   /** Held in a ref so reporting a view cannot change the identity of the reads
    *  and effects below: a caller that passes an inline lambda must not make the
@@ -209,11 +215,27 @@ export function IdeaResearchPanel({ client, sessionId, researchId, onClose, onRe
       </header>
       <div className="idea-panel-progress">
         <span>{t.status[research.status] ?? research.status}</span>
-        <span>{(t.phase as Record<string, string | undefined>)[research.phase] ?? research.phase}</span>
+        <span>{ideaPhaseLabel(research.phase, research)}</span>
         <span>{t.round(research.round)}</span>
         {research.batch.length ? <span>{t.batch(research.batchCompleted, research.batch.length)}</span> : null}
         <span>{research.usageKnown ? t.tokens(research.tokens) : t.tokensUnknown}</span>
       </div>
+      {research.status === "pausing" ? (
+        <div className="idea-panel-waiting">
+          {waiting ? (
+            <p>
+              {t.waiting.call(ideaPhaseLabel(waiting.role, research), elapsedSeconds(waiting.startedAt, now))}
+              {waiting.nodeId ? <span> · {t.waiting.node(waiting.nodeId)}</span> : null}
+            </p>
+          ) : <p>{t.waiting.settling}</p>}
+          {waiting ? <p>{t.waiting.note(research.pendingStop === "end" ? "end" : "pause")}</p> : null}
+          {/* The elapsed value above ticks every second; announcing it would
+            * flood a screen reader, so only the one-off queued stop is a live
+            * region. */}
+          {research.pendingStop === "end" ? <p className="idea-panel-waiting-stop" role="status">{t.waiting.pendingEnd}</p> : null}
+          {research.pendingStop === "pause" ? <p className="idea-panel-waiting-stop" role="status">{t.waiting.pendingPause}</p> : null}
+        </div>
+      ) : null}
       {budgetExhausted
         ? <p className="idea-panel-reason">{t.budgetExhausted(research.usageKnown ? research.tokens : null, research.settings.maxTokens ?? null)}</p>
         : research.reason ? <p className="idea-panel-reason">{t.reason(research.reason)}</p> : null}

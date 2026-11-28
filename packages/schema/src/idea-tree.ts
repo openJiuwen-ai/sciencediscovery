@@ -309,6 +309,10 @@ export interface IdeaResearchState {
   id: string;
   status: "running" | "pausing" | "paused" | "interrupted" | "completed" | "ended" | "budget_exhausted";
   objective: string;
+  /** A stop the engine accepted but cannot apply yet: it is observed between
+   *  steps, so it settles only after the in-flight model call returns. `end`
+   *  overwrites a queued `pause`. */
+  pendingStop?: "pause" | "end" | null;
   phase: string;
   round: number;
   batch: string[];

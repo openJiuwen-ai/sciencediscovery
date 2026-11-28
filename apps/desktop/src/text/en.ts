@@ -2571,11 +2571,33 @@ export const EN: Text = {
       budget_exhausted: "Ended (budget used up)",
     },
     phase: {
-      preflight_research: "Preparing",
-      building_tree: "Building the tree",
-      executing_leaf: "Executing a leaf",
-      aggregating_score: "Aggregating scores",
-      propagating_insight: "Propagating insight",
+      /* The engine writes the stage role into `phase` (research.py), not the
+       * legacy tree workflow's phase names. Wording follows apps/web's
+       * ideaResearch.role.* labels so the two clients say the same thing. */
+      ideate: "Ideating directions and improvements",
+      select_directions: "Selecting directions",
+      design: "Designing candidates",
+      aggregate: "Aggregating assessments",
+      propagate: "Summarizing findings",
+      complete: "Completed",
+    },
+    /** While a research is `pausing`, the engine is blocked in a model call it
+     *  only observes a stop between steps: the panel says what it is waiting
+     *  for instead of showing a bare status. No maximum is named, because none
+     *  is enforced here. */
+    waiting: {
+      call: (call: string, seconds: number) => `Waiting for the model call "${call}" to return, ${seconds}s elapsed`,
+      card: (seconds: number) => `${seconds}s`,
+      node: (id: string) => `node ${id}`,
+      /** A queued stop is one of the two controls, so the sentence names the
+       *  one that will actually be applied when the call returns. */
+      note: (stop: "pause" | "end") => stop === "end"
+        ? "The request already sent is not aborted; End is applied when this call returns."
+        : "The request already sent is not aborted; Pause is applied when this call returns.",
+      settling: "Waiting for the current step to finish before applying the stop request.",
+      pendingEnd: "An end is queued: the research ends when the current call returns.",
+      pendingPause: "A pause is queued: the research pauses when the current call returns.",
+      pendingEndShort: "End queued",
     },
     round: (round: number) => `Round ${round}`,
     batch: (done: number, total: number) => `${done}/${total} this round`,
