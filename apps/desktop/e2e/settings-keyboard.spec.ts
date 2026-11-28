@@ -7,6 +7,7 @@
  *   3. Press Escape and check the focus returns to the control that opened it.
  *   4. Open 添加模型 over the panel and walk twenty Tabs: the focus stays inside the panel and reaches the nested dialog.
  *   5. Check the backdrop starts at the rail, the rail stays clickable, and the page behind is covered.
+ *   6. Open the capability drawer inside 新增专家 and walk Tab from its 确定: the focus stays in the drawer.
  * Environment: Isolated Desktop Vite app with deterministic local API mocks.
  * Type: mocked
  * LLM: none; model behavior is deterministic fixture data.
@@ -217,4 +218,44 @@ test("背板盖住页面但留出侧栏：鼠标的出口在侧栏，键盘的�
   expect(layout.backdropStartsAtRail, "背板应当从侧栏右缘开始").toBe(true);
   expect(layout.railStillClickable, "侧栏是鼠标离开设置的出口，背板不该盖住它").toBe(true);
   expect(layout.pageBehindCovered, "设置后面的页面应当点不到").toBe(true);
+});
+
+test("技能抽屉自己折返：Tab 从抽屉的「确定」不会落到它背后的表单", async ({ page }) => {
+  await installMockApi(page, { sessions: [] });
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
+
+  await page.locator(".settings-nav-scroll").getByRole("button", { name: "专家", exact: true }).click();
+  await page.getByRole("button", { name: "新增专家", exact: true }).click();
+  await expect(page.locator(".specialist-subpage")).toBeVisible();
+
+  // 指定可用能力 makes the 配置技能 button appear, and that button opens the
+  // capability drawer. 确定 is the last control of the drawer *and* of the panel,
+  // which is the exact point where the two traps used to disagree: the panel's
+  // wrap ran first and sent the focus to the form behind the drawer.
+  await page.getByRole("radio", { name: /指定可用能力/ }).click();
+  await page.getByRole("button", { name: /配置技能/ }).click();
+  const drawer = page.locator(".settings-modal.specialist-drawer");
+  await expect(drawer).toBeVisible();
+  await drawer.getByRole("button", { name: "确定", exact: true }).focus();
+
+  const start = await page.evaluate(() => {
+    const element = document.activeElement as HTMLElement | null;
+    return { inDrawer: element?.closest(".specialist-drawer") !== null, key: element?.textContent?.trim().slice(0, 20) ?? "none" };
+  });
+  expect(start.inDrawer, `the drawer's last control was not focused (${start.key})`).toBe(true);
+
+  for (let press = 1; press <= 12; press += 1) {
+    await page.keyboard.press("Tab");
+    const step = await page.evaluate(() => {
+      const element = document.activeElement as HTMLElement | null;
+      return {
+        inDrawer: element?.closest(".specialist-drawer") !== null,
+        inPanel: element?.closest(".config-panel") !== null,
+        key: element?.getAttribute("aria-label") ?? element?.textContent?.trim().slice(0, 20) ?? "none",
+      };
+    });
+    expect(step.inDrawer, `Tab ${press} left the drawer for ${step.key} (still in the panel: ${step.inPanel})`).toBe(true);
+  }
 });

@@ -121,7 +121,6 @@ export function SystemSettingsDialog({
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
   const [specialistSubpage, setSpecialistSubpage] = useState(false);
-  const [addingSpecialist, setAddingSpecialist] = useState(false);
   /** The panel the keyboard is kept inside; see the effect below. */
   const panel = useRef<HTMLElement>(null);
 
@@ -163,11 +162,13 @@ export function SystemSettingsDialog({
     node.focus();
     const trap = (event: KeyboardEvent) => {
       if (event.key !== "Tab" || event.defaultPrevented) return;
-      // 添加模型 / 新增专家 / 技能的对话框 draw inside this panel. Only McpModal
-      // installs a Tab trap of its own; the other three move no focus on open and
-      // would let Tab walk onto the page the scrim hides, so this trap stays the
-      // one holding the boundary. A nested surface that does trap Tab claims the
-      // key first and marks it handled, which the check above already honours.
+      // 添加模型 and the two skill dialogs draw inside this panel and trap nothing;
+      // 新增专家 and 编辑专家 are pages of it (`specialist-subpage`), not dialogs.
+      // So this trap stays the one holding the boundary while any of them is open.
+      // The surfaces that do trap Tab — `McpModal`, and the capability drawer in
+      // the specialist form, whose listener sits on its own surface — handle the
+      // key before it reaches this listener and call `preventDefault()`, which the
+      // check above honours.
       const items = Array.from(node.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]):not([hidden]), textarea:not([disabled]), select:not([disabled]), a[href], summary, [tabindex="0"]'))
         .filter((item) => !item.matches(":disabled") && item.getClientRects().length > 0);
       const first = items[0], last = items.at(-1);
