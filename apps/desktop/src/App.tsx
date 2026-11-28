@@ -30,7 +30,7 @@ import { CREDITS_PROVIDER_NAME, ensureCreditsModel } from "./auth/credits-model.
 import { requiresLocalToken } from "./auth/gate.js";
 import { clearSession, readSession, saveSession, sessionRefreshDelayMs, type UserSession } from "./auth/session.js";
 import { ensureFreshAccountSession } from "./auth/session-refresh.js";
-import { LoginPage, hasAuthCallback, settleAuthCallback } from "./views/LoginPage.js";
+import { LoginPage, hasAuthCallback, settleAuthCallback, settleAuthTicket } from "./views/LoginPage.js";
 import { AccountPage, SignedOutAccount } from "./views/AccountPage.js";
 import { cancelRun, createSession, ensureInbox, getSubagent } from "./api/sessions.js";
 import { listSpecialists } from "./api/settings.js";
@@ -1801,7 +1801,19 @@ export function App({ initialToken }: Props) {
         // After signing out the account surface shows a grey avatar and the
         // single way back in; the workspace behind it stays usable with a
         // custom model.
-        <SignedOutAccount onClose={() => setAccountOpen(false)} pending={settlingAuth} />
+        <SignedOutAccount
+          onClose={() => setAccountOpen(false)}
+          pending={settlingAuth}
+          onBrowserSignIn={(ticket) => settleAuthTicket(ticket)}
+          onSignedIn={async (session, localToken) => {
+            // The panel is the account surface, so a settled sign-in swaps it
+            // for the details rather than stopping on a success summary or
+            // leaving for the workspace. authenticate() closes the panel on its
+            // ordinary path, so it is reopened on the details afterwards.
+            await authenticate(session, localToken);
+            setAccountOpen(true);
+          }}
+        />
       ) : null}
 
       {settingsOpen ? (

@@ -94,6 +94,24 @@
   margin-top: 48px;
 }
 
+/* The failure panel's two ways forward share one row: retry first, the
+   custom-model route second. Both are sized to their labels rather than to the
+   column, and the entry row's 12px gap keeps them from touching. Colours stay
+   the buttons' own: retry is the outlined one, the model route the filled one. */
+.login-actions-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-page .login-fit {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0 20px;
+  white-space: nowrap;
+}
+
 /* Step one offers both ways in at once: the account button leads, and the
    bring-your-own-model route sits beside it as a real button rather than a
    footnote-style link below. The row is set further down so the copy above it

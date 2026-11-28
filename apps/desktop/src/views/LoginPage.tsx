@@ -22,6 +22,7 @@ import {
   refreshAccountSession,
   revokeAccountSession,
 } from "../auth/account.js";
+import { browserSignInAvailable, startBrowserSignIn, type BrowserSignInFlow } from "../auth/browser-signin.js";
 import { clearSession, readSession, saveSession, sessionNeedsRefresh, type UserSession } from "../auth/session.js";
 import { acquireLocalAccessToken } from "../local-access-token.js";
 import { TEXT } from "../text.js";
@@ -63,23 +64,31 @@ export function hasAuthCallback(hash: string): boolean {
   return readAuthTicket(hash) !== undefined || readAuthorizeFailure(hash);
 }
 
-/** Exchange the callback's ticket for an account session and this machine's
- *  credential, storing both. Returns undefined when the address carries no
- *  ticket (an error callback, or no callback at all). The fragment is stripped
- *  first, so a reload cannot spend the single-use ticket twice. Used by the
- *  sign-in page and by the account panel, which settles the same callback
- *  without leaving the panel. */
+/** Exchange a ticket the account service issued for a session and this
+ *  machine's credential, storing both. Shared by the fragment callback and by
+ *  the system-browser callback, which delivers the same ticket over the shell
+ *  bridge. */
+export async function settleAuthTicket(
+  ticket: string,
+): Promise<{ session: UserSession; localToken: string }> {
+  const account = await exchangeTicket(ticket);
+  const next = accountSessionToUserSession(account, readSession(), defaultAccountName());
+  const localToken = await acquireLocalAccessToken(account.accessToken);
+  saveSession(next);
+  return { session: next, localToken };
+}
+
+/** Settle the callback the address carries: read its ticket, strip the
+ *  fragment so a reload cannot spend the single-use ticket twice, and exchange
+ *  it. Returns undefined when the address carries no ticket (an error
+ *  callback, or no callback at all). */
 export async function settleAuthCallback(
   hash: string,
 ): Promise<{ session: UserSession; localToken: string } | undefined> {
   const ticket = readAuthTicket(hash);
   if (!ticket) return undefined;
   window.history.replaceState(null, "", window.location.pathname);
-  const account = await exchangeTicket(ticket);
-  const next = accountSessionToUserSession(account, readSession(), defaultAccountName());
-  const localToken = await acquireLocalAccessToken(account.accessToken);
-  saveSession(next);
-  return { session: next, localToken };
+  return settleAuthTicket(ticket);
 }
 
 export function LoginPage({
@@ -95,6 +104,14 @@ export function LoginPage({
   const [step, setStep] = useState<Step>(() => (readSession() ? "verifying" : "idle"));
   const [entry, setEntry] = useState<Entry>("account");
   const [localToken, setLocalToken] = useState("");
+  /** True when this mount settled a real sign-in (not a cached-session restore):
+   *  the success panel then waits for the reader to enter the workspace. */
+  const [freshSignIn, setFreshSignIn] = useState(false);
+  /** Why the sign-in page is showing its failure panel: a timed-out wait says
+   *  so instead of blaming the account service for a refusal it never made. */
+  const [failure, setFailure] = useState<"error" | "timeout">("error");
+  /** The in-flight system-browser sign-in, cancelled when the page unmounts. */
+  const signInFlow = useRef<BrowserSignInFlow | null>(null);
   // Baked at build time, so this never changes while the page is mounted.
   const accountServiceConfigured = accountsConfigured();
   // Settling consumes the ticket and rotates the refresh token, so it must run
@@ -134,6 +151,7 @@ export function LoginPage({
           if (settled) {
             setSession(settled.session);
             setLocalToken(settled.localToken);
+            setFreshSignIn(true);
             setStep("done");
           }
         } catch {
@@ -197,10 +215,13 @@ export function LoginPage({
   // the session and this machine's credential are both in hand, so there is no
   // second "enter" press between a successful sign-in and the workbench.
   useEffect(() => {
-    if (step !== "done" || session === undefined || localToken === "" || entered.current) return;
+    if (step !== "done" || freshSignIn || session === undefined || localToken === "" || entered.current) return;
     entered.current = true;
     onAuthenticatedRef.current(session, localToken);
-  }, [localToken, session, step]);
+  }, [freshSignIn, localToken, session, step]);
+
+  // Leaving the page abandons a browser sign-in that has not called back yet.
+  useEffect(() => () => { signInFlow.current?.cancel(); }, []);
 
   /** The cached-session path can settle without a local credential (the loopback
    *  service was down). Re-run the whole settle rather than only the credential:
@@ -222,16 +243,50 @@ export function LoginPage({
     if (current) void revokeAccountSession(current.accessToken).catch(() => undefined);
   }
 
-  function startSignIn(): void {
+  async function startSignIn(): Promise<void> {
     // An empty base cannot start a server-owned sign-in: the navigation would be
     // answered by this app's own static host. The entry renders the "not
     // configured" notice instead, so this is only the guard behind it.
     if (!accountServiceConfigured) return;
     setStep("redirecting");
-    // This workbench has no `/login` route: the sign-in page is what `/`
-    // renders while the local service credential is missing. Returning to the
-    // root keeps the fragment on the page that exchanges the ticket.
-    window.location.assign(huaweiSignInUrl(`${window.location.origin}/`));
+    if (!browserSignInAvailable()) {
+      // Plain browser (web build, SPA dev server, Playwright): keep the
+      // same-window redirect whose fragment carries the ticket back here.
+      window.location.assign(huaweiSignInUrl(`${window.location.origin}/`));
+      return;
+    }
+    // Electron shell: the account service opens in the system browser. The
+    // shell receives the ticket on a loopback callback and forwards it here.
+    const flow = startBrowserSignIn((callbackUrl) => huaweiSignInUrl(callbackUrl));
+    signInFlow.current = flow;
+    const result = await flow.result;
+    signInFlow.current = null;
+    if (result === null) return;
+    if (!result.ticket) {
+      setFailure(result.error === "timeout" ? "timeout" : "error");
+      setStep("error");
+      return;
+    }
+    setStep("verifying");
+    try {
+      const settled = await settleAuthTicket(result.ticket);
+      setSession(settled.session);
+      setLocalToken(settled.localToken);
+      setFreshSignIn(true);
+      setStep("done");
+    } catch {
+      setFailure("error");
+      setStep("error");
+    }
+  }
+
+  /** Abandon a system-browser sign-in that has not called back yet. The entry
+   *  page already offers both ways forward — sign in again, or configure a
+   *  custom model — so this returns there rather than to the failure panel. */
+  function cancelSignIn(): void {
+    signInFlow.current?.cancel();
+    signInFlow.current = null;
+    setStep("idle");
   }
 
   return (
@@ -287,6 +342,21 @@ export function LoginPage({
                   </button>
                 </div>
               </section>
+            ) : step === "done" && freshSignIn && session ? (
+              <section>
+                <h1>{TEXT.login.successTitle}</h1>
+                <p className="login-lead is-ink">{TEXT.login.welcome(session.displayName)}</p>
+                <p className="login-lead">{TEXT.login.credits(session.balanceCredits)}</p>
+                <div className="login-actions">
+                  <button
+                    className="primary-button login-wide"
+                    onClick={() => onAuthenticated(session, localToken)}
+                    type="button"
+                  >
+                    {TEXT.login.enterWorkspace}
+                  </button>
+                </div>
+              </section>
             ) : step === "done" && session ? (
               <section>
                 <h1>{TEXT.login.title}</h1>
@@ -304,15 +374,46 @@ export function LoginPage({
                     {step === "redirecting" ? TEXT.login.redirecting : TEXT.login.verifying}
                   </p>
                 </div>
+                <p className="login-notice">{TEXT.login.waitHint}</p>
+                {step === "redirecting" ? (
+                  // Only the browser leg can be abandoned: once the ticket is in
+                  // hand the exchange is already running, and cancelling here
+                  // would let the success panel appear after the press.
+                  <div className="login-actions">
+                    <button className="secondary-button login-fit" onClick={cancelSignIn} type="button">
+                      {TEXT.login.cancelSignIn}
+                    </button>
+                  </div>
+                ) : null}
               </section>
             ) : step === "error" ? (
               <section>
                 <h1>{TEXT.login.errorTitle}</h1>
-                <p className="login-lead">{TEXT.login.errorBody}</p>
-                <div className="login-actions">
-                  <button className="primary-button login-wide" onClick={() => setStep("idle")} type="button">
-                    {TEXT.login.retry}
-                  </button>
+                <p className="login-lead">
+                  {failure === "timeout" ? TEXT.login.timeoutBody : TEXT.login.errorBody}
+                </p>
+                <div className={offerModelSetup ? "login-actions login-actions-inline" : "login-actions"}>
+                  {offerModelSetup ? (
+                    <>
+                      <button className="secondary-button login-fit" onClick={() => setStep("idle")} type="button">
+                        {TEXT.login.retry}
+                      </button>
+                      <button
+                        className="primary-button login-fit"
+                        onClick={() => {
+                          setStep("idle");
+                          setEntry("model");
+                        }}
+                        type="button"
+                      >
+                        {TEXT.login.continueToModel}
+                      </button>
+                    </>
+                  ) : (
+                    <button className="primary-button login-wide" onClick={() => setStep("idle")} type="button">
+                      {TEXT.login.retry}
+                    </button>
+                  )}
                 </div>
               </section>
             ) : (
@@ -323,7 +424,7 @@ export function LoginPage({
                   <button
                     className="login-huawei-button login-entry-primary"
                     disabled={!accountServiceConfigured}
-                    onClick={startSignIn}
+                    onClick={() => void startSignIn()}
                     type="button"
                   >
                     <span className="login-huawei-mark" aria-hidden="true">ID</span>{TEXT.login.huaweiButton}

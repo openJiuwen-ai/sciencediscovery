@@ -24,6 +24,7 @@ import {
   type AccountUsageRecord,
 } from "../auth/account.js";
 import { useLanguage } from "../app/use-language.js";
+import { browserSignInAvailable, startBrowserSignIn, type BrowserSignInFlow } from "../auth/browser-signin.js";
 import type { UserSession } from "../auth/session.js";
 import { TEXT } from "../text.js";
 import {
@@ -534,7 +535,72 @@ export function AccountPage({
  * action that changes that. The workspace stays behind it — a custom-model
  * workspace keeps working without an account, and signing in can wait.
  */
-export function SignedOutAccount({ pending = false, onClose }: { pending?: boolean; onClose?: () => void }) {
+export function SignedOutAccount({ pending = false, onClose, onBrowserSignIn, onSignedIn }: {
+  pending?: boolean;
+  onClose?: () => void;
+  /** Exchange a ticket from the system-browser sign-in. Rejects on failure. */
+  onBrowserSignIn: (ticket: string) => Promise<{ session: UserSession; localToken: string }>;
+  /** Adopt the settled session: the panel swaps straight to the account details.
+   *  The install-time config page is the only place that stops on a success
+   *  summary — here the panel is already the account surface. Awaited, so the
+   *  pending state lasts until the session is really adopted. */
+  onSignedIn: (session: UserSession, localToken: string) => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  /** True once the ticket is being exchanged: the browser leg has finished, so
+   *  there is nothing left for the reader to cancel. */
+  const [exchanging, setExchanging] = useState(false);
+  const flow = useRef<BrowserSignInFlow | null>(null);
+  // Leaving the panel abandons a browser sign-in that has not called back yet.
+  useEffect(() => () => { flow.current?.cancel(); }, []);
+
+  async function startSignIn(): Promise<void> {
+    if (!accountsConfigured()) return;
+    setFailed(false);
+    if (!browserSignInAvailable()) {
+      // Plain browser (web build, SPA dev server): keep the same-window
+      // redirect that the app settles from `?account=1` and the fragment.
+      window.location.assign(huaweiSignInUrl(`${window.location.origin}/?account=1`));
+      return;
+    }
+    setBusy(true);
+    const current = startBrowserSignIn((callbackUrl) => huaweiSignInUrl(callbackUrl));
+    flow.current = current;
+    const result = await current.result;
+    flow.current = null;
+    if (result === null) {
+      setBusy(false);
+      return;
+    }
+    if (!result.ticket) {
+      setBusy(false);
+      setFailed(true);
+      return;
+    }
+    setExchanging(true);
+    try {
+      const settled = await onBrowserSignIn(result.ticket);
+      await onSignedIn(settled.session, settled.localToken);
+    } catch {
+      setFailed(true);
+    } finally {
+      setExchanging(false);
+      setBusy(false);
+    }
+  }
+
+  const waiting = pending || busy;
+
+  /** Abandon a system-browser sign-in that has not called back yet: the panel
+   *  returns to its signed-out state, which still offers both ways forward. */
+  function cancelSignIn(): void {
+    flow.current?.cancel();
+    flow.current = null;
+    setBusy(false);
+    setFailed(false);
+  }
+
   return (
     <div className="account-page">
       {onClose ? (
@@ -561,19 +627,31 @@ export function SignedOutAccount({ pending = false, onClose }: { pending?: boole
               <path d="M5.5 19.2c.9-3 3.4-4.7 6.5-4.7s5.6 1.7 6.5 4.7" />
             </svg>
           </span>
-          {pending ? (
-            // The HUAWEI callback is being exchanged: this panel is where the
-            // sign-in started, so it is also where the wait belongs.
-            <p className="account-signin-pending">
-              <span className="login-spinner" aria-hidden="true" />
-              {TEXT.login.verifying}
-            </p>
+          {waiting ? (
+            // The HUAWEI sign-in is in flight: the browser is open, or the
+            // callback is being exchanged.
+            <>
+              <p className="account-signin-pending">
+                <span className="login-spinner" aria-hidden="true" />
+                {TEXT.login.verifying}
+              </p>
+              {busy && !exchanging ? (
+                <button className="account-secondary" onClick={cancelSignIn} type="button">
+                  {TEXT.login.cancelSignIn}
+                </button>
+              ) : null}
+            </>
+          ) : failed ? (
+            <div className="account-signin-failed">
+              <p className="account-signin-notice" role="status">{TEXT.login.browserFailed}</p>
+              <button className="login-huawei-button account-signin" onClick={() => void startSignIn()} type="button">
+                <span className="login-huawei-mark" aria-hidden="true">ID</span>{TEXT.login.retry}
+              </button>
+            </div>
           ) : accountsConfigured() ? (
             <button
               className="login-huawei-button account-signin"
-              // `?account=1` is how the panel survives the full-page redirect:
-              // the shell reads it back and reopens these details after signing in.
-              onClick={() => window.location.assign(huaweiSignInUrl(`${window.location.origin}/?account=1`))}
+              onClick={() => void startSignIn()}
               type="button"
             >
               <span className="login-huawei-mark" aria-hidden="true">ID</span>{TEXT.login.huaweiButton}
