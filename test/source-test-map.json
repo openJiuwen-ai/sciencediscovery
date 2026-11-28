@@ -1471,6 +1471,18 @@
       ]
     },
     {
+      "source": "services/api/src/http/research-package-refusal.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/http/research-package-refusal.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "services/api/src/http/execution-readiness.ts",
       "risk": "P1",
       "owner": "api",
