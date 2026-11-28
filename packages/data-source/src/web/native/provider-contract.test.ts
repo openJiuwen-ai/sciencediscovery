@@ -27,6 +27,18 @@ test("native provider normalizers preserve bounded result shapes and empty-page 
   assert.equal(renderExaContents({ results: [] }), "Error: No results found");
 });
 
+test("native provider normalizers decode named references in titles and descriptions", () => {
+  // The search adapter feeds every Brave title/description through the shared
+  // extractor, so an entity-heavy result must reach the model as text.
+  assert.deepEqual(
+    normalizeBraveResults(
+      JSON.stringify({ web: { results: [{ title: "Caf&eacute; &mdash; review", description: "5&ndash;10 &hellip; O&apos;Brien &diams;", url: "https://a" }] } }),
+      5,
+    ),
+    [{ title: "Caf\u00E9 \u2014 review", content: "5\u201310 \u2026 O'Brien \u2666", url: "https://a" }],
+  );
+});
+
 test("native HTTP error classification keeps provider failures actionable", () => {
   assert.equal(statusErrorCode(401), "unauthorized");
   assert.equal(statusErrorCode(429), "rate-limited");
