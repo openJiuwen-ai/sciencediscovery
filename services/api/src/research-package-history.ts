@@ -103,6 +103,15 @@ export function remapRunEvent<T>(value: T, ids: ResearchPackageIds): T {
     if (!item || typeof item !== "object") return item;
     if (context === "references") {
       const reference = item as ComposerReference;
+      // `references` is not the composer's alone: a tool call's own record keeps its
+      // citation list under that key (`{refsource, reftype, pmid, note}`), which has no
+      // `id` and no `kind`. Rewriting it as a ComposerReference called
+      // `ids.id(undefined)`, threw inside `source.match`, and the server answered a
+      // valid import with 400 and that raw TypeError (#1520). Only a reference that
+      // actually carries an id is rewritten; anything else is walked and left as it is.
+      if (typeof (reference as { id?: unknown }).id !== "string") {
+        return Object.fromEntries(Object.entries(item).map(([key, child]) => [key, visit(child, key)]));
+      }
       return { ...reference, id: ["skill", "dbrecord"].includes(reference.kind) ? reference.id : ids.id(reference.id),
         ...(reference.sessionId ? { sessionId: ids.id(reference.sessionId) } : {}),
         ...(reference.projectId ? { projectId: ids.id(reference.projectId) } : {}) };
