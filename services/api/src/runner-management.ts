@@ -8,6 +8,7 @@ import { effectiveRunnerIds, type RunnerTarget, type RemoteRunnerStatus, type Cr
 import type { SessionStore } from "./store.js";
 import { resolveEnvironmentInstallRequest } from "./environment-sources.js";
 import { remoteWorkspaceKey } from "./remote-runner.js";
+import { decodePathParam } from "./http/path-params.js";
 
 /**
  * The built-in endpoint and registered endpoints share one observable catalog.
@@ -64,7 +65,7 @@ export async function manageRunnerEnvironment(runner: RunnerClient, store: Sessi
   if (path === "environments" && method === "POST") return runner.createEnvironment(body as CreateEnvironmentRequest);
   const match = path.match(/^environments\/([^/]+)(?:\/(install|uninstall))?$/);
   if (match) {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodePathParam(match[1]!, "environmentId");
     if (!match[2] && method === "DELETE") { await runner.deleteEnvironment(id); return { deleted: id }; }
     if (match[2] && method === "POST") {
       let revision;

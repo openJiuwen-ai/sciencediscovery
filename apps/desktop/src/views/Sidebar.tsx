@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { commitsOnEnter } from "../app/ime-enter.js";
 import { projectWithName } from "../app/project-name.js";
@@ -20,7 +20,8 @@ import type { WorkspaceActions } from "../app/use-workspace.js";
 import { byRecency, untitled } from "../app/session-order.js";
 import { formatStars, REPO_URL, useGithubStars } from "../app/use-github-stars.js";
 import { openFeedback } from "../feedback/open.js";
-import type { Project, Session } from "../api/types.js";
+import type { Project, Session, WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
+import { SearchDialog, type SearchKindFilter } from "./SearchDialog.js";
 import { TEXT } from "../text.js";
 import { PromptDialog } from "./PromptDialog.js";
 import { RowMenu, type MenuState } from "./RowMenu.js";
@@ -38,6 +39,12 @@ type Renaming =
 
 interface Props {
   actions: WorkspaceActions;
+  /** The field asks the workspace to run `GET /api/search`. The field is drawn
+   *  only when this is given: a column rendered without a workspace has nothing
+   *  to search. */
+  onSearch?: (query: string) => void;
+  /** A result was chosen: a Session opens, a Project switches, an artifact opens. */
+  onSearchOpen?: (result: WorkbenchSearchResult) => void;
   onExportSession?: (session: Session) => void;
   onImportSession?: () => void;
   /** The Project of the open Session, for the fold's highlight. */
@@ -51,6 +58,12 @@ interface Props {
   recent: Session[];
   /** Whether the open Session is running a task, which its row shows. */
   running?: boolean;
+  /** What `GET /api/search` answered for the current query, if anything. */
+  searchResults?: WorkbenchSearchResponse;
+  /** Why the last search failed, when it did. */
+  searchError?: string;
+  /** The query the results belong to; the field is controlled from the workspace. */
+  searchQuery?: string;
   sessionsByProject: Record<string, Session[]>;
 }
 
@@ -156,6 +169,11 @@ export function Sidebar({
   projects,
   recent,
   running,
+  searchError,
+  searchQuery = "",
+  searchResults,
+  onSearch,
+  onSearchOpen,
   sessionsByProject,
 }: Props) {
   const [menu, setMenu] = useState<MenuState>();
@@ -170,6 +188,38 @@ export function Sidebar({
    *  others. */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const stars = useGithubStars();
+  /** Whether the dialog is open. The column spends no row on search any more:
+   *  the magnifier in the title row opens it over the page. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  /** 全部 groups every hit by kind; a kind shows only that kind. */
+  const [searchKind, setSearchKind] = useState<SearchKindFilter>("all");
+  /** The magnifier that opened the dialog, so closing it returns the focus. */
+  const magnifier = useRef<HTMLButtonElement>(null);
+
+  /** Closing is one gesture wherever it starts — ×, the overlay, Escape: the
+   *  query clears and the focus goes back to what opened the dialog. Picking a
+   *  hit is not closing, because the app is about to move the reader somewhere. */
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchKind("all");
+    onSearch?.("");
+    magnifier.current?.focus();
+  };
+
+  useEffect(() => {
+    // The shortcut is bound to the window, and a renderer that has none (the
+    // component tests render on react-test-renderer) has nothing to bind to.
+    if (typeof document === "undefined") return;
+    // The palette shortcut every editor uses: Cmd+K on macOS, Ctrl+K elsewhere.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const anchor = (event: { clientX: number; clientY: number }) => ({
     x: event.clientX,
@@ -334,9 +384,26 @@ export function Sidebar({
   };
 
   return (
-    <aside className="sidebar">
+    <>
+      <aside className="sidebar">
       <div className="side-head">
         <span className="side-title">{TEXT.sidebar.title}</span>
+        {onSearch === undefined ? null : (
+          <button
+            aria-label={TEXT.sidebar.searchLabel}
+            className="side-head-button"
+            onClick={() => setSearchOpen(true)}
+            ref={magnifier}
+            title={TEXT.sidebar.searchLabel}
+            type="button"
+          >
+            <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round"
+              strokeWidth="1.8" viewBox="0 0 24 24" width="16">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m16.5 16.5 4 4" />
+            </svg>
+          </button>
+        )}
         {onToggleSidebar ? <SidebarToggle onClick={onToggleSidebar} open /> : null}
       </div>
 
@@ -519,6 +586,27 @@ export function Sidebar({
       ) : null}
 
       <RowMenu menu={menu} onClose={() => setMenu(undefined)} />
-    </aside>
+      </aside>
+
+      {searchOpen && onSearch !== undefined ? (
+        <SearchDialog
+          error={searchError}
+          kind={searchKind}
+          onClose={closeSearch}
+          onKind={setSearchKind}
+          onPick={(result) => {
+            setSearchOpen(false);
+            setSearchKind("all");
+            onSearchOpen?.(result);
+          }}
+          onQuery={(query) => {
+            onSearch(query);
+          }}
+          onRetry={() => onSearch(searchQuery.trim())}
+          query={searchQuery}
+          results={searchResults}
+        />
+      ) : null}
+    </>
   );
 }

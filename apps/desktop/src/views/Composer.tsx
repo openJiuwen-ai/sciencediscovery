@@ -317,6 +317,68 @@ function NoneGlyph() {
 }
 
 /**
+ * Scroll a list so its current row is visible, scrolling the list alone.
+ *
+ * `scrollIntoView` moves every scrollable ancestor, and the shell hides its
+ * horizontal overflow: opening 专家 scrolled the shell sideways and dragged the
+ * whole composer with it, so the flyout was measured against a position the
+ * page no longer had. Nothing outside the list may move.
+ */
+function scrollRowIntoList(list: HTMLDivElement | null) {
+  if (list === null) return;
+  const row = list.querySelector<HTMLElement>('[aria-current="true"]');
+  if (row === null) return;
+  const listRect = list.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  if (rowRect.top < listRect.top) list.scrollTop += rowRect.top - listRect.top;
+  else if (rowRect.bottom > listRect.bottom) list.scrollTop += rowRect.bottom - listRect.bottom;
+}
+
+/**
+ * Where a flyout goes when the window cannot hold it beside its column.
+ *
+ * A flyout opens to the right of the card it belongs to. Near the window's
+ * right edge that puts its own right edge outside the viewport, where the
+ * shell's `overflow-x: hidden` clips it: the border and the end of every line
+ * disappear, and there is no scrollbar that could reach them. Measured on mount
+ * and on resize, so the flyout slides left just enough to fit instead of
+ * crossing the edge.
+ *
+ * `style` stays `undefined` while the stylesheet's own `left: calc(100% + 4px)`
+ * fits, so the ordinary window carries no inline geometry at all.
+ */
+function useFlyoutPlacement() {
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  const [left, setLeft] = useState<number>();
+
+  useLayoutEffect(() => {
+    if (node === null) return;
+    const place = () => {
+      const host = node.offsetParent as HTMLElement | null;
+      if (host === null) return;
+      const margin = 8;
+      const hostRect = host.getBoundingClientRect();
+      // An absolutely positioned box is laid out from its containing block's
+      // padding box, which is where the stylesheet's percentage starts too.
+      const hostLeft = hostRect.left + host.clientLeft;
+      const width = node.getBoundingClientRect().width;
+      const room = window.innerWidth - margin;
+      setLeft(hostLeft + host.clientWidth + 4 + width <= room
+        ? undefined
+        : Math.max(0, room - width - hostLeft));
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [node]);
+
+  return {
+    ref: setNode,
+    style: left === undefined ? undefined : { left: `${left}px` },
+  };
+}
+
+/**
  * 权限模式's choices, beside the row that opened them.
  *
  * Each option says under its name what it allows. That sentence used to be a
@@ -341,8 +403,10 @@ export function PermissionFlyout({
    *  only when the new policy covers it. */
   running?: boolean;
 }) {
+  const flyout = useFlyoutPlacement();
+
   return (
-    <div className="session-menu-flyout">
+    <div className="session-menu-flyout" ref={flyout.ref} style={flyout.style}>
       <button
         aria-describedby="session-permission-ask-desc"
         aria-label={TEXT.composer.permission}
@@ -466,6 +530,8 @@ export function SessionSettingsMenu({
   selectedSpecialistId?: string;
 }) {
   const [panel, setPanel] = useState<SettingsPanel>();
+  const reviewerFlyout = useFlyoutPlacement();
+  const expertsFlyout = useFlyoutPlacement();
   const selectedExpert = (experts ?? []).find((row) => row.id === selectedSpecialistId);
   const toggle = (next: SettingsPanel) => setPanel((current) => (current === next ? undefined : next));
 
@@ -616,7 +682,7 @@ export function SessionSettingsMenu({
         </div>
 
         {panel === "reviewer" ? (
-          <div className="session-menu-flyout">
+          <div className="session-menu-flyout" ref={reviewerFlyout.ref} style={reviewerFlyout.style}>
             {REVIEWER_LEVELS.map((level) => (
               <button
                 className={`session-flyout-row${reviewLevel === level ? " is-selected" : ""}`}
@@ -722,17 +788,18 @@ export function ExpertFlyout({
 }) {
   const [query, setQuery] = useState("");
   const list = useRef<HTMLDivElement>(null);
+  const flyout = useFlyoutPlacement();
   const shown = filterExperts(specialists, query);
 
   // The list can be longer than the card; opening it on the bound expert is
   // what shows the reader where the session stands, without hunting for the
   // tick.
   useEffect(() => {
-    list.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+    scrollRowIntoList(list.current);
   }, []);
 
   return (
-    <div className="session-menu-flyout is-experts">
+    <div className="session-menu-flyout is-experts" ref={flyout.ref} style={flyout.style}>
       <label className="expert-search">
         <SearchGlyph />
         <input
@@ -848,7 +915,7 @@ export function ModelMenu({
   // With more models than the list can show, the one in use may start below
   // the fold. Put it in view without moving the card.
   useEffect(() => {
-    list.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
+    scrollRowIntoList(list.current);
   }, [selectedId]);
 
   return (

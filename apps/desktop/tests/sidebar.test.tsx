@@ -21,6 +21,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
+import { EN } from "../src/text/en.js";
 import { Sidebar } from "../src/views/Sidebar.js";
 
 const actions = { openSession: async () => {}, newSession: () => {}, createProject: async () => {} } as unknown as WorkspaceActions;
@@ -72,10 +73,18 @@ test("a project lists its sessions most recently used first", () => {
   assert.ok(markup.indexOf("较新的会话") < markup.indexOf("较早的会话"));
 });
 
-test("the task column has no search field under 新建会话", () => {
-  const markup = render({ recent: [session("s1", "结构比对")] });
-  assert.doesNotMatch(markup, /side-search/);
-  assert.doesNotMatch(markup, /type="search"/);
+test("the title row carries the 搜索 magnifier, and the column spends no row on it", () => {
+  const markup = render({ onSearch: () => {}, recent: [session("s1", "结构比对")] });
+  const button = markup.indexOf('class="side-head-button"');
+  assert.ok(button >= 0, "the magnifier is missing from the title row");
+  assert.match(markup.slice(Math.max(0, button - 240), button + 240), /aria-label="搜索"/u, "it is named for a screen reader");
+  assert.doesNotMatch(markup, /side-search-entry/, "the old 搜索 row is gone");
+  assert.doesNotMatch(markup, /type="search"/, "and no field is drawn in the column at all");
+  assert.doesNotMatch(markup, /search-panel/, "the dialog is not part of the resting markup");
+
+  // A column rendered without a workspace has nothing to search.
+  const bare = render({ recent: [session("s1", "结构比对")] });
+  assert.doesNotMatch(bare, /side-head-button/);
 });
 
 test("a session row carries the double-click rename as its own tooltip", () => {

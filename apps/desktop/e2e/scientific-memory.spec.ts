@@ -40,6 +40,8 @@
  * is off or gone, and the state beside the switch that decides it.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 
 import { MEMORY_STATUS_POLL_MS } from "../src/views/MemoryStatus.js";
 import {
@@ -313,13 +315,27 @@ const LONG_REPORT_BODY = "# 报告\n\n甲烷转化率提升 [evidence1]。长文
 
 /** Open the workspace panel on 产物 and open the report, which renders its
  *  citations as chips. */
-async function openReport(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "工作区面板" }).click();
+async function openReport(page: Page, locale = "zh-CN"): Promise<Locator> {
+  const en = locale === "en";
+  await page.getByRole("button", { name: en ? "Workspace panel" : "工作区面板" }).click();
   const panel = page.locator(".workspace-panel");
-  await panel.getByRole("tab", { name: "产物" }).click();
+  await panel.getByRole("tab", { name: en ? "Artifacts" : "产物" }).click();
   await panel.getByRole("button", { name: "report.md" }).click();
   await expect(panel.locator(".doc-body")).toContainText("甲烷转化率提升");
   return panel;
+}
+
+/** Review evidence for a destructive action: one PNG per state and locale, and
+ *  only when REVIEW_SCREENSHOTS_DIR names a directory, so an ordinary run
+ *  writes nothing. Same opt-in as research-package.spec.ts uses. */
+async function capture(page: Page, state: string, locale: string): Promise<void> {
+  const dir = process.env.REVIEW_SCREENSHOTS_DIR;
+  if (!dir) return;
+  await mkdir(dir, { recursive: true });
+  await page.screenshot({
+    path: join(dir, `${state}-${locale === "en" ? "en" : "zh"}.png`),
+    animations: "disabled",
+  });
 }
 
 function lastCall(mock: Mock, path: string): JsonRecord | undefined {
@@ -397,6 +413,66 @@ test("a report's evidence chip opens its details and provenance", async ({ page 
   expect(chainCalls).toHaveLength(1);
   expect(JSON.parse(chainCalls[0]!.body!).kind).toBe("viewSourcePaper");
 });
+
+// The journey runs once per locale: the delete affordance, the confirmation and
+// the post-delete not-found chip are user-facing text, and the review evidence
+// (REVIEW_SCREENSHOTS_DIR) has to show each of them in both languages.
+for (const locale of ["zh-CN", "en"]) {
+test(`a citation card deletes one evidence record and the report keeps working (${locale})`, async ({ page }) => {
+  const en = locale === "en";
+  const deleteLabel = en ? "Delete this memory" : "删除这条记忆";
+  const notFoundTitle = en ? "This memory was not found" : "没有找到这条记忆";
+  await page.addInitScript((value) => localStorage.setItem("sciencediscovery-desktop:locale", value), locale);
+  const mock = await installMockApi(page, {
+    artifactContents: {
+      "input-version-1": "样品,强度\nA,12.5\n",
+      "version-1": REPORT_BODY,
+    },
+    artifactsBySession: { [SESSION]: [REPORT_OUTPUT, INPUT_OUTPUT] },
+    memory: MEMORY,
+    sessions: [makeSession()],
+  });
+  await page.goto("/");
+  const panel = await openReport(page, locale);
+
+  await panel.locator(".graph-chip").filter({ hasText: "evidence1" }).click();
+  const card = page.locator(".memory-dialog");
+  await expect(card).toBeVisible();
+  const remove = card.getByRole("button", { name: deleteLabel });
+  await expect(remove).toBeVisible();
+  await capture(page, "20-citation-card-delete", locale);
+
+  await remove.click();
+  const confirmation = page.locator(".modal-panel").filter({ hasText: en ? "Delete this memory?" : "删除这条记忆？" });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText("在 350 °C 下，甲烷转化率提升至 92%。");
+  await expect(confirmation).toContainText(en ? "citation will show “not found”" : "引用会显示“未找到”");
+  await capture(page, "21-confirm-delete", locale);
+
+  // Cancel sends nothing and leaves the card, and its record, in place.
+  await confirmation.locator("button.secondary-button").click();
+  await expect(card).toBeVisible();
+  expect(mock.calls.filter((call) => call.path === "/api/memory/delete/node")).toHaveLength(0);
+
+  await remove.click();
+  await confirmation.getByRole("button", { name: en ? "Delete" : "删除", exact: true }).click();
+  await expect(card).toHaveCount(0);
+  const deletion = lastCall(mock, "/api/memory/delete/node");
+  expect(JSON.parse(deletion!.body!)).toEqual({
+    node_id: "evidence-1",
+    node_type: "Evidence",
+    session_id: SESSION,
+  });
+
+  // The report is still readable; its chip now opens the existing not-found
+  // card, without a delete action for a record that no longer exists.
+  await expect(panel.locator(".doc-body")).toContainText("甲烷转化率提升");
+  await panel.locator(".graph-chip").filter({ hasText: "evidence1" }).click();
+  await expect(card).toContainText(notFoundTitle);
+  await expect(card.getByRole("button", { name: deleteLabel })).toHaveCount(0);
+  await capture(page, "22-chip-not-found", locale);
+});
+}
 
 test("a report's artifact chip opens the artifact itself, in a dialog over the report", async ({ page }) => {
   const mock = await installMockApi(page, {

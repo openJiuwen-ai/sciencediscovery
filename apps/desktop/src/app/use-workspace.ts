@@ -29,7 +29,12 @@ import { changedFiles } from "./file-changes.js";
 import { changesPanel, createPanelRefresh, type PanelRefresh } from "./panel-refresh.js";
 import { fileName } from "./paths.js";
 import { byRecency, reusableDraft, resumeOnBoot, withConversation } from "./session-order.js";
+import { searchWorkbench } from "../api/workbench.js";
 import { forgetProject, membershipAfterRead } from "./session-filter.js";
+import {
+  artifactHitPlan, isSearchable, pendingArtifactHit, SEARCH_DEBOUNCE_MS, withoutArchivedHits, type PendingArtifact,
+} from "./session-search.js";
+
 import { sessionTitle } from "./session-title.js";
 import { formatByteLimit, splitBySize } from "./upload.js";
 import {
@@ -95,6 +100,8 @@ import type {
   SessionRun,
   SessionRunStatus,
   SessionReviewerSpecialistSettings,
+  WorkbenchSearchResponse,
+  WorkbenchSearchResult,
   WorkspaceFile,
 } from "../api/types.js";
 import { closeRunStream, reduceRunStream } from "../run-stream/reducer.js";
@@ -203,6 +210,10 @@ export interface WorkspaceState {
   running: boolean;
   selectedModelId?: string;
   sessionId?: string;
+  /** The query the search field holds, and what `GET /api/search` answered. */
+  searchQuery: string;
+  searchResults?: WorkbenchSearchResponse;
+  searchError?: string;
   /** Every Project's Sessions, keyed by Project id and including the inbox.
    *  The sidebar reads a Project's list from here; `recent` is the inbox's
    *  slice of it. */
@@ -235,6 +246,10 @@ export interface WorkspaceActions {
   deleteSession: (session: Session, onSettled?: () => void) => void;
   /** The inverse; nothing is destroyed, so it does not ask. */
   restoreSession: (session: Session) => Promise<void>;
+  /** The sidebar's search field: debounced `GET /api/search`. */
+  search: (query: string) => void;
+  /** Open what a result names. */
+  openSearchResult: (result: WorkbenchSearchResult) => void;
   /** The same gate for a Project: accepting removes it with every Session it
    *  holds, and the open conversation if it was one of them. */
   deleteProject: (project: Project) => void;
@@ -383,6 +398,31 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   const [projects, setProjects] = useState<Project[]>([]);
   const [inboxProject, setInboxProject] = useState<Project>();
   const [sessionsByProject, setSessionsByProject] = useState<Record<string, Session[]>>({});
+  // The listing is unfiltered now — archived Sessions are read for membership
+  // and the sidebar draws the active subset — so there is no three-way state to
+  // keep here any more.
+
+  /** The query the field holds, the answer it produced and why it failed. */
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchAnswer, setSearchResults] = useState<WorkbenchSearchResponse>();
+  const [searchError, setSearchError] = useState<string>();
+  /** Ids of the Sessions the last listing read as archived, for the search
+   *  rules. Kept as state rather than a ref: a listing that lands after the
+   *  answer has to re-run the filter, not leave archived hits on screen. */
+  const [archivedIds, setArchivedIds] = useState<ReadonlySet<string>>(new Set());
+  const searchTicket = useRef(0);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** A search hit for an artifact, waiting for the panel to list it. */
+  const pendingArtifact = useRef<PendingArtifact | undefined>(undefined);
+  /**
+   * Bumped by every artifact hit.
+   *
+   * A hit for the Session that is already open changes neither `sessionId` nor
+   * `outputs`, so an effect keyed on those alone would never run for it and the
+   * click would close the results and open nothing. The pending ref carries the
+   * what; this counter is what makes the effect re-read it.
+   */
+  const [artifactTicket, setArtifactTicket] = useState(0);
   /** The newest list read, so a superseded one cannot paint over it. */
   const refreshTicket = useRef(0);
   /** Every Session a read has seen, archived ones included. Pruning runs against
@@ -867,7 +907,11 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       if (ticket !== refreshTicket.current) return undefined;
       setProjects(known);
       const sessions = entries.flatMap(([, list]) => list);
-      // Archived Sessions are read for membership, not for the list.
+      // Archived Sessions are read for membership, not for the list — and for the
+      // search, which has to answer "is this hit archived?" for artifacts too.
+      setArchivedIds(new Set(
+        sessions.filter((session) => session.archivedAt !== undefined).map((session) => session.id),
+      ));
       const drawn = sessions.filter((session) => session.archivedAt === undefined);
       setSessionsByProject(Object.fromEntries(
         entries.map(([id, list]) => [id, list.filter((session) => session.archivedAt === undefined)]),
@@ -891,6 +935,35 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       return undefined;
     }
   }, [client, pruneArtifacts, readSessionArtifacts, report]);
+
+  /** Ask the route for a query, once it settles.
+   *
+   *  The route matches names and titles; the field's copy says so. Each request
+   *  takes a ticket so an answer for an older query cannot paint over a newer
+   *  one, and the timer is cleared on every keystroke. */
+  const search = useCallback((query: string) => {
+    setSearchQuery(query);
+    setSearchError(undefined);
+    searchTicket.current += 1;
+    const ticket = searchTicket.current;
+    if (searchTimer.current !== undefined) clearTimeout(searchTimer.current);
+    if (!isSearchable(query)) {
+      setSearchResults(undefined);
+      return;
+    }
+    searchTimer.current = setTimeout(() => {
+      void searchWorkbench(client, query.trim())
+        .then((response) => {
+          if (ticket !== searchTicket.current) return;
+          setSearchResults(response);
+        })
+        .catch((reason: unknown) => {
+          if (ticket !== searchTicket.current) return;
+          // The route's own sentence, not a rewrite of it.
+          setSearchError(reason instanceof Error ? reason.message : TEXT.sidebar.searchFailed);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+  }, [client]);
 
 
   /**
@@ -2297,6 +2370,26 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   );
 
   /**
+   * Finish an artifact search hit: the panel lists a Session's artifacts after
+   * `openSession` reads it, so the document opens when its output turns up.
+   *
+   * The wait is dropped as soon as the reader is on another Session — opening a
+   * document they have already left would put it over the wrong conversation.
+   */
+  useEffect(() => {
+    const pending = pendingArtifact.current;
+    if (pending === undefined) return;
+    if (sessionId !== pending.sessionId) {
+      pendingArtifact.current = undefined;
+      return;
+    }
+    const hit = pendingArtifactHit(outputs, pending);
+    if (hit === undefined) return;
+    pendingArtifact.current = undefined;
+    void openArtifact(hit);
+  }, [artifactTicket, openArtifact, outputs, sessionId]);
+
+  /**
    * Show another version of the artifact a tab already holds.
    *
    * The tab keeps its id and its place in the strip: a version is a property of
@@ -2462,11 +2555,25 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
   // Session nobody has written in is not a row the reader asked for.
   const listedByProject = useMemo(() => {
     const listed: Record<string, Session[]> = {};
+    // The column lists every active Session: the narrowings belong to the search
+    // results, not to which Sessions exist. A draft nobody has written in is not
+    // a row the reader asked for, which `withConversation` already settles.
     for (const [projectId, sessions] of Object.entries(sessionsByProject)) {
       listed[projectId] = withConversation(sessions);
     }
     return listed;
   }, [sessionsByProject]);
+
+  /**
+   * The route's answer with the one rule a search keeps: an archived Session is
+   * not searchable — and neither are its artifacts — while an imported read-only
+   * snapshot is, because 活跃 is archived versus live rather than writable versus
+   * read-only. A hit whose Session this page never read is kept.
+   */
+  const searchResults = useMemo(
+    () => (searchAnswer === undefined ? undefined : withoutArchivedHits(searchAnswer, archivedIds).answer),
+    [archivedIds, searchAnswer],
+  );
 
   // 会话 is the inbox's own list, not every Session in the workspace: the
   // user's Projects show their Sessions under their own fold.
@@ -2490,11 +2597,46 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
       ? TEXT.sidebar.recent
       : activeProject.name;
 
+  /** Open what a result names: a Session, a Project, or an artifact's Session —
+   *  and, for an artifact, the document itself once the panel lists it. */
+  const openSearchResult = useCallback((result: WorkbenchSearchResult) => {
+    setSearchQuery("");
+    setSearchResults(undefined);
+    if (result.kind === "project") {
+      // `result.id` is `project:<id>`; the Project actions take the bare id the
+      // rest of the API uses, which is why the hit carries `projectId`.
+      selectProject(result.projectId);
+      return;
+    }
+    if (result.sessionId === undefined) return;
+    if (result.kind === "artifact") {
+      // The id has to be the bare one — the route composes `artifact:<id>`, and
+      // `pendingArtifactHit` compares it with `output.artifact.id`. A hit for the
+      // Session already open has its outputs in hand, so it opens at once; any
+      // other is held until the read `openSession` starts lists them — which is
+      // why that read is started below, not assumed.
+      const plan = artifactHitPlan(outputs, { id: result.id, sessionId: result.sessionId }, sessionId);
+      if ("open" in plan) {
+        void openArtifact(plan.open);
+        return;
+      }
+      pendingArtifact.current = plan.pending;
+      setArtifactTicket((ticket) => ticket + 1);
+      void openSession(result.sessionId);
+      return;
+    }
+    pendingArtifact.current = undefined;
+    void openSession(result.sessionId);
+  }, [openArtifact, openSession, outputs, selectProject, sessionId]);
+
+
   const actions: WorkspaceActions = useMemo(
     () => ({
       clearAttachments,
       closeTab,
       confirmAction,
+      search,
+      openSearchResult,
       createProject: createProjectAndOpen,
       deleteProject: (project) =>
         confirmAction({
@@ -2700,6 +2842,9 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
     run,
     running,
     selectedModelId,
+    searchQuery,
+    searchResults,
+    searchError,
     sessionId,
     sessionsByProject: listedByProject,
     tabs,

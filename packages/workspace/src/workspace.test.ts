@@ -2725,6 +2725,92 @@ test("Shell progress observation failures and aborts preserve execution semantic
   assert.equal(logs, 1, "ordinary calls do not read live logs");
 });
 
+test("run_shell foreground wait preserves the full wait_ms budget across a clock tick before the first wait", async () => {
+  const job = { id: "job", state: "running" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const completed = { id: "job", state: "completed" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const waits: number[] = [];
+  let waitResult = job;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("unused"); },
+    shellExecutions: {
+      start: async () => job,
+      wait: async (_id, ms) => { waits.push(ms); return waitResult; },
+      logs: async () => ({ chunks: [], nextCursor: 0, retentionTruncated: false, truncated: false }),
+      get: async () => waitResult, list: () => [waitResult], cancel: async () => waitResult,
+    },
+  });
+  const shell = tools.find((tool) => tool.name === "run_shell")!;
+  const originalNow = Date.now;
+  let now = 1_000;
+  Date.now = () => now++;
+  try {
+    await shell.execute("foreground-plain", { command: "echo next", wait_ms: 5 });
+    assert.deepEqual(waits, [5]);
+
+    waits.length = 0;
+    waitResult = completed;
+    await shell.execute("foreground-progress", { command: "echo next", wait_ms: 5 }, undefined, () => {});
+    assert.deepEqual(waits, [5]);
+
+    waits.length = 0;
+    waitResult = job;
+    await shell.execute("foreground-zero-plain", { command: "echo next", wait_ms: 0 });
+    assert.deepEqual(waits, [0]);
+
+    waits.length = 0;
+    await shell.execute("foreground-zero-progress", { command: "echo next", wait_ms: 0 }, undefined, () => {});
+    assert.deepEqual(waits, [0]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("run_shell foreground progress polling clamps waits to 250 ms and decrements remaining budget deterministically", async () => {
+  const job = { id: "job", state: "running" } as import("@sciencediscovery/schema").AgentShellExecution;
+  const waits: number[] = [];
+  let now = 10_000;
+  const tools = createWorkspaceTools(process.cwd(), {
+    enabledConnectorIds: [], executePython: async () => { throw new Error("unused"); },
+    executeShell: async () => { throw new Error("unused"); },
+    shellExecutions: {
+      start: async () => job,
+      wait: async (_id, ms) => {
+        waits.push(ms);
+        now += ms;
+        return job;
+      },
+      logs: async () => ({ chunks: [], nextCursor: 0, retentionTruncated: false, truncated: false }),
+      get: async () => job, list: () => [job], cancel: async () => job,
+    },
+  });
+  const shell = tools.find((tool) => tool.name === "run_shell")!;
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    await shell.execute("clamped", { command: "echo poll", wait_ms: 600 }, undefined, () => {});
+    assert.deepEqual(waits, [250, 250, 100]);
+
+    waits.length = 0;
+    now = 20_000;
+    let readsAfterFirstWait = 0;
+    Date.now = () => {
+      const current = now;
+      if (waits.length >= 1) {
+        readsAfterFirstWait += 1;
+        // Tick past the deadline after the first boundary check so a redundant
+        // second Date.now() read before wait #2 would pass 0 instead of 1.
+        if (readsAfterFirstWait === 1) now += 1;
+      }
+      return current;
+    };
+    await shell.execute("boundary", { command: "echo boundary", wait_ms: 251 }, undefined, () => {});
+    assert.deepEqual(waits, [250, 1]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test("the workspace scan skips tooling directories so its budget goes to the Agent's own files", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `workspace-scan-${process.pid}-${Date.now()}`);
   context.after(() => rm(root, { force: true, recursive: true }));

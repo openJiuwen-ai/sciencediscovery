@@ -25,7 +25,15 @@ import { createPlan, verifyResults, fileDigest, subplan } from './plan.mjs';
 import { schema } from './tags.mjs';
 import { profiles, slices, nodeSources, nodeExtraSources, pythonProjects, pythonSources, pythonPlugins } from './profiles.mjs';
 import { preflight } from './environment.mjs';
-import { executionConfig, realShards, mockedShards, mockedBatches } from './execution.mjs';
+import {
+  executionConfig,
+  realShards,
+  mockedShards,
+  mockedBatches,
+  mockedExecutionLanes,
+  mockedLocalConcurrency,
+  mockedSlotEnvironment,
+} from './execution.mjs';
 import { isProviderFaultOnlyWorkerFailure } from './provider-fault.mjs';
 import { retryableCaseFailures, retryFailed, retryReportMissing, shouldRetryFailedCases } from './retry.mjs';
 import { batchLaunchConfig, batchLaunchEnvironment, isolatedRetryConfig, runIsolatedRetry } from './retry-runner.mjs';
@@ -38,6 +46,15 @@ const root=fileURLToPath(new URL('../../../',import.meta.url));
 // Source-loaded JavaScript workspaces participate in V8 coverage as-is. Only
 // TypeScript projects need re-emission with source maps; retain pnpm's dependency
 // ordering and propagate compiler errors rather than making compilation optional.
+export function sharedCacheEnv(baseEnv=process.env,repositoryRoot=root) {
+  return {
+    UV_CACHE_DIR:baseEnv.UV_CACHE_DIR||join(repositoryRoot,'.tmp/cache/uv'),
+    UV_PYTHON_INSTALL_DIR:baseEnv.UV_PYTHON_INSTALL_DIR||join(repositoryRoot,'.tmp/python'),
+    npm_config_cache:baseEnv.npm_config_cache||join(repositoryRoot,'.tmp/cache/npm'),
+    PLAYWRIGHT_BROWSERS_PATH:baseEnv.PLAYWRIGHT_BROWSERS_PATH||join(repositoryRoot,'.e2e/browsers'),
+  };
+}
+
 export function coverageSourceMapStep(repositoryRoot=root) {
   const projects=globSync(['packages/*/tsconfig.json','services/*/tsconfig.json','config/tsconfig.json'],{cwd:repositoryRoot})
     .map(file=>file.replace(/[/\\]tsconfig\.json$/,''))
@@ -231,9 +248,7 @@ export async function main(args=process.argv.slice(2)) {
   // the sandbox network tests fail on the path length rather than on anything
   // they assert. The system temporary directory is what these suites used
   // before they were planned, and it is what they keep.
-  const env={...process.env,CI:'1',UV_CACHE_DIR:process.env.UV_CACHE_DIR||join(root,'.tmp/cache/uv'),
-    UV_PYTHON_INSTALL_DIR:join(root,'.tmp/python'),npm_config_cache:join(root,'.tmp/cache/npm'),
-    PLAYWRIGHT_BROWSERS_PATH:join(root,'.e2e/browsers'),CI_RESULTS_DIR:outputDir,
+  const env={...process.env,CI:'1',...sharedCacheEnv(process.env,root),CI_RESULTS_DIR:outputDir,
     // Gateway pins Python 3.12 and includes pytest for the tagged harness.
     // Benchmark checks select their own Python via SCIENCE_RESEARCH_PYTHON.
     SCIENCE_TEST_PYTHON:process.env.SCIENCE_TEST_PYTHON||python('gateway'),
@@ -404,36 +419,59 @@ export async function main(args=process.argv.slice(2)) {
       const [command,...argv]=entry.command;const code=await run(command,argv,isolated,join(outputDir,entry.id.replaceAll(':','-')+'.log'));
       results.push({key:entry.key,outcome:code?'FAIL':'PASS',actualTarget:entry.target});
     }
-    const batches=new Map();
+    const lanes=[];
     if(slice==='e2e'){
       // The local unsharded entry point still owes the same isolation contract
       // as the CI matrix. The standard-config job also has separate fresh and
       // global execution batches because Playwright owns file collection order;
       // a dedicated first stack is the enforceable pristine-library boundary.
-      for(const batch of mockedBatches(plan))batches.set(batch.key,batch);
-    } else for(const entry of plan.entries.filter(e=>e.runner==='playwright')) {
-      const group=entry.tags.includes('model:real')?'real':'mocked';
-      const fixture=entry.tags.find(tag=>tag.startsWith('fixture:'))?.split(':')[1]??'standard';
-      const key=`${group}-${fixture}`;
-      const batch=batches.get(key)??{group,fixture,key,entries:[],checks:[]};batch.entries.push(entry);batches.set(key,batch);
+      // When CI_E2E_LOCAL_CONCURRENCY=2 is set (standard-config/standard-journeys),
+      // independent spec-file subsets run on disjoint local stacks in parallel.
+      const localConcurrency=mockedLocalConcurrency(process.env.CI_E2E_LOCAL_CONCURRENCY??'1');
+      lanes.push(...mockedExecutionLanes(plan,localConcurrency));
+      if(lanes.length>1){
+        console.log(`Mocked E2E lanes: ${lanes.length} concurrent isolated stacks (${lanes.map((lane,slot)=>`slot-${slot}:${lane.map(b=>`${b.key}(${b.entries.length})`).join('+')}`).join(', ')})`);
+      }
+    } else {
+      const batches=new Map();
+      for(const entry of plan.entries.filter(e=>e.runner==='playwright')) {
+        const group=entry.tags.includes('model:real')?'real':'mocked';
+        const fixture=entry.tags.find(tag=>tag.startsWith('fixture:'))?.split(':')[1]??'standard';
+        const key=`${group}-${fixture}`;
+        const batch=batches.get(key)??{group,fixture,key,entries:[],checks:[]};batch.entries.push(entry);batches.set(key,batch);
+      }
+      if(batches.size)lanes.push([...batches.values()]);
     }
+    const runtimeBase=resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'));
+    const swarmStartLock=lanes.length>1?join(runtimeBase,'.jiuwenswarm-start.lock'):undefined;
     // One browser run of one batch. run-e2e.sh keeps writing its stack log,
     // journey reports and Playwright output where every reader already looks
     // for them — `<results>/e2e/` — while the frozen plan and its accounting
     // stay in this slice's own directory beside them. Every attempt keeps its
     // own evidence directory, so a retry never erases the attempt it repeats.
-    const browserRun=async(batch,planPath,reportPath,instance)=>{
-      const code=await run('bash',['.ci/run-e2e.sh',batch.group],{...env,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
+    const browserRun=async(batch,planPath,reportPath,instance,slot=0)=>{
+      const slotEnv=lanes.length>1
+        ? mockedSlotEnvironment(slot,{swarmStartLock,viteCacheDir:join(runtimeBase,batch.key,'vite-cache')})
+        : {};
+      const code=await run('bash',['.ci/run-e2e.sh',batch.group],{...env,...slotEnv,CI_E2E_PREPARED:'1',CI_E2E_BROWSERS_DIR:env.PLAYWRIGHT_BROWSERS_PATH,
         CI_RESULTS_DIR:join(process.env.CI_RESULTS_DIR?resolve(process.env.CI_RESULTS_DIR):outputDir,instance),
-        CI_RUNTIME_DIR:resolve(root,process.env.CI_RUNTIME_DIR??join(outputDir,'e2e-runtime'),batch.key),
+        CI_RUNTIME_DIR:join(runtimeBase,batch.key),
         ...batchLaunchEnvironment(batchLaunchConfig(batch, slice)),JIUWENSWARM_INSTANCE:`sd-e2e-${instance}`,
         SCIENCE_TAG_PLAN:planPath,SCIENCE_TAG_PW_REPORT:reportPath},join(outputDir,`e2e-${instance}-driver.log`),root,{echo:true});
       return {code,data:existsSync(reportPath)?JSON.parse(readFileSync(reportPath)):undefined};
     };
-    for(const [key,batch] of batches){
-      const report=join(outputDir,`playwright-${key}-results.json`);rmSync(report,{force:true});
-      const batchPlan=join(outputDir,`playwright-${key}-plan.json`);json(batchPlan,subplan(plan,batch.entries));
-      const first=await browserRun(batch,batchPlan,report,key);
+    const laneOutcomes=await Promise.all(lanes.map(async(lane,slot)=>{
+      const settled=[];
+      for(const batch of lane){
+        const key=batch.key;
+        const report=join(outputDir,`playwright-${key}-results.json`);rmSync(report,{force:true});
+        const batchPlan=join(outputDir,`playwright-${key}-plan.json`);json(batchPlan,subplan(plan,batch.entries));
+        const first=await browserRun(batch,batchPlan,report,key,slot);
+        settled.push({key,batch,first});
+      }
+      return settled;
+    }));
+    for(const {key,batch,first} of laneOutcomes.flat()){
       let batchResults=first.data?.results??[];
       // Only daily and release profiles retry failed cases. Merge and PR gates
       // keep their first failure as the final result.

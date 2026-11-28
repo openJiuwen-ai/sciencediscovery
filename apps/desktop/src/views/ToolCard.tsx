@@ -19,6 +19,7 @@ import { readToolOutput } from "../api/stream.js";
 import type { ToolTrace } from "../api/types.js";
 import { formatToolInput, parseToolResultSections, type ToolDetail } from "../app/tool-io.js";
 import { TEXT } from "../text.js";
+import { localizeToolDiagnostics } from "../tool-diagnostics.js";
 import { collapseHint } from "./collapse-hint.js";
 import { ToolIoBlock } from "./ToolIoBlock.js";
 
@@ -93,9 +94,13 @@ export function ToolCard({
 
   const inputText = formatToolInput(trace);
   const outputText = trace.output ?? fetched ?? trace.summary;
+  // Section markers are wire format, so strip them first: an egress reason that
+  // happens to be the first `stderr:` line is then a line of its own for the
+  // line-anchored diagnostic matcher.
   const sections = outputText === undefined || outputText === ""
     ? []
-    : parseToolResultSections(outputText, trace.status);
+    : parseToolResultSections(outputText, trace.status)
+      .map((section) => ({ ...section, content: localizeToolDiagnostics(section.content) }));
 
   const renderBlock = (id: string, label: string, content: string) => (
     <ToolIoBlock

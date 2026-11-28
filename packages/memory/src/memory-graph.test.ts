@@ -19,7 +19,7 @@ import type { AddressInfo } from "node:net";
 import http from "node:http";
 
 
-import { MemoryGraphClient, MemoryGraphSink } from "./memory-graph.js";
+import { MEMORY_GRAPH_UNAUTHORIZED, MemoryGraphClient, MemoryGraphSink } from "./memory-graph.js";
 import type { ObserveToolCallPayload } from "./memory-graph.js";
 
 /**
@@ -1037,6 +1037,103 @@ test("MemoryGraphSink.cleanup* is a no-op when disabled (no network call)", asyn
     sink.cleanupProject("proj-x", ["s1"]);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(calls, 0, "a disabled sink must not touch the network");
+  } finally {
+    await close(server);
+  }
+});
+
+test("deleteNode posts one explicit Evidence record and reports the sidecar's outcome", async () => {
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((path, body) => {
+    captured = { path, body };
+    return { status: 200, json: { status: "healthy", deleted: 1 } };
+  });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const client = new MemoryGraphClient({ url, token: "test-token" });
+    const result = await client.deleteNode("evidence-1", "Evidence", "session-1");
+    assert.deepEqual(result, { status: "healthy", deleted: 1 });
+    const c = captured as { path: string; body: unknown } | null;
+    assert.ok(c, "the client should have posted to the sidecar");
+    assert.equal(c.path, "/delete/node");
+    assert.deepEqual(c.body, {
+      node_id: "evidence-1",
+      node_type: "Evidence",
+      session_id: "session-1",
+    });
+  } finally {
+    await close(server);
+  }
+});
+
+test("deleteNode distinguishes not-found, refused types and an unreachable graph", async () => {
+  const answers = new Map<string, { status: number; json: unknown }>([
+    ["missing", { status: 404, json: { detail: { code: "node_not_found", message: "absent" } } }],
+    ["refused", { status: 400, json: { detail: { code: "node_type_not_deletable", message: "no" } } }],
+  ]);
+  const server = await startFakeMemoryGraph((_path, body) => {
+    const id = (body as { node_id?: string }).node_id ?? "";
+    return answers.get(id) ?? { status: 500, json: { detail: "boom" } };
+  });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const client = new MemoryGraphClient({ url, token: "test-token" });
+    assert.deepEqual(await client.deleteNode("missing", "Evidence"), {
+      status: "not_found", reason: "node_not_found", deleted: 0,
+    });
+    assert.deepEqual(await client.deleteNode("refused", "Evidence"), {
+      status: "rejected", reason: "node_type_not_deletable", deleted: 0,
+    });
+    assert.deepEqual(await client.deleteNode("boom", "Evidence"), {
+      status: "degraded", reason: "memory_graph_unreachable", deleted: 0,
+    });
+  } finally {
+    await close(server);
+  }
+});
+
+test("deleteNode reports a refused internal token as unauthorized, not as an unreachable service", async () => {
+  // Issue #1352's split must hold on the write path too: a sidecar that
+  // answers 401/403 has accepted the connection and rejected this API's token,
+  // which the reader fixes in settings rather than by retrying.
+  for (const status of [401, 403]) {
+    const server = await startFakeMemoryGraph(() => ({
+      status,
+      json: { detail: "invalid internal token" },
+    }));
+    try {
+      const client = new MemoryGraphClient({ url: `http://127.0.0.1:${portOf(server)}`, token: "wrong" });
+      assert.deepEqual(await client.deleteNode("evidence-1", "Evidence", "session-1"), {
+        status: "degraded", reason: MEMORY_GRAPH_UNAUTHORIZED, deleted: 0,
+      }, `HTTP ${status}`);
+    } finally {
+      await close(server);
+    }
+  }
+});
+
+test("MemoryGraphSink.deleteNode forwards one record and stays disabled without a network call", async () => {
+  let captured: { path: string; body: unknown } | null = null;
+  const server = await startFakeMemoryGraph((path, body) => {
+    captured = { path, body };
+    return { status: 200, json: { status: "healthy", deleted: 1 } };
+  });
+  const url = `http://127.0.0.1:${portOf(server)}`;
+  try {
+    const sink = new MemoryGraphSink(new MemoryGraphClient({ url, token: "t" }), () => true);
+    assert.deepEqual(await sink.deleteNode("evidence-2", "Evidence", "session-2"), {
+      status: "healthy", deleted: 1,
+    });
+    assert.equal((captured as { path: string } | null)?.path, "/delete/node");
+    assert.deepEqual((captured as { body: unknown } | null)?.body, {
+      node_id: "evidence-2",
+      node_type: "Evidence",
+      session_id: "session-2",
+    });
+    const disabled = new MemoryGraphSink(null, () => false);
+    assert.deepEqual(await disabled.deleteNode("evidence-3", "Evidence"), {
+      status: "degraded", reason: "memory_graph_disabled", deleted: 0,
+    });
   } finally {
     await close(server);
   }

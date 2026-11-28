@@ -341,6 +341,18 @@ export const EN: Text = {
     showMore: (count: number) => `Show ${count} older ${count === 1 ? "Session" : "Sessions"}`,
     /** The rule a folded Project states above its page: the newest N are shown. */
     pageRule: (count: number) => `Latest ${count}`,
+    searchRetry: "Retry",
+    searchPlaceholder: "Search",
+    searchLabel: "Search",
+    searchAll: "All",
+    searchClose: "Close",
+    searchKinds: "What to search",
+    searchHint: "Type to search sessions, projects and artifacts.",
+    searchProjects: "Projects",
+    searchSessions: "Sessions",
+    searchArtifacts: "Artifacts",
+    searchEmpty: (query: string) => `Nothing matches "${query}". Search matches names and titles, not message text.`,
+    searchFailed: "Search failed. Try again.",
     collapseSidebar: "Collapse sidebar",
     expandSidebar: "Show sidebar",
     renameHint: "Double-click to rename",
@@ -804,6 +816,12 @@ export const EN: Text = {
     openSettings: "Open scientific memory settings",
     notFoundTitle: "This memory was not found",
     notFoundBody: "Nothing in memory matches this record. It may have been deleted, or the memory service may be unavailable right now.",
+    deleteAction: "Delete this memory",
+    deleteConfirmTitle: "Delete this memory?",
+    deleteConfirmBody: (name: string) => `Delete “${name}”? Reports that cite it will still open, but the citation will show “not found”. This cannot be undone.`,
+    deleteConfirmAccept: "Delete",
+    deleting: "Deleting…",
+    deleteFailed: "Could not delete this memory.",
     disabledTitle: "Scientific memory is off",
     disabledBody: "Turn it on in Settings → Scientific memory and a report's citations expand into their evidence and artifacts.",
     unreachableTitle: "Scientific memory is unavailable",
@@ -2643,6 +2661,7 @@ export const EN: Text = {
       "transport-error": "Model connection failed",
       unauthorized: "Model authentication failed",
       "invalid-tool-call": "Invalid tool call",
+      "model-credential-missing": "Model has no API key",
     },
     timeout: "The run timed out and was terminated. Retry, or check the relevant timeout in System settings.",
     timeoutNoticeTitle: "Timeout notice",
@@ -2668,8 +2687,33 @@ export const EN: Text = {
     "transport-error": "The model service could not be reached and the run has stopped. Check your network, proxy settings and model service URL, then retry.",
     unauthorized: "The model service rejected the credentials and the run has stopped. Check the API key and access permissions in System settings' model registry, then retry.",
     "invalid-tool-call": "The model's tool call arguments could not be parsed. That call was not executed and the run has stopped. Retry; if this persists, switch models.",
+    "model-credential-missing": "This model has no saved API key, so the run cannot start. Add one in Settings › Models and try again.",
     unknown: "The task stopped before it could finish. Retry; if it fails again, open the technical details to investigate.",
     technicalDetails: "Technical details",
+  },
+
+  /** The stable diagnostics a Runner, the sandbox egress gateway or a proxy
+   *  client writes into a tool result (#1382). The English dictionary keeps
+   *  the producers' original wording, so an English UI reads exactly what it
+   *  read before; the tool-result renderer re-generates the sentence through
+   *  whichever dictionary is active. */
+  toolDiagnostics: {
+    timeout: (label: string, timeoutMs: number) => `${label} timed out after ${timeoutMs} ms`,
+    networkDisabled: "sandbox network access is disabled for this execution",
+    domainNotAllowed: (host: string, port: number) =>
+      `${host}:${port} is not in the sandbox network allowed domains`,
+    ipLiteral: (host: string) =>
+      `${host} is an IP address; sandbox network access allows domain names only`,
+    privateAddress: (host: string) =>
+      `${host} is a private address; enable private network access to allow it`,
+    privateResolution: (host: string) =>
+      `${host} resolves only to private or loopback addresses; enable private network access to allow it`,
+    resolveFailed: (host: string, detail: string) => `${host} could not be resolved: ${detail}`,
+    unreachable: (target: string) =>
+      `Sandbox network access could not reach ${target} through this deployment's outbound route`,
+    absoluteForm: "Sandbox network access expects absolute-form proxy requests",
+    cannotForward: (protocol: string) => `Sandbox network access cannot forward ${protocol} without CONNECT`,
+    tunnelFailed: (status: string) => `Tunnel connection failed: ${status}`,
   },
 
   errors: {

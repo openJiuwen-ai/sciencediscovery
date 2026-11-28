@@ -40,6 +40,13 @@ export async function searchWorkbench(
     // Standalone conversations are not a Project a reader can navigate to or
     // search for; folding them in would surface a name no client shows.
     if (project.kind === INBOX_PROJECT_KIND) continue;
+    const sessions = store.listSessions(project.id, "all");
+    // A Project has no stamp of its own worth ordering by: what moved is the
+    // newest Session inside it, and a Project with none falls back to its birth.
+    const projectStamp = sessions.reduce<string>(
+      (latest, session) => (session.updatedAt > latest ? session.updatedAt : latest),
+      project.createdAt,
+    );
     if (matches(project.name)) {
       results.push({
         detail: "Project",
@@ -48,9 +55,9 @@ export async function searchWorkbench(
         label: project.name,
         projectId: project.id,
         projectName: project.name,
+        updatedAt: projectStamp,
       });
     }
-    const sessions = store.listSessions(project.id, "all");
     for (const session of sessions) {
       if (matches(session.title, project.name, session.id)) {
         results.push({
@@ -61,6 +68,7 @@ export async function searchWorkbench(
           projectId: project.id,
           projectName: project.name,
           sessionId: session.id,
+          updatedAt: session.updatedAt,
           ...(session.archivedAt ? { archived: true } : {}),
         });
       }
@@ -77,6 +85,7 @@ export async function searchWorkbench(
         path: artifact.name,
         projectId: project.id,
         projectName: project.name,
+        updatedAt: artifact.updatedAt,
         ...(session ? { sessionId: session.id, sessionTitle: session.title } : {}),
       });
     }

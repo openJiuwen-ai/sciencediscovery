@@ -81,10 +81,22 @@ async def proxy_to_legacy(client: httpx.AsyncClient, request: Request) -> Respon
     has_body = request.method not in ("GET", "HEAD")
     request_id = uuid.uuid4().hex
     started = time.monotonic()
-    upstream_url = (
-        httpx.URL(path=request.url.path, query=request.url.query.encode())
-        if request.url.query else httpx.URL(path=request.url.path)
-    )
+    # Building the upstream URL can itself refuse the request: httpx raises
+    # `InvalidURL` for a path holding a NUL or another non-printable character
+    # (a client can send `%00`), and `InvalidURL` is not an `httpx.HTTPError`, so
+    # it would escape the `except` below and surface as a bare 500. A path that
+    # cannot be a URL is the client's mistake: answer 400 and name it, without
+    # reaching for the upstream.
+    try:
+        upstream_url = (
+            httpx.URL(path=request.url.path, query=request.url.query.encode())
+            if request.url.query else httpx.URL(path=request.url.path)
+        )
+    except httpx.InvalidURL:
+        return JSONResponse(
+            {"error": "invalid_request", "message": "Malformed request path", "requestId": request_id},
+            status_code=400,
+        )
     safe_to_retry = request.method in {"GET", "HEAD"}
     try:
         # A brief transport error can happen when the upstream closes an idle

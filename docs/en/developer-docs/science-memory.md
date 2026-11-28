@@ -180,6 +180,7 @@ ScienceMemory adds three kinds of HTTP interfaces: **sidecar native routes** (Py
 | `POST /persist/evidence` | CREATE Evidence + extracts→Paper (Paper missing → 422 `source_paper_not_found`) |
 | `POST /persist/claim` | CREATE Claim + supports (Evidence/Artifact→Claim) + optional produces + optional stated_in; returns `chip_map`. No supporting target → 422 `no_cites_target` (triggered before the degrade branch, reported even if the graph is down) |
 | `POST /persist/stated_in` | MERGE stated_in (Claim→report Artifact); the Artifact may not be mirrored yet, polls and waits up to 10×0.3s |
+| `POST /delete/node` | Physically delete one whitelisted node (currently `Evidence`) and all its edges; optional `session_id` scopes the match. Unknown node → HTTP 404 `node_not_found`; a type outside the whitelist → HTTP 400 `node_type_not_deletable`; unreachable graph → HTTP 200 `{status:"degraded",reason:"memory_graph_unreachable"}`. Other nodes/edges in the Session/project are untouched |
 | `POST /internal/backend` | Selects the storage backend (`local` or `neo4j`) |
 | `POST /internal/neo4j-password` | Pushes the Neo4j password + ensure_schema |
 
@@ -209,7 +210,7 @@ ScienceMemory adds three kinds of HTTP interfaces: **sidecar native routes** (Py
 
 ### 3.2 Node API reverse-proxy routes (`services/api/src/http/`, browser entry)
 
-Browser is read-only, all reverse-proxied to the sidecar; feature off (client=null) returns an empty result + `reason:"memory_graph_disabled"`; a transport failure returns `reason:"memory_graph_unreachable"`; a refused internal token returns `reason:"memory_graph_unauthorized"`:
+Browser is read-only, all reverse-proxied to the sidecar; feature off (client=null) returns an empty result + `reason:"memory_graph_disabled"`; a transport failure returns `reason:"memory_graph_unreachable"`; a refused internal token returns `reason:"memory_graph_unauthorized"`. The desktop memory card adds one write — deleting a single Evidence record — through an authenticated route with explicit refusals rather than an empty-payload degradation:
 
 | Method + path | Client method (`apps/web/src/api/`) |
 |-------------|--------------------------------------|
@@ -223,9 +224,12 @@ Browser is read-only, all reverse-proxied to the sidecar; feature off (client=nu
 | `POST /api/memory/query/group-expansion` | `getGroupExpansion` |
 | `POST /api/memory/trace/provenance` | `traceProvenance` (reviewer provenance; returns `broken`/`truncated`/`reason`) |
 | `GET /api/memory/query/artifact-provenance` | `getMemoryArtifactProvenance` |
+| `POST /api/memory/delete/node` | `deleteMemoryNode` (desktop card; Evidence only — 404 unknown node, 400 refused type, 409 memory off, 502 sidecar unreachable) |
 | `GET /health` (includes `memoryGraph` field) | `getMemoryHealth` |
 
 > declare/persist classes are **not on the browser client**: `declareEvidence`/`declareClaim`/`linkClaimsToReport` are Node-internal LLM tool callbacks (see 3.3), calling the sidecar `/persist/*` directly via `MemoryGraphClient`.
+>
+> `cleanup/session` and `cleanup/project` keep their bulk semantics and are not used by the card. The single-record route only detaches the named node; a report that cites it still opens, and its chip falls back to the existing `missing` card state.
 
 ### 3.3 LLM tools (`packages/workspace/src/workspace.ts`, registered when the feature is on)
 

@@ -106,6 +106,9 @@ test("results carry the parts of their English detail, so a client can show them
   const byId = new Map((await searchWorkbench(store, "")).results.map((result) => [result.id, result]));
   assert.deepEqual(byId.get("project:project-1"), {
     detail: "Project", id: "project:project-1", kind: "project", label: "Mixed catalog", projectId: "project-1", projectName: "Mixed catalog",
+    // A Project has no stamp of its own to order by: its newest Session is what
+    // moved, and here its Sessions are as old as the Project itself.
+    updatedAt: "2026-01-01T00:00:00.000Z",
   });
   assert.equal(byId.get("session:session-0")?.archived, undefined);
   assert.equal(byId.get("session:session-1")?.archived, true);
@@ -115,6 +118,33 @@ test("results carry the parts of their English detail, so a client can show them
   const deleted = byId.get("artifact:artifact-2")!;
   assert.equal(deleted.sessionTitle, undefined);
   assert.equal(deleted.detail, "Mixed catalog / Deleted Session · user_upload");
+});
+
+test("every hit carries the stamp a client orders by, and a Project borrows its newest Session's", async () => {
+  // The dialog groups by kind and sorts each group newest first, and the route
+  // promises no order — so each hit has to say when it last moved. A Session
+  // and an artifact know their own; a Project is a container, so the newest
+  // Session inside it stands in, and a Project with none falls back to its birth
+  // rather than sorting as unknown.
+  const moved = { ...session(0), updatedAt: "2026-01-05T00:00:00.000Z" };
+  const store = {
+    listProjectArtifacts: () => [artifact(1)],
+    listProjects: () => [project],
+    listSessions: () => [moved],
+  } as unknown as SessionStore;
+
+  const byId = new Map((await searchWorkbench(store, "")).results.map((result) => [result.id, result]));
+  assert.equal(byId.get("project:project-1")?.updatedAt, "2026-01-05T00:00:00.000Z", "a Project is stamped with its newest Session");
+  assert.equal(byId.get("session:session-0")?.updatedAt, "2026-01-05T00:00:00.000Z", "a Session carries its own stamp");
+  assert.equal(byId.get("artifact:artifact-1")?.updatedAt, "2026-01-01T00:00:00.000Z", "an artifact carries its own stamp");
+
+  const empty = {
+    listProjectArtifacts: () => [],
+    listProjects: () => [project],
+    listSessions: () => [],
+  } as unknown as SessionStore;
+  const born = (await searchWorkbench(empty, "")).results.find((result) => result.kind === "project");
+  assert.equal(born?.updatedAt, project.createdAt, "a Project with no Sessions is stamped with its birth");
 });
 
 test("the recent-sessions Project and its contents never appear in search results", async () => {

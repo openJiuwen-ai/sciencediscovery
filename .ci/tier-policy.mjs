@@ -24,12 +24,24 @@ const packageJobs = new Map([
 ]);
 const testJobs = ['ut', 'st', 'e2e-plan', 'e2e', 'desktop-mocked', 'real-merge', 'real-scheduled'];
 const distributionJobs = ['binary', 'docker', 'windows-desktop', 'macos-desktop'];
+export const SELF_HOSTED_RUNNER = Object.freeze(['self-hosted', 'Linux', 'X64', 'sciencediscovery']);
 
-export function route(event, requested = 'pr', backend = 'jiuwenswarm', paths = null, packagePlatform = 'linux-windows') {
+export function route(
+  event,
+  requested = 'pr',
+  backend = 'jiuwenswarm',
+  paths = null,
+  packagePlatform = 'linux-windows',
+  { selfHostedMergeQueue = false } = {},
+) {
   if (!['pr', 'merge', 'daily', 'release', 'package'].includes(requested)) throw new Error(`Unknown CI profile: ${requested}`);
   // A fork cannot obtain credentials by changing a profile input. Queue
   // candidates always receive L3, even when there is just one queued PR.
   const profile = event === 'pull_request' ? 'pr' : event === 'merge_group' ? 'merge' : requested;
+  // Self-hosted Docker runners are strictly limited to trusted merge_group runs
+  // when explicitly opted in via the CI_SELF_HOSTED_MERGE_QUEUE repo variable.
+  const self_hosted_merge_queue = event === 'merge_group' && selfHostedMergeQueue === true;
+  const ut_runner = JSON.stringify(self_hosted_merge_queue ? SELF_HOSTED_RUNNER : 'ubuntu-latest');
   const packaging = profile === 'package';
   const selected = packaging ? packageJobs.get(packagePlatform) : [];
   if (!selected) throw new Error(`Unknown package platform: ${packagePlatform}`);
@@ -51,6 +63,7 @@ export function route(event, requested = 'pr', backend = 'jiuwenswarm', paths = 
     binary: distribution || selected.includes('binary'), distribution,
     windows_desktop: desktop || selected.includes('windows-desktop'),
     macos_desktop: desktop || selected.includes('macos-desktop'), docs_only,
+    self_hosted_merge_queue, ut_runner,
   };
 }
 
@@ -179,8 +192,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (process.env.GITHUB_EVENT_NAME === 'pull_request') {
       console.log(`release version OK: ${VERSION_FILE} at ${versionOf(readFileSync(VERSION_FILE, 'utf8'))}`);
     }
-    const result = route(process.env.GITHUB_EVENT_NAME, process.env.CI_REQUESTED_PROFILE || 'pr',
-      process.env.CI_REQUESTED_BACKEND || 'jiuwenswarm', paths, process.env.CI_REQUESTED_PACKAGE_PLATFORM || undefined);
+    const result = route(
+      process.env.GITHUB_EVENT_NAME,
+      process.env.CI_REQUESTED_PROFILE || 'pr',
+      process.env.CI_REQUESTED_BACKEND || 'jiuwenswarm',
+      paths,
+      process.env.CI_REQUESTED_PACKAGE_PLATFORM || undefined,
+      { selfHostedMergeQueue: process.env.CI_SELF_HOSTED_MERGE_QUEUE === 'true' },
+    );
     for (const [key,value] of Object.entries(result)) appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
   }
 }

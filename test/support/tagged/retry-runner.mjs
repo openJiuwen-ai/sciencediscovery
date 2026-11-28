@@ -22,10 +22,16 @@ export function batchLaunchEnvironment({ fixture = 'standard', checks, scientifi
   return environment;
 }
 
-export function batchLaunchConfig(batch, slice) {
+// A retry re-runs only the failed cases. The supplemental JiuwenSwarm checks
+// belong to the first attempt of the batch that owns them: repeating them
+// would prove the checks ran twice on two different stacks, and their evidence
+// file in the `<batch>-retry` directory is exactly what .ci/mocked-report.mjs
+// reports as UNEXPECTED_SWARM_CHECKS. Retries therefore always switch checks
+// off, for every slice, instead of inheriting the batch's `checks: 'run'`.
+export function batchLaunchConfig(batch, slice, { retry = false } = {}) {
   return {
     fixture: batch.fixture,
-    checks: slice === 'e2e' ? (batch.checks.length ? 'run' : 'off') : undefined,
+    checks: retry ? 'off' : (slice === 'e2e' ? (batch.checks.length ? 'run' : 'off') : undefined),
     scientificEnvs: '1',
   };
 }
@@ -46,7 +52,7 @@ export function isolatedRetryConfig({
     backend,
     attempt: 1,
     reason: 'case_failure',
-    launchConfig: batchLaunchConfig(batch, slice),
+    launchConfig: batchLaunchConfig(batch, slice, { retry: true }),
   };
 }
 

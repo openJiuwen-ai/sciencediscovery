@@ -14,6 +14,14 @@
 
 import type { PermissionAction, PermissionDescriptionRenderers } from "@sciencediscovery/schema";
 
+const RUNNER_EXEC_TIMEOUT_TITLE = "工具执行超时";
+
+/** The runner-execution timeout advice, shared by the run-failure card and by
+ *  a runner diagnostic that arrives inside a tool result (#1382). */
+function runnerExecTimeout(seconds: number): string {
+  return `工具执行已超过 ${seconds} 秒。建议缩小单次执行范围后重试，或在系统设置中适当增加执行超时时间。`;
+}
+
 /** The workspace an approval covers, as an adverbial: 会话工作区 / 子代理 X. */
 function permissionWorkspace(subagentId: string | undefined): string {
   return subagentId ? `子代理 ${subagentId}` : "会话工作区";
@@ -332,6 +340,18 @@ export const ZH = {
     showMore: (count: number) => `显示更早的 ${count} 个会话`,
     /** The rule a folded Project states above its page: the newest N are shown. */
     pageRule: (count: number) => `最近 ${count} 个`,
+    searchRetry: "重试",
+    searchPlaceholder: "搜索",
+    searchLabel: "搜索",
+    searchAll: "全部",
+    searchClose: "关闭",
+    searchKinds: "搜索范围",
+    searchHint: "输入以搜索会话、项目和产物。",
+    searchProjects: "项目",
+    searchSessions: "会话",
+    searchArtifacts: "产物",
+    searchEmpty: (query: string) => `没有匹配「${query}」的会话、项目或产物。搜索只匹配名称与标题，不包含消息正文。`,
+    searchFailed: "搜索失败，请重试。",
     collapseSidebar: "收起侧栏",
     expandSidebar: "显示侧栏",
     /** Shown as the tooltip on a session name, for the gesture nothing else
@@ -826,6 +846,12 @@ export const ZH = {
     openSettings: "打开科学记忆设置",
     notFoundTitle: "没有找到这条记忆",
     notFoundBody: "记忆里没有这条记录。它可能已被删除，或记忆服务当前不可用。",
+    deleteAction: "删除这条记忆",
+    deleteConfirmTitle: "删除这条记忆？",
+    deleteConfirmBody: (name: string) => `要删除「${name}」吗？引用它的报告仍然可以打开，但引用会显示“未找到”。删除后无法恢复。`,
+    deleteConfirmAccept: "删除",
+    deleting: "正在删除…",
+    deleteFailed: "删除失败。",
     disabledTitle: "科学记忆没有开启",
     disabledBody: "在「设置 → 科学记忆」里开启后，报告的引用就能展开成证据与产物。",
     unreachableTitle: "暂时读不到科学记忆",
@@ -2687,6 +2713,7 @@ export const ZH = {
       "transport-error": "模型服务连接失败",
       unauthorized: "模型鉴权失败",
       "invalid-tool-call": "工具调用无效",
+      "model-credential-missing": "模型还没有配置 API Key",
     },
     timeout: "运行已因超时终止。建议重试，或在系统设置中检查对应的超时设置。",
     timeoutNoticeTitle: "超时提示",
@@ -2695,14 +2722,14 @@ export const ZH = {
       gateway_idle: "运行超时",
       gateway_turn: "运行超时",
       permission_wait: "授权等待超时",
-      runner_exec: "工具执行超时",
+      runner_exec: RUNNER_EXEC_TIMEOUT_TITLE,
       kernel_idle: "内核空闲超时",
     },
     timeouts: {
       gateway_idle: (seconds: number) => `Agent 在 ${seconds} 秒内没有产生进展，运行已终止。建议重试，或在系统设置中适当增加 Agent 空闲超时时间。`,
       gateway_turn: (seconds: number) => `Agent 单轮运行已超过 ${seconds} 秒，运行已终止。建议拆分任务后重试，或在系统设置中适当增加单轮超时时间。`,
       permission_wait: (seconds: number) => `授权请求在 ${seconds} 秒内未得到处理，运行已终止。建议重试并及时处理授权请求，或在系统设置中适当增加授权等待超时时间。`,
-      runner_exec: (seconds: number) => `工具执行已超过 ${seconds} 秒。建议缩小单次执行范围后重试，或在系统设置中适当增加执行超时时间。`,
+      runner_exec: runnerExecTimeout,
       kernel_idle: (seconds: number) => `内核空闲时间已达到 ${seconds} 秒。建议重试，或在系统设置中适当增加内核空闲超时时间。`,
     },
     "rate-limited": "请求次数或用量已达到模型服务限制，运行已停止。建议稍后重试；若持续出现，请检查服务商的限额和可用额度。",
@@ -2712,8 +2739,36 @@ export const ZH = {
     "transport-error": "无法连接模型服务，运行已停止。建议检查网络、代理设置及模型服务地址后重试。",
     unauthorized: "模型服务拒绝了当前凭据，运行已停止。建议在系统设置的模型注册表中检查 API Key 及访问权限后重试。",
     "invalid-tool-call": "模型生成的工具调用参数无法解析，该调用未执行，运行已停止。建议重试；若反复出现，可更换模型。",
+    "model-credential-missing": "这个模型在设置里没有保存 API Key，运行无法开始。到 设置 › 模型 补上后重试。",
     unknown: "任务未能完成，运行已停止。建议重试；若再次失败，请展开技术详情排查原因。",
     technicalDetails: "技术详情",
+  },
+
+  /** 工具结果里由 Runner、沙箱出口网关或代理客户端生成的稳定诊断（#1382）。
+   *  这些句子产生时不知道界面语言，所以渲染工具结果时按当前字典重新生成；
+   *  不匹配的普通程序输出一律原样保留。 */
+  toolDiagnostics: {
+    /** `executor.ts` 的 `… execution timed out after N ms`。 */
+    timeout: (_label: string, timeoutMs: number) => runnerExecTimeout(timeoutMs / 1000),
+    /** `egress-gateway.ts` 的会话级出口决定。 */
+    networkDisabled: "本次执行已关闭沙箱网络访问。",
+    domainNotAllowed: (host: string, port: number) =>
+      `沙箱网络拒绝访问 ${host}:${port}：它不在允许的域名列表中。`,
+    ipLiteral: (host: string) =>
+      `沙箱网络只允许访问域名，不能直接访问 IP 地址 ${host}。`,
+    privateAddress: (host: string) =>
+      `${host} 是私有地址；如需访问，请在沙箱网络中启用私有网络访问。`,
+    privateResolution: (host: string) =>
+      `${host} 只解析到私有或回环地址；如需访问，请在沙箱网络中启用私有网络访问。`,
+    resolveFailed: (host: string, detail: string) => `无法解析 ${host}：${detail}`,
+    /** 出口网关自己的 502/400 说明，和上面的拒绝原因一样会进入工具结果。 */
+    unreachable: (target: string) => `沙箱网络无法通过本部署的出口路由访问 ${target}。`,
+    absoluteForm: "沙箱网络只接受完整的代理请求（absolute-form）。",
+    cannotForward: (protocol: string) =>
+      `沙箱网络无法在未建立 CONNECT 隧道的情况下转发 ${protocol} 请求。`,
+    /** 代理客户端自己的 `Tunnel connection failed: …`。 */
+    tunnelFailed: (status: string) =>
+      `代理隧道连接失败：${status}。请检查代理设置或沙箱网络允许的域名。`,
   },
 
   errors: {

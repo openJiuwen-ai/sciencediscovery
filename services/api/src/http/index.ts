@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { diagnosticIds, diagnosticLogPaths, errorDiagnosticSnapshot } from "./error-diagnostics.js";
+import { decodePathParam } from "./path-params.js";
 import { isLoopbackHost, verifyAccountAccessToken } from "./account-verification.js";
 import { randomUUID } from "node:crypto";
 import { matchesManualModelDestination } from "./manual-model-destination.js";
@@ -285,7 +286,7 @@ import {
   buildArtifactDashboard,
   buildArtifactVersionPreview,
 } from "../artifact-dashboard.js";
-import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
+import { MEMORY_GRAPH_UNAUTHORIZED, mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { draftEvolveDirection } from "../evolution/direction-draft.js";
 import { apiLog, runLog } from "../logging.js";
@@ -655,6 +656,12 @@ async function readSpecialistBody<T>(request: IncomingMessage): Promise<T> {
   }
   return body as T;
 }
+
+/** The only graph labels a person may delete one record of from the desktop
+ *  citation card. Evidence is a declaration with no shared identity; Artifact
+ *  version lineage and SourceFile/DbRecord citation inputs stay immutable.
+ *  Keep this list in step with the sidecar's DELETABLE_NODE_TYPE_KEYS. */
+const DELETABLE_MEMORY_NODE_TYPES = new Set<string>(["Evidence"]);
 
 /** A startup component that never became available. Routes must report this as
  *  a service fault (503), not as the code of the validation that stopped the
@@ -1457,7 +1464,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         /^\/internal\/evolve-llm\/([^/]+)\/v1\/chat\/completions$/,
       );
       if (evolveLlmMatch && request.method === "POST") {
-        await handleEvolveCompletion(request, response, decodeURIComponent(evolveLlmMatch[1]!), {
+        await handleEvolveCompletion(request, response, decodePathParam(evolveLlmMatch[1]!, "researchId"), {
           store,
           tokens: evolveRunTokens,
         });
@@ -1490,17 +1497,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const suffix = scopedSession[2] ?? "";
         const management = suffix === "" && request.method === "DELETE"
           || /^\/(archive|restore|research-continuations|conversation-branches)(?:\/|$)/.test(suffix);
-        const target = decodeURIComponent(scopedSession[1]!);
+        const target = decodePathParam(scopedSession[1]!, "sessionId");
         if (!management && isEvidenceSessionReadOnly(store.getSession(target))) throw new SessionEvidenceLockedError();
       }
       const branchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/conversation-branches$/);
       if (branchMatch && request.method === "POST") {
         const body = await readJson<{ messageId: string; requestId: string }>(request);
-        return sendJson(response, 202, await startConversationBranch(decodeURIComponent(branchMatch[1]!), body.messageId, body.requestId));
+        return sendJson(response, 202, await startConversationBranch(decodePathParam(branchMatch[1]!, "sessionId"), body.messageId, body.requestId));
       }
       const continuationMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/research-continuations(?:\/([^/]+))?$/);
       if (continuationMatch) {
-        const sourceId = decodeURIComponent(continuationMatch[1]!);
+        const sourceId = decodePathParam(continuationMatch[1]!, "sourceId");
         // A durable operation stays readable after its source session is gone:
         // the status route reads the operation file (and checks its source id)
         // instead of requiring the session to still exist.
@@ -1553,7 +1560,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (await handlePluginRequest(request, response, url, store.plugins, () => readJson(request))) return;
       const conversationExportMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/conversation-export$/);
       if (conversationExportMatch && request.method === "GET") {
-        const sessionId = decodeURIComponent(conversationExportMatch[1]!);
+        const sessionId = decodePathParam(conversationExportMatch[1]!, "sessionId");
         const session = store.getSession(sessionId);
         if (!session) return sendError(response, 404, "Session not found");
         const allMessages = await store.readMessages(sessionId);
@@ -1588,7 +1595,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const researchPackageExportMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package\/exports(?:\/([^/]+)(?:\/(download|cancel))?)?$/);
       if (researchPackageExportMatch) {
-        const projectId = decodeURIComponent(researchPackageExportMatch[1]!);
+        const projectId = decodePathParam(researchPackageExportMatch[1]!, "projectId");
         if (!store.getProject(projectId)) return sendError(response, 404, "Project not found");
         const taskId = researchPackageExportMatch[2];
         const action = researchPackageExportMatch[3];
@@ -1670,7 +1677,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const researchPackageMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/research-package(?:\/(inspect|import|preview))?$/);
       if (researchPackageMatch) {
-        const projectId = decodeURIComponent(researchPackageMatch[1]!);
+        const projectId = decodePathParam(researchPackageMatch[1]!, "projectId");
         const sessionId = url.searchParams.get("sessionId") ?? undefined;
         const previewRead = request.method === "GET" && (!researchPackageMatch[2] || researchPackageMatch[2] === "preview");
         // Only the polling shape (`defaults=1`, what a mounted panel asks every
@@ -2140,13 +2147,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const proxyServerMatch = url.pathname.match(/^\/api\/proxy\/servers\/([^/]+)$/);
       if (proxyServerMatch && request.method === "PUT") {
         sendJson(response, 200, await store.updateProxyServer(
-          decodeURIComponent(proxyServerMatch[1]!),
+          decodePathParam(proxyServerMatch[1]!, "serverId"),
           await readJson<UpdateProxyServerRequest>(request),
         ));
         return;
       }
       if (proxyServerMatch && request.method === "DELETE") {
-        const serverId = decodeURIComponent(proxyServerMatch[1]!);
+        const serverId = decodePathParam(proxyServerMatch[1]!, "serverId");
         await store.deleteProxyServer(serverId);
         sendJson(response, 200, { deleted: serverId });
         return;
@@ -2262,7 +2269,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!jiuwenSwarm) throw new ApiStatusError(409, "Skills are switched in JiuwenSwarm only when it is the agent backend");
         const body = await readJson<{ enabled?: unknown }>(request);
         if (typeof body.enabled !== "boolean") throw new ApiStatusError(400, "enabled must be true or false");
-        const name = decodeURIComponent(jiuwenSwarmSkillMatch[1]!);
+        const name = decodePathParam(jiuwenSwarmSkillMatch[1]!, "name");
         try {
           await setJiuwenSwarmSkillEnabled(jiuwenSwarm, name, body.enabled);
         } catch (error) {
@@ -2276,7 +2283,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!jiuwenSwarm) throw new ApiStatusError(409, "Skills are switched in JiuwenSwarm only when it is the agent backend");
         const body = await readJson<{ enabled?: unknown }>(request);
         if (typeof body.enabled !== "boolean") throw new ApiStatusError(400, "enabled must be true or false");
-        const skillId = decodeURIComponent(jiuwenSwarmSkillByIdMatch[1]!);
+        const skillId = decodePathParam(jiuwenSwarmSkillByIdMatch[1]!, "skillId");
         let snapshot: RuntimeSkillSnapshot;
         try {
           const resolved = skillCatalog.resolve([skillId])[0];
@@ -2450,7 +2457,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const legacyCancelRunMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/run\/cancel$/);
       if (legacyCancelRunMatch && request.method === "POST") {
-        const sessionId = decodeURIComponent(legacyCancelRunMatch[1]!);
+        const sessionId = decodePathParam(legacyCancelRunMatch[1]!, "sessionId");
         await cancelCurrentSessionRun(response, store, sessionId, true);
         scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
           artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
@@ -2460,7 +2467,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const teardownKernelMatch = url.pathname.match(/^\/api\/runtime-status\/kernels\/([^/]+)\/teardown$/);
       if (teardownKernelMatch && request.method === "POST") {
-        const kernelId = decodeURIComponent(teardownKernelMatch[1]!);
+        const kernelId = decodePathParam(teardownKernelMatch[1]!, "kernelId");
         sendJson(response, 200, await runnerClient.teardownKernel(
           kernelId,
           "User cleared the persistent Kernel from Runtime status",
@@ -2479,7 +2486,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const runnerDetail = url.pathname.match(/^\/api\/runners\/([^/]+)$/);
       if (runnerDetail && request.method === "GET" && runnerDetail[1] !== "npu") {
-        const id = decodeURIComponent(runnerDetail[1]!);
+        const id = decodePathParam(runnerDetail[1]!, "runnerId");
         if (id !== "local" && !store.getRemoteHost(id)) return sendError(response, 404, "Runner not found");
         sendJson(response, 200, await runnerTarget(store, runnerClient, remoteCompute, id, { reachability: "now" }));
         return;
@@ -2588,7 +2595,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const runnerNpuMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/npu-devices$/);
       if (runnerNpuMatch && request.method === "PUT") {
-        const runnerId = decodeURIComponent(runnerNpuMatch[1]!);
+        const runnerId = decodePathParam(runnerNpuMatch[1]!, "runnerId");
         const body = await readJson<{ devices?: unknown }>(request);
         const devices = body.devices;
         if (!Array.isArray(devices) || devices.some((entry) => typeof entry !== "number")) {
@@ -2679,7 +2686,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const remoteRunnerActionMatch = url.pathname.match(/^\/api\/(?:remote-hosts\/([^/]+)\/runner|runners\/([^/]+))\/(connect|disconnect)$/);
       if (remoteRunnerActionMatch && request.method === "POST") {
-        const host = store.getRemoteHost(decodeURIComponent((remoteRunnerActionMatch[1] ?? remoteRunnerActionMatch[2])!));
+        const host = store.getRemoteHost(decodePathParam((remoteRunnerActionMatch[1] ?? remoteRunnerActionMatch[2])!, "host"));
         if (!host) return sendError(response, 404, "Remote host not found");
         if (remoteRunnerActionMatch[3] === "disconnect") {
           sendJson(response, 200, await remoteCompute.disconnectRunner(host.id));
@@ -2702,7 +2709,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const remoteConnectLogMatch = url.pathname.match(/^\/api\/runners\/([^/]+)\/connect-log$/)
         ?? url.pathname.match(/^\/api\/remote-hosts\/([^/]+)\/runner\/connect-log$/);
       if (remoteConnectLogMatch && request.method === "GET") {
-        const hostId = decodeURIComponent(remoteConnectLogMatch[1]!);
+        const hostId = decodePathParam(remoteConnectLogMatch[1]!, "hostId");
         if (hostId !== "local" && !store.getRemoteHost(hostId)) return sendError(response, 404, "Runner not found");
         sendJson(response, 200, { entries: remoteCompute.connectLog(hostId), hostId } satisfies RemoteConnectLog);
         return;
@@ -2758,7 +2765,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const skillReviewConfirmMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)\/confirm$/);
       if (skillReviewConfirmMatch && request.method === "POST") {
-        const draftId = decodeURIComponent(skillReviewConfirmMatch[1]!);
+        const draftId = decodePathParam(skillReviewConfirmMatch[1]!, "draftId");
         const body = await readJson<ConfirmSkillReviewDraftRequest>(request);
         const requestedLibraryId = body.libraryId?.trim();
         const libraryId = requestedLibraryId || DEFAULT_WRITABLE_SKILL_LIBRARY_ID;
@@ -2823,14 +2830,14 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const skillReviewDraftMatch = url.pathname.match(/^\/api\/skill-review-drafts\/([^/]+)$/);
       if (skillReviewDraftMatch && request.method === "GET") {
-        const draftId = decodeURIComponent(skillReviewDraftMatch[1]!);
+        const draftId = decodePathParam(skillReviewDraftMatch[1]!, "draftId");
         const draft = await skillCatalog.getReviewDraft(draftId);
         if (!draft) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill review draft not found: ${draftId}`);
         sendJson(response, 200, draft);
         return;
       }
       if (skillReviewDraftMatch && request.method === "DELETE") {
-        const draftId = decodeURIComponent(skillReviewDraftMatch[1]!);
+        const draftId = decodePathParam(skillReviewDraftMatch[1]!, "draftId");
         await skillCatalog.discardReviewDraft(draftId);
         sendJson(response, 200, { discarded: draftId });
         return;
@@ -2908,7 +2915,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const gitImportJobMatch = url.pathname.match(/^\/api\/skills\/import-git\/jobs\/([^/]+)$/);
       if (gitImportJobMatch) {
-        const jobId = decodeURIComponent(gitImportJobMatch[1]!);
+        const jobId = decodePathParam(gitImportJobMatch[1]!, "jobId");
         if (request.method === "GET") {
           const job = getGitSkillImportJob(jobId);
           if (!job) throw new ApiStatusError(404, "Git Skill import job not found");
@@ -2960,7 +2967,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const skillDeletionImpactMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/deletion-impact$/);
       if (skillDeletionImpactMatch && request.method === "GET") {
-        const skillId = decodeURIComponent(skillDeletionImpactMatch[1]!);
+        const skillId = decodePathParam(skillDeletionImpactMatch[1]!, "skillId");
         const skill = skillCatalog.get(skillId);
         if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         const impact = store.getSkillDeletionImpact(skillId);
@@ -2976,22 +2983,22 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const skillVersionMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/versions\/([^/]+)$/);
       if (skillVersionMatch && request.method === "GET") {
         sendJson(response, 200, await skillCatalog.getSkillVersion(
-          decodeURIComponent(skillVersionMatch[1]!),
-          decodeURIComponent(skillVersionMatch[2]!),
+          decodePathParam(skillVersionMatch[1]!, "skillId"),
+          decodePathParam(skillVersionMatch[2]!, "version"),
         ));
         return;
       }
       const skillVersionsMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/versions$/);
       if (skillVersionsMatch && request.method === "GET") {
-        sendJson(response, 200, await skillCatalog.listSkillVersions(decodeURIComponent(skillVersionsMatch[1]!)));
+        sendJson(response, 200, await skillCatalog.listSkillVersions(decodePathParam(skillVersionsMatch[1]!, "skillId")));
         return;
       }
 
       const skillFileRenameMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/files\/(.+)\/rename$/);
       if (skillFileRenameMatch && request.method === "POST") {
         sendJson(response, 200, await skillCatalog.renameFile(
-          decodeURIComponent(skillFileRenameMatch[1]!),
-          decodeURIComponent(skillFileRenameMatch[2]!),
+          decodePathParam(skillFileRenameMatch[1]!, "skillId"),
+          decodePathParam(skillFileRenameMatch[2]!, "filePath"),
           await readJson<RenameSkillFileRequest>(request),
         ));
         return;
@@ -3000,16 +3007,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const skillFileMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/files\/(.+)$/);
       if (skillFileMatch && request.method === "PUT") {
         sendJson(response, 200, await skillCatalog.updateFile(
-          decodeURIComponent(skillFileMatch[1]!),
-          decodeURIComponent(skillFileMatch[2]!),
+          decodePathParam(skillFileMatch[1]!, "skillId"),
+          decodePathParam(skillFileMatch[2]!, "filePath"),
           await readJson<UpdateSkillFileRequest>(request),
         ));
         return;
       }
       if (skillFileMatch && request.method === "DELETE") {
         sendJson(response, 200, await skillCatalog.deleteFile(
-          decodeURIComponent(skillFileMatch[1]!),
-          decodeURIComponent(skillFileMatch[2]!),
+          decodePathParam(skillFileMatch[1]!, "skillId"),
+          decodePathParam(skillFileMatch[2]!, "filePath"),
           await readJson<DeleteSkillFileRequest>(request),
         ));
         return;
@@ -3017,12 +3024,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const skillMarkdownMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/skill-md$/);
       if (skillMarkdownMatch && request.method === "GET") {
-        sendJson(response, 200, skillCatalog.readSkillMarkdown(decodeURIComponent(skillMarkdownMatch[1]!)));
+        sendJson(response, 200, skillCatalog.readSkillMarkdown(decodePathParam(skillMarkdownMatch[1]!, "skillId")));
         return;
       }
       if (skillMarkdownMatch && request.method === "PUT") {
         sendJson(response, 200, await skillCatalog.updateSkillMarkdown(
-          decodeURIComponent(skillMarkdownMatch[1]!),
+          decodePathParam(skillMarkdownMatch[1]!, "skillId"),
           await readJson<UpdateSkillMarkdownRequest>(request),
         ));
         return;
@@ -3031,15 +3038,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const skillResourceMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/resources\/(.+)$/);
       if (skillResourceMatch && request.method === "GET") {
         sendJson(response, 200, skillCatalog.readCurrentResource(
-          decodeURIComponent(skillResourceMatch[1]!),
-          decodeURIComponent(skillResourceMatch[2]!),
+          decodePathParam(skillResourceMatch[1]!, "skillId"),
+          decodePathParam(skillResourceMatch[2]!, "resourcePath"),
         ));
         return;
       }
 
       const skillPackageMatch = url.pathname.match(/^\/api\/skills\/([^/]+)\/package$/);
       if (skillPackageMatch && request.method === "GET") {
-        const archive = skillCatalog.exportPackage(decodeURIComponent(skillPackageMatch[1]!));
+        const archive = skillCatalog.exportPackage(decodePathParam(skillPackageMatch[1]!, "skillId"));
         response.writeHead(200, {
           "cache-control": "no-store",
           "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(archive.filename)}`,
@@ -3053,19 +3060,19 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
       if (skillMatch && request.method === "GET") {
-        const skillId = decodeURIComponent(skillMatch[1]!);
+        const skillId = decodePathParam(skillMatch[1]!, "skillId");
         const detail = skillCatalog.get(skillId);
         if (!detail) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         sendJson(response, 200, detail);
         return;
       }
       if (skillMatch && request.method === "PUT") {
-        const skillId = decodeURIComponent(skillMatch[1]!);
+        const skillId = decodePathParam(skillMatch[1]!, "skillId");
         sendJson(response, 200, await skillCatalog.update(skillId, await readJson<UpdateSkillRequest>(request)));
         return;
       }
       if (skillMatch && request.method === "DELETE") {
-        const skillId = decodeURIComponent(skillMatch[1]!);
+        const skillId = decodePathParam(skillMatch[1]!, "skillId");
         const skill = skillCatalog.get(skillId);
         if (!skill) throw new SkillCatalogError("SKILL_NOT_FOUND", `Skill not found: ${skillId}`);
         const impact: SkillDeletionImpact = store.getSkillDeletionImpact(skillId);
@@ -3084,7 +3091,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const runnerManagement = url.pathname.match(/^\/api\/(?:remote-hosts|runners)\/([^/]+)\/(environment-setup|environment-revisions|environments(?:\/[^/]+(?:\/(?:install|uninstall))?)?|workspaces(?:\/[^/]+(?:\/files)?)?)$/);
       if (runnerManagement) {
-        const hostId = decodeURIComponent(runnerManagement[1]!);
+        const hostId = decodePathParam(runnerManagement[1]!, "hostId");
         const host = store.getRemoteHost(hostId);
         if (hostId !== "local" && !host) return sendError(response, 404, "Runner not found");
         const operation = runnerManagement[2]!;
@@ -3097,7 +3104,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         catch (error) { return sendError(response, 503, error instanceof Error ? error.message : "Connect this Runner first"); }
         const workspaceFiles = operation.match(/^workspaces\/([^/]+)\/files$/);
         if (workspaceFiles && request.method === "GET") {
-          const sessionId = decodeURIComponent(workspaceFiles[1]!);
+          const sessionId = decodePathParam(workspaceFiles[1]!, "sessionId");
           const binding = (await runnerWorkspaceBindings(store, hostId)).find((item) => item.sessionId === sessionId);
           if (!binding) return sendError(response, 404, "Workspace binding not found");
           const files = hostId === "local" ? await listWorkspaceFiles(store, sessionId)
@@ -3106,7 +3113,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           return;
         }
         if (operation.startsWith("workspaces/") && request.method === "DELETE") {
-          const sessionId = decodeURIComponent(operation.slice("workspaces/".length));
+          const sessionId = decodePathParam(operation.slice("workspaces/".length), "sessionId");
           store.assertSessionWritable(sessionId);
           const binding = (await runnerWorkspaceBindings(store, hostId)).find((item) => item.sessionId === sessionId);
           if (!binding) return sendError(response, 404, "Workspace binding not found");
@@ -3165,7 +3172,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (environmentInstallMatch && request.method === "POST") {
         const body = await readJson<InstallEnvironmentRequest>(request);
         const packages = readEnvironmentPackages(body);
-        const environmentId = decodeURIComponent(environmentInstallMatch[1]!);
+        const environmentId = decodePathParam(environmentInstallMatch[1]!, "environmentId");
         if (packages.some((value) => value.trim().toLowerCase().endsWith(".whl"))) {
           return sendError(
             response,
@@ -3189,7 +3196,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (environmentUninstallMatch && request.method === "POST") {
         const body = await readJson<UninstallEnvironmentRequest>(request);
         const packages = readEnvironmentPackages(body);
-        const environmentId = decodeURIComponent(environmentUninstallMatch[1]!);
+        const environmentId = decodePathParam(environmentUninstallMatch[1]!, "environmentId");
         const revision = await runnerClient.uninstallEnvironment(environmentId, { packages });
         await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
         const environment = store.listEnvironments().find((candidate) => candidate.id === environmentId);
@@ -3199,7 +3206,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const environmentMatch = url.pathname.match(/^\/api\/environments\/([^/]+)$/);
       if (environmentMatch && request.method === "DELETE") {
-        const environmentId = decodeURIComponent(environmentMatch[1]!);
+        const environmentId = decodePathParam(environmentMatch[1]!, "environmentId");
         await runnerClient.deleteEnvironment(environmentId);
         await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
         sendJson(response, 200, { deleted: environmentId });
@@ -3213,7 +3220,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const modelConnectivityMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/test$/);
       if (modelConnectivityMatch && request.method === "POST") {
-        const modelId = decodeURIComponent(modelConnectivityMatch[1]!);
+        const modelId = decodePathParam(modelConnectivityMatch[1]!, "modelId");
         const savedProfile = store.getModel(modelId);
         if (!savedProfile) return sendError(response, 404, "Model not found");
         // Store edits mutate the saved object. Keep the approved revision frozen
@@ -3573,8 +3580,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       // first, which for a long run is several megabytes nobody asked for.
       const sessionSubagentMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)$/);
       if (sessionSubagentMatch && request.method === "GET") {
-        const sessionId = decodeURIComponent(sessionSubagentMatch[1]!);
-        const subagentId = decodeURIComponent(sessionSubagentMatch[2]!);
+        const sessionId = decodePathParam(sessionSubagentMatch[1]!, "sessionId");
+        const subagentId = decodePathParam(sessionSubagentMatch[2]!, "subagentId");
         if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         const child = store.getSubagent(sessionId, subagentId);
         if (child === undefined) return sendError(response, 404, `Subagent not found: ${subagentId}`);
@@ -3583,8 +3590,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const stopSubagentMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/stop$/);
       if (stopSubagentMatch && request.method === "POST") {
-        const sessionId = decodeURIComponent(stopSubagentMatch[1]!);
-        const subagentId = decodeURIComponent(stopSubagentMatch[2]!);
+        const sessionId = decodePathParam(stopSubagentMatch[1]!, "sessionId");
+        const subagentId = decodePathParam(stopSubagentMatch[2]!, "subagentId");
         if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         if (!stopSessionSubagent(store, sessionId, subagentId)) sendError(response, 404, `Subagent not found: ${subagentId}`);
         else sendJson(response, 200, { stopped: true, sessionId, subagentId });
@@ -4105,8 +4112,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         /^\/api\/sessions\/([^/]+)\/web-pages\/([^/]+)\/content$/,
       );
       if (webPageContentMatch && request.method === "GET") {
-        const sessionId = decodeURIComponent(webPageContentMatch[1]!);
-        const webPageId = decodeURIComponent(webPageContentMatch[2]!);
+        const sessionId = decodePathParam(webPageContentMatch[1]!, "sessionId");
+        const webPageId = decodePathParam(webPageContentMatch[2]!, "webPageId");
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
         if (!memoryGraphEnabled()) {
           // Mirror the toggle-off shape of the other /api/memory/* endpoints:
@@ -4239,7 +4246,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const trajectoryMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/trajectory(?:\/(detail|export))?$/);
       if (trajectoryMatch && request.method === "GET") {
-        const sessionId = decodeURIComponent(trajectoryMatch[1]!);
+        const sessionId = decodePathParam(trajectoryMatch[1]!, "sessionId");
         if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
         const controller = new AbortController();
         response.once("close", () => controller.abort());
@@ -4324,7 +4331,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         }
         const maxNodes = Number(url.searchParams.get("maxNodes") ?? "0");
         sendJson(response, 200, await memoryGraphClient.getSearchGraph(
-          decodeURIComponent(searchGraphMatch[1]!),
+          decodePathParam(searchGraphMatch[1]!, "sessionId"),
           Number.isFinite(maxNodes) && maxNodes > 0 ? Math.floor(maxNodes) : undefined,
         ));
         return;
@@ -4332,7 +4339,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const evolveDraftMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/evolve\/draft$/);
       if (evolveDraftMatch && request.method === "POST") {
-        const sessionId = decodeURIComponent(evolveDraftMatch[1]!);
+        const sessionId = decodePathParam(evolveDraftMatch[1]!, "sessionId");
         const session = store.assertSessionWritable(sessionId);
         const body = await readJson<{ task?: unknown }>(request);
         const task = typeof body.task === "string" ? body.task.trim() : "";
@@ -4359,7 +4366,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!Number.isFinite(after) || after < 0) return sendError(response, 400, "after must be a non-negative number");
         await handleEvolveRunEvents(
           request, response, evolutionStore, evolveOrchestrator,
-          decodeURIComponent(evolveRunEventsMatch[1]!), Math.floor(after),
+          decodePathParam(evolveRunEventsMatch[1]!, "runId"), Math.floor(after),
         );
         return;
       }
@@ -4370,15 +4377,15 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (evolveCandidateMatch && request.method === "GET") {
         await handleEvolveGetCandidate(
           response, evolutionStore, evolveCandidates,
-          decodeURIComponent(evolveCandidateMatch[1]!),
-          decodeURIComponent(evolveCandidateMatch[2]!),
+          decodePathParam(evolveCandidateMatch[1]!, "runId"),
+          decodePathParam(evolveCandidateMatch[2]!, "candidateId"),
         );
         return;
       }
 
       const evolveRunStopMatch = url.pathname.match(/^\/api\/evolve\/runs\/([^/]+)\/stop$/);
       if (evolveRunStopMatch && request.method === "POST") {
-        await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodeURIComponent(evolveRunStopMatch[1]!));
+        await handleEvolveStopRun(response, evolutionStore, evolveOrchestrator, decodePathParam(evolveRunStopMatch[1]!, "runId"));
         return;
       }
 
@@ -4386,7 +4393,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       if (evolveRunRetryMatch && request.method === "POST") {
         await handleEvolveRetryRun(
           response, evolutionStore, evolveOrchestrator,
-          decodeURIComponent(evolveRunRetryMatch[1]!), store,
+          decodePathParam(evolveRunRetryMatch[1]!, "runId"), store,
         );
         return;
       }
@@ -4712,6 +4719,58 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 200, subgraph);
         return;
       }
+      // A person deleting one Evidence record from the desktop's citation
+      // card. This is a write, so it cannot use the read routes' empty-payload
+      // degradation: the card must know whether the record is gone. Refusals
+      // are explicit HTTP statuses instead — 404 for an unknown node, 400 for
+      // a non-whitelisted type, 409 when memory is off, 502 when the sidecar
+      // cannot be reached. cleanup/session|project keep their bulk semantics.
+      if (request.method === "POST" && url.pathname === "/api/memory/delete/node") {
+        const body = await readJson<{
+          node_id?: unknown;
+          node_type?: unknown;
+          session_id?: unknown;
+        }>(request);
+        if (typeof body.node_id !== "string" || !body.node_id.trim()) {
+          return sendError(response, 400, "node_id must be non-empty");
+        }
+        if (typeof body.node_type !== "string" || !DELETABLE_MEMORY_NODE_TYPES.has(body.node_type)) {
+          return sendError(response, 400, "node_type must be Evidence", "node_type_not_deletable");
+        }
+        if (body.session_id !== undefined
+          && (typeof body.session_id !== "string" || !body.session_id.trim())) {
+          return sendError(response, 400, "session_id must be a non-empty string");
+        }
+        if (!memoryGraphEnabled()) {
+          return sendError(response, 409, "Scientific memory is not enabled", "memory_graph_disabled");
+        }
+        const result = await memoryGraphClient.deleteNode(
+          body.node_id.trim(),
+          body.node_type as MemoryGraphNodeLabel,
+          body.session_id as string | undefined,
+        );
+        if (result.status === "not_found") {
+          return sendError(response, 404, "Memory node not found", "node_not_found");
+        }
+        if (result.status === "rejected") {
+          return sendError(response, 400, "Memory node type is not deletable", "node_type_not_deletable");
+        }
+        if (result.status === "degraded") {
+          // A refused internal token is not a service that never answered. The
+          // status stays 502 (the write did not happen) but the message and
+          // code carry the real reason, matching the read routes.
+          return sendError(
+            response,
+            502,
+            result.reason === MEMORY_GRAPH_UNAUTHORIZED
+              ? "memory graph rejected the internal token"
+              : "memory graph unreachable",
+            result.reason ?? "memory_graph_unreachable",
+          );
+        }
+        sendJson(response, 200, result);
+        return;
+      }
       // --- Memory-graph cross-session read endpoints --------------------------
       // All reverse-proxy to the Python sidecar; when the feature is off
       // (toggle off) or the sidecar/Neo4j is down, each returns an empty
@@ -4882,7 +4941,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const activityMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/agent-activity(?:\/(executions|transfers|timers)\/([^/]+)\/(logs|cancel|reconcile))?$/);
       if (activityMatch) {
-        const sessionId = decodeURIComponent(activityMatch[1]!);
+        const sessionId = decodePathParam(activityMatch[1]!, "sessionId");
         if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         const owners = [{ sessionId, agentId: "main" }, ...store.listSubagents(sessionId).map((child) => ({ sessionId, agentId: `subagent:${child.id}` }))];
         const executions = owners.flatMap((owner) => store.shellExecutions.list(owner));
@@ -4892,7 +4951,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           sendJson(response, 200, { executions, transfers, timers, agents: owners.map((owner) => ({ ...owner, stopped: !store.notifications.canWakeAgent(owner) })) });
           return;
         }
-        const kind = activityMatch[2]; const id = decodeURIComponent(activityMatch[3] ?? ""); const operation = activityMatch[4];
+        const kind = activityMatch[2]; const id = decodePathParam(activityMatch[3] ?? "", "id"); const operation = activityMatch[4];
         const item = (kind === "executions" ? executions : kind === "transfers" ? transfers : timers).find((entry) => entry.id === id);
         if (!item) {
           const noun = kind === "executions" ? "Execution" : kind === "transfers" ? "Transfer" : "Timer";
@@ -4927,7 +4986,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const resumeChildMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/subagents\/([^/]+)\/resume$/);
       if (resumeChildMatch && request.method === "POST") {
-        const sessionId = decodeURIComponent(resumeChildMatch[1]!); const subagentId = decodeURIComponent(resumeChildMatch[2]!);
+        const sessionId = decodePathParam(resumeChildMatch[1]!, "sessionId"); const subagentId = decodePathParam(resumeChildMatch[2]!, "subagentId");
         if (!store.getSession(sessionId)) return sendError(response, 404, `Session not found: ${sessionId}`);
         store.assertSessionWritable(sessionId);
         if (!store.listSubagents(sessionId).some((child) => child.id === subagentId)) return sendError(response, 404, `Subagent not found: ${subagentId}`);
@@ -5230,6 +5289,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           || (request.method === "DELETE" && /^\/api\/environments\/[^/]+$/.test(requestPath)))) {
         sendError(response, error.statusCode, message);
       }
+      // A path segment that is not valid percent-encoding is the caller's own
+      // input, not a fault here: 400 with the parameter named, and no
+      // `unclassified_request_error` line describing a client mistake as a
+      // server fault.
+      else if (code === "MALFORMED_PATH_PARAM") sendError(response, 400, message);
       else if (isKnownClientInputError(error)) sendError(response, 400, message);
       else {
         apiLog.error("unclassified_request_error", {

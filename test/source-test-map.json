@@ -126,6 +126,12 @@
         },
         {
           "source": "services/api/src/server.test.ts",
+          "identity": "memory-delete-http-contract",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "services/api/src/server.test.ts",
           "identity": "session-isolation-artifact-version-chain",
           "layer": "ut",
           "complexity": "C3"
@@ -1483,6 +1489,18 @@
       "tests": [
         {
           "source": "services/api/src/http/static.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "services/api/src/http/path-params.ts",
+      "risk": "P1",
+      "owner": "api",
+      "tests": [
+        {
+          "source": "services/api/src/http/malformed-path.test.ts",
           "layer": "ut",
           "complexity": "C2"
         }
@@ -3076,6 +3094,23 @@
       ]
     },
     {
+      "source": "apps/desktop/src/api/memory.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/api-memory.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/memory-delete.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/ArtifactDialog.tsx",
       "risk": "P1",
       "owner": "desktop",
@@ -3094,6 +3129,11 @@
       "tests": [
         {
           "source": "apps/desktop/tests/remaining-ui-coverage.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/memory-delete.test.tsx",
           "layer": "ut",
           "complexity": "C2"
         }
@@ -3797,6 +3837,11 @@
           "source": "apps/desktop/tests/account-format.test.tsx",
           "layer": "ut",
           "complexity": "C1"
+        },
+        {
+          "source": "apps/desktop/tests/tool-diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
         }
       ]
     },
@@ -3814,6 +3859,28 @@
           "source": "apps/desktop/tests/account-format.test.tsx",
           "layer": "ut",
           "complexity": "C1"
+        },
+        {
+          "source": "apps/desktop/tests/tool-diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/tool-diagnostics.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/tool-diagnostics.test.ts",
+          "layer": "ut",
+          "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/failure-cards.spec.ts",
+          "layer": "ui-st",
+          "complexity": "C3"
         }
       ]
     },
@@ -4001,6 +4068,71 @@
           "source": "apps/desktop/e2e/mcp-layout.spec.ts",
           "layer": "ui-st",
           "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/api/workbench.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-search.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/app/session-read-only.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-read-only.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/app/session-search.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/session-search.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "owner": "desktop",
+      "risk": "P1",
+      "source": "apps/desktop/src/views/SearchDialog.tsx",
+      "tests": [
+        {
+          "complexity": "C2",
+          "layer": "ut",
+          "source": "apps/desktop/tests/search-dialog.test.tsx"
+        },
+        {
+          "complexity": "C3",
+          "layer": "st",
+          "source": "apps/desktop/e2e/search-dialog.spec.ts"
+        }
+      ]
+    },
+    {
+      "owner": "desktop",
+      "risk": "P1",
+      "source": "apps/desktop/src/views/search-hit-icons.tsx",
+      "tests": [
+        {
+          "complexity": "C2",
+          "layer": "ut",
+          "source": "apps/desktop/tests/search-hit-icons.test.tsx"
         }
       ]
     }

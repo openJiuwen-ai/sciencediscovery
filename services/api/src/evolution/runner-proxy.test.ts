@@ -88,6 +88,18 @@ function deps(overrides: Partial<EvolveRunnerDeps> = {}): EvolveRunnerDeps & { s
   };
 }
 
+test("a malformed run id is the caller's mistake, not a URIError", async () => {
+  await assert.rejects(
+    handleEvolveRunner(
+      requestOf("GET", undefined),
+      capture(),
+      new URL("http://api/internal/evolve-runner/run-%%/shell-executions"),
+      deps(),
+    ),
+    (error: unknown) => (error as { code?: string }).code === "MALFORMED_PATH_PARAM",
+  );
+});
+
 test("a conversation with only the local runner is refused", () => {
   assert.deepEqual(connectedRunner(["local"], () => true), {
     error: "this conversation has no remote runner selected",

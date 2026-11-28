@@ -10,9 +10,52 @@ import type { RunTokenRegistry } from "../evolution/llm-proxy.js";
  */
 const RETIRE_SWEEP_MS = 5000;
 
+/**
+ * How long the engine is given to acknowledge a command.
+ *
+ * The engine starts the run before it answers (`research_service.start()` saves
+ * `running` and schedules the task, then returns), so this timeout says nothing
+ * about whether the command took effect — only that its answer is not coming.
+ */
+const COMMAND_TIMEOUT_MS = 15_000;
+
+/** How long the read-back gets when it has to decide a lost answer's fate. */
+const RECOVERY_READ_MS = 5_000;
+
+/** A refusal the engine itself answered: it did not start anything. */
+class CommandRefused extends Error {
+  /** The status it answered with. A 404 is how it says it knows no such research. */
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 /** The research states a stream stays open for; anything else is terminal. */
 function terminal(status: unknown): boolean {
   return typeof status === "string" && status !== "running" && status !== "pausing";
+}
+
+/**
+ * Whether a read-back shows a resume took effect even though the research comes
+ * back in the state the command found.
+ *
+ * `continue` on an interrupted research can start a run that dies again on the
+ * same cause: the name is unchanged, but the attempt left a mark — another
+ * round, another round's usage, the engine's own reason for stopping, or the
+ * activity it appends for each model call before making it. The last one
+ * matters on its own: a call that fails the same way again moves neither the
+ * round, nor the usage the provider never reported, nor the reason's text, so
+ * only the new activity says a call was made. With none of them moved, nothing
+ * ran.
+ */
+function movedPast(previous: IdeaResearchView["research"] | undefined, next: IdeaResearchView["research"]): boolean {
+  if (!previous) return false;
+  return next.round !== previous.round
+    || next.tokens !== previous.tokens
+    || next.reason !== previous.reason
+    || (next.activities?.length ?? 0) > (previous.activities?.length ?? 0);
 }
 
 /** Only transport and credentials live here. Python owns research state and scheduling. */
@@ -32,13 +75,39 @@ export function createIdeaResearchClient(options: {
     options.tokens.revoke(researchId);
     grants.delete(researchId);
   }
-  async function invoke(sessionId: string, operation: string, input: Record<string, unknown> = {}): Promise<any> {
+  /** Give back the grant a command issued, if it issued one. */
+  function withdraw(issued: string | undefined) {
+    if (!issued) return;
+    options.tokens.revoke(issued);
+    grants.delete(issued);
+  }
+  /**
+   * What the research is doing now, and whether the engine answered at all.
+   *
+   * A refusal from the engine (`CommandRefused`) means it heard the question, so
+   * a research it does not know is a research that does not exist. Any other
+   * failure means the question itself was lost, and nothing can be concluded.
+   */
+  async function readBack(sessionId: string, researchId: string): Promise<{ reached: boolean; view?: IdeaResearchView }> {
+    try {
+      return { reached: true, view: await invoke(sessionId, "get", { researchId }, RECOVERY_READ_MS) };
+    } catch (error) {
+      return { reached: error instanceof CommandRefused };
+    }
+  }
+  async function invoke(sessionId: string, operation: string, input: Record<string, unknown> = {}, timeoutMs = COMMAND_TIMEOUT_MS): Promise<any> {
     const target = await connection();
     const session = operation === "list" || operation === "get" || operation === "defaults"
       ? options.store.getSession(sessionId) : options.store.assertSessionWritable(sessionId);
     if (!session) throw new Error("Session not found");
     let payload: Record<string, unknown> = { ...input, operation, projectId: session.projectId, sessionId };
     let issued: string | undefined;
+    /** The status a `continue` found before sending, so a read-back can tell a
+     *  run that started from a research that never left where it was. */
+    let before: string | undefined;
+    /** That same view: a resumed run can end where it started and still have run,
+     *  which the state's name alone cannot show. */
+    let beforeState: IdeaResearchView["research"] | undefined;
     if (operation === "create" || operation === "continue") {
       if (operation === "create" && typeof input.content === "string") {
         const objective = input.content.replace(/^\/idea-tree(?:-team)?(?:\s+|$)/u, "").trim();
@@ -54,6 +123,8 @@ export function createIdeaResearchClient(options: {
         throw new Error("Research exhausted its token budget; increase the token limit and start a new research");
       }
       if (previous && !["paused", "interrupted"].includes(previous.research.status)) throw new Error("Research is not resumable");
+      before = previous?.research.status;
+      beforeState = previous?.research;
       const modelId = previous?.research.modelId ?? options.store.resolveRuntimeSettings(sessionId).effective.modelId;
       const model = options.store.getModel(modelId);
       if (!model || !options.store.getModelApiToken(model.id)) throw new Error("Configure a model with an API token before starting research");
@@ -72,17 +143,76 @@ export function createIdeaResearchClient(options: {
       const observedGrants = new Map(grants);
       const response = await fetch(`${target.url.replace(/\/$/, "")}/idea-tree/research/command`, {
         method: "POST", headers: { "content-type": "application/json", ...(target.internalToken ? { authorization: `Bearer ${target.internalToken}` } : {}) },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs),
       });
-      const body = await response.json() as any;
-      if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
+      // A refusal is judged by the status, not by the body. A gateway's HTML page
+      // is still an answer, and asking it to be JSON first would rethrow a parse
+      // error instead of the status that was actually given.
+      let body: any;
+      try { body = await response.json(); } catch { body = undefined; }
+      if (!response.ok) {
+        const detail = body === undefined ? undefined
+          : typeof body?.detail === "string" ? body.detail : JSON.stringify(body?.detail);
+        const message = detail || `HTTP ${response.status}`;
+        // The engine's own answer is a verdict: it replied, so nothing started.
+        // A 5xx is not a verdict. The engine saves `running` and schedules the run
+        // before it builds its answer, so an error while producing that answer
+        // arrives with the run already going — the same case as a lost answer, and
+        // it takes the read-back below.
+        if (response.status < 500) throw new CommandRefused(message, response.status);
+        throw new Error(message);
+      }
+      if (body === undefined) throw new Error(`The answer to the ${operation} command could not be read.`);
       const views: IdeaResearchView[] = body.items ?? (body.research ? [body] : []);
       for (const view of views) {
         if (terminal(view.research.status) && grants.has(view.research.id) && grants.get(view.research.id) === observedGrants.get(view.research.id)) retire(view.research.id);
       }
       return body;
     } catch (error) {
-      if (issued) { options.tokens.revoke(issued); grants.delete(issued); }
+      if (!issued) throw error;
+      // A lost answer is not a failed command. The engine saves `running` and
+      // schedules the run before it replies, so a timeout — or a reply that never
+      // arrives — says nothing about whether the research is already working.
+      // Revoking here would leave a running research with no credential: the LLM
+      // proxy answers 401 to every model call, and the run the user did start dies
+      // for a reason nobody can see. Only an answered refusal is certain.
+      if (error instanceof CommandRefused) {
+        withdraw(issued);
+        throw error;
+      }
+      const known = await readBack(sessionId, issued);
+      if (known.view) {
+        const status = known.view.research.status;
+        if (status === "running" || status === "pausing") {
+          // The command took effect. The grant stays, and the caller is handed the
+          // state the engine reports instead of an error about a lost answer.
+          return known.view;
+        }
+        if (operation === "create" || status !== before || movedPast(beforeState, known.view.research)) {
+          // It took effect and has already ended — a research the engine knows,
+          // in a state that is not where this command found the research, or in
+          // that same state carrying the mark of a run that started and stopped
+          // again. Retire the grant and report the view: telling the caller it
+          // failed would invite a retry, and a retried create makes a second one.
+          retire(issued);
+          return known.view;
+        }
+        // The engine answered and the research is exactly where it was: nothing
+        // took effect, so the grant it was issued goes back.
+        withdraw(issued);
+        throw error;
+      }
+      if (!known.reached) {
+        // Nothing answered, so nothing is known. Keep the grant: a run that did
+        // start must not be left without a credential. The fallback sweep retires
+        // it as soon as the research reports a terminal state — or, if the
+        // research never existed, as soon as the engine says it knows no such
+        // research.
+        throw new Error(`The research command was sent but its answer was lost, and ${issued} could not be read back. Its credential was kept, so a run that started is not left without one.`);
+      }
+      // The engine answered a question about a research it does not know — a 404 —
+      // so the command never took effect and the grant it was issued goes back.
+      withdraw(issued);
       throw error;
     }
   }
@@ -98,8 +228,15 @@ export function createIdeaResearchClient(options: {
       // will never be read again, and `invoke` refuses such a Session before
       // reaching the engine (`Session not found`), so waiting for an answer that
       // cannot come would keep the credential and cost one read per sweep.
-      if (!options.store.getSession(sessionId)) retire(researchId);
-      else if (!pending.has(sessionId)) void command(sessionId, "get", { researchId }).catch(() => undefined);
+      if (!options.store.getSession(sessionId)) { retire(researchId); continue; }
+      if (pending.has(sessionId)) continue;
+      void command(sessionId, "get", { researchId }).catch((error: unknown) => {
+        // A research the engine does not know was never created: the command and
+        // its read-back both failed before it existed. No terminal state is ever
+        // coming for it, so this 404 is the only chance to release the grant —
+        // otherwise it is read every five seconds until `close()`.
+        if (error instanceof CommandRefused && error.status === 404) retire(researchId);
+      });
     }
   }, RETIRE_SWEEP_MS);
   timer.unref();

@@ -28,6 +28,7 @@ import type { ExecutionOwner, PermissionEpoch, ShellExecutionRequest } from "@sc
 
 import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
+import { decodePathParam } from "../http/path-params.js";
 import { remoteWorkspaceKey } from "../remote-runner.js";
 
 interface RunnerGrant {
@@ -166,8 +167,8 @@ export async function handleEvolveRunner(
     /^\/internal\/evolve-runner\/([^/]+)\/shell-executions(?:\/([^/]+)(?:\/(cancel))?)?$/,
   );
   if (!match) return false;
-  const runId = decodeURIComponent(match[1]!);
-  const executionId = match[2] ? decodeURIComponent(match[2]) : undefined;
+  const runId = decodePathParam(match[1]!, "runId");
+  const executionId = match[2] ? decodePathParam(match[2], "executionId") : undefined;
   const cancel = match[3] === "cancel";
   const grant = deps.grants.resolve(runId, bearer(request));
   if (!grant) {

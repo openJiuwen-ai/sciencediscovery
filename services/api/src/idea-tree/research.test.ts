@@ -422,3 +422,400 @@ test("a grant whose Session record is gone is retired by the sweep instead of re
     run.restore();
   }
 });
+
+/** A registry that records the grants the client issued, so a test can ask the
+ *  same question the LLM proxy asks: would the engine's next call be admitted? */
+function recordingTokens() {
+  const registry = new RunTokenRegistry();
+  const issued: Array<{ researchId: string; token: string }> = [];
+  return {
+    registry,
+    ids: () => issued.map((item) => item.researchId),
+    last(researchId: string) {
+      const entry = [...issued].reverse().find((item) => item.researchId === researchId);
+      return entry === undefined ? undefined : registry.resolve(researchId, entry.token);
+    },
+    api: {
+      issue: (researchId: string, sessionId: string, modelId: string) => {
+        const token = registry.issue(researchId, sessionId, modelId);
+        issued.push({ researchId, token });
+        return token;
+      },
+      revoke: (researchId: string) => registry.revoke(researchId),
+    },
+  };
+}
+
+/**
+ * An engine that has already scheduled the run when its answer is lost, plus what
+ * a later read-back finds. `after: "lost"` makes the read-back fail too, which is
+ * the case where nothing at all is known.
+ */
+function losingEngine(options: { before?: string; after: "running" | "paused" | "completed" | "failed" | "lost" }) {
+  const operations: string[] = [];
+  const timeout = () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  let lost = false;
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "continue" || payload.operation === "create") {
+      lost = true;
+      throw timeout();
+    }
+    if (!lost) return { ok: true, json: async () => researchView(options.before ?? "paused") } as never;
+    if (options.after === "lost") throw timeout();
+    return { ok: true, json: async () => researchView(options.after) } as never;
+  }) as never;
+  return { operations, restore: () => { globalThis.fetch = original; } };
+}
+
+function clientWith(tokens: ReturnType<typeof recordingTokens>) {
+  return createIdeaResearchClient({
+    url: "http://127.0.0.1:1",
+    apiOrigin: "http://127.0.0.1:2",
+    store: storeWith({}) as never,
+    tokens: tokens.api as never,
+  });
+}
+
+test("a continue whose answer is lost keeps the grant when the research is running", async () => {
+  const tokens = recordingTokens();
+  const engine = losingEngine({ after: "running" });
+  const client = clientWith(tokens);
+  try {
+    // The engine started the run before it stopped answering: the command took
+    // effect, so the caller gets the state the engine reports, not an error.
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.equal(view.research.status, "running");
+    assert.deepEqual(engine.operations, ["get", "continue", "get"],
+      "the lost answer is followed by exactly one read-back");
+    assert.ok(tokens.last("research-1"),
+      "the next model call the engine makes is still admitted — the run is not left without a credential");
+  } finally {
+    client.close();
+    engine.restore();
+  }
+});
+
+test("a create whose answer is lost keeps the grant when the research is running", async () => {
+  const tokens = recordingTokens();
+  const engine = losingEngine({ after: "running" });
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "create", { objective: "Compare treatments" });
+    assert.equal(view.research.status, "running");
+    const researchId = tokens.ids()[0];
+    assert.ok(researchId, "the create issued a grant for the research it started");
+    assert.ok(tokens.last(researchId),
+      "the research the answer never confirmed keeps the credential its run needs");
+  } finally {
+    client.close();
+    engine.restore();
+  }
+});
+
+test("a command the engine refused gives its grant back", async () => {
+  const tokens = recordingTokens();
+  const original = globalThis.fetch;
+  const operations: string[] = [];
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "continue") {
+      return { ok: false, status: 409, json: async () => ({ detail: "Research is not resumable" }) } as never;
+    }
+    return { ok: true, json: async () => researchView("paused") } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(client.command("s1", "continue", { researchId: "research-1" }), /not resumable/);
+    assert.deepEqual(operations, ["get", "continue"],
+      "an answered refusal needs no read-back: the engine said it started nothing");
+    assert.equal(tokens.last("research-1"), undefined, "the grant it issued goes back");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a command whose answer is lost gives its grant back when the research did not start", async () => {
+  const tokens = recordingTokens();
+  const engine = losingEngine({ after: "paused" });
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(client.command("s1", "continue", { researchId: "research-1" }), /timeout/i);
+    assert.deepEqual(engine.operations, ["get", "continue", "get"],
+      "the read-back is what decides this, not the missing answer");
+    assert.equal(tokens.last("research-1"), undefined,
+      "nothing is running, so the credential it was issued is revoked");
+  } finally {
+    client.close();
+    engine.restore();
+  }
+});
+
+test("a command nobody can be asked about keeps its grant and says so", async () => {
+  const tokens = recordingTokens();
+  const engine = losingEngine({ after: "lost" });
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(
+      client.command("s1", "continue", { researchId: "research-1" }),
+      /could not be read back.*credential was kept/s,
+    );
+    assert.ok(tokens.last("research-1"),
+      "with no fact to act on, the credential is kept rather than stranding a run that may have started");
+  } finally {
+    client.close();
+    engine.restore();
+  }
+});
+
+test("a research the engine never created gives its grant back when it says it does not know it", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  const timeout = () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+  // The command and its read-back both lose their answers; later reads reach an
+  // engine that answers. The research was never created, so its `get` is a 404.
+  let reachable = false;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (!reachable) throw timeout();
+    return { ok: false, status: 404, json: async () => ({ detail: "Research not found" }) } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(
+      client.command("s1", "create", { objective: "Compare treatments" }),
+      /could not be read back/,
+    );
+    const researchId = tokens.ids()[0];
+    assert.ok(researchId, "the create issued a token");
+    assert.ok(tokens.last(researchId), "nothing is known yet, so the grant waits for the engine");
+    reachable = true;
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(operations, ["create", "get", "get"], "the fallback sweep asks once");
+    assert.equal(tokens.last(researchId), undefined,
+      "a research the engine does not know will never report a terminal state, so the 404 retires the grant");
+    t.mock.timers.tick(5_000);
+    await settle();
+    assert.deepEqual(operations, ["create", "get", "get"], "a retired grant is not read again");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a command that took effect and already ended reports the research instead of failing", async () => {
+  const tokens = recordingTokens();
+  // The command found the research paused and the read-back finds it completed:
+  // the resumed run happened and is over, so the caller is not told it failed.
+  const engine = losingEngine({ before: "paused", after: "completed" });
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.equal(view.research.status, "completed");
+    assert.deepEqual(engine.operations, ["get", "continue", "get"],
+      "the read-back is what reports the run that happened");
+    assert.equal(tokens.last("research-1"), undefined, "the research ended, so its grant is retired");
+  } finally {
+    client.close();
+    engine.restore();
+  }
+});
+
+test("a create whose research already ended still reports the research it made", async () => {
+  const tokens = recordingTokens();
+  const engine = losingEngine({ after: "failed" });
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "create", { objective: "Compare treatments" });
+    assert.equal(view.research.status, "failed");
+    const researchId = tokens.ids()[0];
+    assert.ok(researchId, "the create issued a grant for the research it started");
+    assert.equal(tokens.last(researchId), undefined,
+      "the research exists and has ended, so retrying would only make a second one");
+  } finally {
+    client.close();
+    engine.restore();
+  }
+});
+
+test("a resumed run that ends where it started is still reported as having run", async () => {
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  let resumed = false;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "continue") {
+      resumed = true;
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }
+    const view = researchView("interrupted");
+    if (!resumed) return { ok: true, json: async () => view } as never;
+    // The resumed run started and died again on the same cause: the state's name
+    // comes back the same, but the attempt left another round, its usage and the
+    // engine's own reason behind it.
+    return { ok: true, json: async () => ({ ...view,
+      research: { ...view.research, round: 1, tokens: 40, reason: "the run was interrupted again" } }) } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.deepEqual(operations, ["get", "continue", "get"], "the lost answer took the read-back path");
+    assert.equal(view.research.status, "interrupted", "the caller gets the state the engine reports");
+    assert.equal(view.research.reason, "the run was interrupted again",
+      "the engine's reason for the second stop reaches the caller instead of a timeout");
+    assert.equal(tokens.last("research-1"), undefined, "the run ended, so its grant is retired");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a resumed run that fails the same way again is still reported as having run", async () => {
+  const tokens = recordingTokens();
+  const original = globalThis.fetch;
+  let resumed = false;
+  const failed = (activity: string, startedAt: string) =>
+    ({ id: activity, kind: "model", startedAt, status: "failed", detail: "Model HTTP 401: invalid api key" });
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    if (payload.operation === "continue") {
+      resumed = true;
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }
+    const view = researchView("interrupted") as ReturnType<typeof researchView> & { research: Record<string, unknown> };
+    const activities = resumed
+      ? [failed("a1", "2026-11-27T01:00:00Z"), failed("a2", "2026-11-27T01:05:00Z")]
+      : [failed("a1", "2026-11-27T01:00:00Z")];
+    // Same round, same usage, same reason text: only the new activity says a
+    // second call was made — and that is the only mark the engine leaves when a
+    // resumed run fails again on the same cause.
+    return { ok: true, json: async () => ({ ...view,
+      research: { ...view.research, tokens: 40, reason: "Model HTTP 401: invalid api key", activities } }) } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.equal(view.research.activities?.length, 2, "the caller gets the attempt the engine recorded");
+    assert.equal(view.research.reason, "Model HTTP 401: invalid api key",
+      "the engine's reason reaches the caller instead of a timeout");
+    assert.equal(tokens.last("research-1"), undefined, "the run ended, so its grant is retired");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a continue whose read-back leaves everything where it was reports the failure", async () => {
+  const tokens = recordingTokens();
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    if (payload.operation === "continue") {
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }
+    // Nothing moved: no round, no usage, no reason. Nothing ran, so the command
+    // failed and the grant it was issued goes back.
+    return { ok: true, json: async () => researchView("interrupted") } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(client.command("s1", "continue", { researchId: "research-1" }), /aborted due to timeout/);
+    assert.equal(tokens.last("research-1"), undefined, "nothing ran, so the grant goes back");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a non-JSON answer that refuses the command is still a refusal", async () => {
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "create") {
+      // The engine refuses with a page, not with JSON: the status decides, not the body.
+      return { ok: false, status: 409, json: async () => { throw new SyntaxError("Unexpected token '<'"); } } as never;
+    }
+    return { ok: true, json: async () => researchView("paused") } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(client.command("s1", "create", { objective: "Compare treatments" }), /HTTP 409/);
+    assert.deepEqual(operations, ["create"], "an answered refusal needs no read-back");
+    const researchId = tokens.ids()[0];
+    assert.ok(researchId, "the create issued a token");
+    assert.equal(tokens.last(researchId), undefined, "nothing started, so the grant goes back");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a 5xx is a lost answer, not a refusal", async () => {
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "continue") {
+      return { ok: false, status: 503, json: async () => ({ detail: "engine busy" }) } as never;
+    }
+    return { ok: true, json: async () => researchView(reads++ === 0 ? "paused" : "running") } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    // The engine saves `running` and schedules the run before it builds its answer,
+    // so a 503 arrives with the run already going: that is a lost answer, and the
+    // read-back decides before any credential is taken away.
+    const view = await client.command("s1", "continue", { researchId: "research-1" });
+    assert.equal(view.research.status, "running");
+    assert.deepEqual(operations, ["get", "continue", "get"], "the 5xx took the read-back path");
+    assert.ok(tokens.last("research-1"), "the run that started keeps its credential");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});
+
+test("a read-back that itself answers 5xx keeps the grant", async () => {
+  const tokens = recordingTokens();
+  const operations: string[] = [];
+  const original = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    const payload = JSON.parse(init.body) as { operation: string };
+    operations.push(payload.operation);
+    if (payload.operation === "continue") {
+      return { ok: false, status: 503, json: async () => ({ detail: "engine busy" }) } as never;
+    }
+    // The resumability read answers; the read-back after the lost command does not.
+    if (reads++ === 0) return { ok: true, json: async () => researchView("paused") } as never;
+    return { ok: false, status: 503, json: async () => ({ detail: "engine busy" }) } as never;
+  }) as never;
+  const client = clientWith(tokens);
+  try {
+    await assert.rejects(
+      client.command("s1", "continue", { researchId: "research-1" }),
+      /could not be read back.*credential was kept/s,
+    );
+    assert.deepEqual(operations, ["get", "continue", "get"], "the read-back is made, and it failed");
+    assert.ok(tokens.last("research-1"), "a 5xx read-back says nothing about whether the run is live");
+  } finally {
+    client.close();
+    globalThis.fetch = original;
+  }
+});

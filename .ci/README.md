@@ -140,8 +140,14 @@ The recorded host memory is capacity, not measured peak usage.
 
 ### Parallel mocked browser workers
 
-The mocked matrix is frozen from the same `e2e` slice, with four independent
-jobs (`max-parallel: 4`, `fail-fast: false`). No case list lives in the workflow:
+The mocked matrix is frozen from the same `e2e` slice, with up to five
+independent jobs (`max-parallel: 5`, `fail-fast: false`). In CI, the two long
+standard shards (`standard-config` and `standard-journeys`) set
+`CI_E2E_LOCAL_CONCURRENCY=2` so each job runs two fully isolated local stacks
+(disjoint loopback ports, runtime directories, `JIUWENSWARM_HOME` roots, and
+Vite cache directories, each keeping Playwright `workers: 1` and serializing
+JiuwenSwarm port allocation via `CI_E2E_SWARM_START_LOCK`) in parallel without
+splitting any spec file. No case list lives in the workflow:
 
 | Worker | Fixture | Existing browser cases | Supplemental checks |
 | --- | --- | ---: | --- |
@@ -309,6 +315,20 @@ are administrative configuration, not created by committing workflow YAML.
 After L3 and the existing review requirements pass, the queue merges without
 another button. Post-merge pushes to `main` do not re-trigger `ci.yml`;
 Nightly and Release cover `main` and version tags via `workflow_call`.
+
+An optional repository variable `CI_SELF_HOSTED_MERGE_QUEUE` (default unset /
+off) routes only `merge_group` runs of `UT` and the three heavy L2 mocked E2E
+shards (`standard-config`, `standard-journeys`, `research`) to self-hosted
+Docker runners labelled `[self-hosted, Linux, X64, sciencediscovery]`. When
+enabled, those four jobs skip cross-region GitHub Actions caches, rely on the
+container's local `/ci-cache` volume (pnpm store, uv cache, pre-warmed
+Chromium, and `.ci/use-local-swarm-cache.sh` for a read-only shared
+JiuwenSwarm tree with per-job `JIUWENSWARM_HOME` isolation), and skip `sudo`
+bubblewrap provisioning when `bwrap` already works. `pull_request` (including
+forks), `workflow_dispatch`, `schedule`, `push`, light mocked shards
+(`governed`, `literature`), `ST`, desktop jobs, and real E2E jobs always stay
+on GitHub-hosted runners. Clearing or changing `CI_SELF_HOSTED_MERGE_QUEUE`
+immediately returns merge-queue runs to `ubuntu-latest`.
 
 GitHub's behavior is documented in
 [Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).
