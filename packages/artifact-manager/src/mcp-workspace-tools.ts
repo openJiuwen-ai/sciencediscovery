@@ -102,6 +102,11 @@ function unprefixedWorkspacePath(path: string | undefined, prefix: string | unde
   return path.startsWith(`${cleanedPrefix}/`) ? path.slice(cleanedPrefix.length + 1) : path;
 }
 
+/** How long a repair card stays actionable after the transport that carried the
+ *  blocked tool call has gone away, so a decision already on its way still lands.
+ *  It also bounds how long a stopped run keeps its card on screen. */
+export const REPAIR_DECISION_GRACE_MS = 10_000;
+
 /** Frozen descriptors share the same ready-source filter as executable tools. */
 export function describeMcpWorkspaceTools(options: Pick<McpWorkspaceToolOptions, "registry" | "catalog" | "enabledSourceIds">) {
   const enabled = new Set(options.enabledSourceIds);
@@ -196,6 +201,23 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
           if (affected.length) {
             if (!options.store.executionBlocks) throw new Error("Interactive MCP repair is unavailable; provide repair guidance and stop this task");
             const release = options.pauseExternalWait();
+            // The transport carrying this call can disappear while the user is still
+            // deciding (the MCP bridge closes when its caller disconnects) and the tool
+            // call's signal aborts. Dropping the wait there threw away a repair decision
+            // the user was already sending (their recheck then hit a block that no longer
+            // existed) and left the run to continue with an unrepaired catalog — the
+            // recovered call was refused and never recorded.
+            // Keep the block for a short grace window after the abort instead, then let
+            // the wait resolve as cancelled, so a dead run's card disappears after at
+            // most that window instead of staying clickable forever.
+            const waitAbort = new AbortController();
+            let graceTimer: ReturnType<typeof setTimeout> | undefined;
+            const onAbort = () => {
+              if (graceTimer) return;
+              graceTimer = setTimeout(() => waitAbort.abort(), REPAIR_DECISION_GRACE_MS);
+              graceTimer.unref?.();
+            };
+            if (signal?.aborted) onAbort(); else signal?.addEventListener("abort", onAbort, { once: true });
             try {
               const decision = await options.store.executionBlocks.wait({
                 kind: "mcp", sessionId: options.sessionId, executionId: options.turnId,
@@ -203,11 +225,33 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
                 agentId: options.parentSubagentId ?? "main", summary: reason,
                 reason: affected.map(formatReadiness).join("\n"),
                 suggestions: [guidance], alternatives: [],
-              }, signal);
-              signal?.throwIfAborted();
+              }, waitAbort.signal);
               if (decision.action !== "retry") return { ...diagnostics(), action: "cancel", instruction: "Repair wait cancelled or expired. Stop the blocked task; do not silently substitute another source." };
-              await options.catalog.refresh(signal);
-            } finally { release(); }
+              // The decision is the user's own recheck. Apply its discovery even when the
+              // call's transport is gone, so the run that continues afterwards sees the
+              // repaired source and its recovered call reaches the broker and is recorded.
+              // One observation can still leave a repaired source unobserved: the catalog
+              // discards a snapshot whose configuration revision moved while it was running
+              // (catalog.ts applyCurrent), a gateway that honours the signal can lose the
+              // discovery to an abort that arrives meanwhile, and a background reload or a
+              // transient tools/list failure can land a non-empty catalog with the affected
+              // source still in error. One bounded re-observation without the call signal
+              // covers all three; a discovery that keeps failing is still surfaced.
+              const repairedReady = () => affected.every(status => options.catalog.getStatus(status.sourceId).status === "ready");
+              let discoveryError: unknown;
+              const observe = async (discoverySignal: AbortSignal | undefined) => {
+                try { await options.catalog.refresh(discoverySignal); return repairedReady(); }
+                catch (error) { discoveryError = error; return false; }
+              };
+              if (!(await observe(signal?.aborted ? undefined : signal))) {
+                discoveryError = undefined;
+                if (!(await observe(undefined)) && discoveryError !== undefined) throw discoveryError;
+              }
+            } finally {
+              if (graceTimer) clearTimeout(graceTimer);
+              signal?.removeEventListener("abort", onAbort);
+              release();
+            }
           }
         }
         return { ...diagnostics(), action, reason,
