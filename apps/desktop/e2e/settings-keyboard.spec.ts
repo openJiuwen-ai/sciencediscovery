@@ -163,6 +163,32 @@ test("Escape 关闭设置后焦点回到打开它的「设置」按钮", async (
   expect(returned.guide, `focus after Escape went to ${returned.text}`).toBe("settings");
 });
 
+test("嵌套的添加模型对话框里 Tab 也不会走到被遮住的页面上", async ({ page }) => {
+  await installMockApi(page, { sessions: [] });
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
+
+  await page.locator(".settings-nav-scroll").getByRole("button", { name: "模型", exact: true }).click();
+  await page.getByRole("button", { name: "添加模型", exact: true }).click();
+  await expect(page.locator(".settings-modal")).toBeVisible();
+  await markStops(page);
+
+  // 添加模型 draws inside the panel and moves no focus when it opens, so this
+  // walk starts on the button that opened it. The review measured Tab 14
+  // reaching `BODY` on this flow before the trap stopped standing aside; twenty
+  // presses is past that, and the walk has to stay inside the panel throughout.
+  let reachedModal = false;
+  for (let press = 1; press <= 20; press += 1) {
+    await page.keyboard.press("Tab");
+    const step = await focused(page);
+    expect(step.inDialog, `Tab ${press} left the dialog for ${step.key}`).toBe(true);
+    const inModal = await page.evaluate(() => document.activeElement?.closest(".settings-modal") !== null);
+    if (inModal) reachedModal = true;
+  }
+  expect(reachedModal, "the walk never reached a control of the 添加模型 dialog").toBe(true);
+});
+
 test("背板盖住页面但留出侧栏：鼠标的出口在侧栏，键盘的出口在 Escape", async ({ page }) => {
   await installMockApi(page, { sessions: [] });
   await page.goto("/");

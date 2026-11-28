@@ -163,10 +163,11 @@ export function SystemSettingsDialog({
     node.focus();
     const trap = (event: KeyboardEvent) => {
       if (event.key !== "Tab" || event.defaultPrevented) return;
-      // 添加模型 / 新增专家 / 技能的对话框 draw inside this panel and are a
-      // smaller boundary with their own trap. While one is open the keys belong
-      // to it, or this one would wrap at a boundary it is not holding.
-      if (node.querySelector('[aria-modal="true"]')) return;
+      // 添加模型 / 新增专家 / 技能的对话框 draw inside this panel. Only McpModal
+      // installs a Tab trap of its own; the other three move no focus on open and
+      // would let Tab walk onto the page the scrim hides, so this trap stays the
+      // one holding the boundary. A nested surface that does trap Tab claims the
+      // key first and marks it handled, which the check above already honours.
       const items = Array.from(node.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]):not([hidden]), textarea:not([disabled]), select:not([disabled]), a[href], summary, [tabindex="0"]'))
         .filter((item) => !item.matches(":disabled") && item.getClientRects().length > 0);
       const first = items[0], last = items.at(-1);
@@ -180,8 +181,10 @@ export function SystemSettingsDialog({
     node.addEventListener("keydown", trap);
     return () => {
       node.removeEventListener("keydown", trap);
-      // 技能's 导入 and MCP's 试用 close this surface on their way somewhere else,
-      // so the opener is only given the focus back while it is still on the page.
+      // The opener is the rail's 设置 button. 技能's 导入 and MCP's 试用 navigate
+      // away while this surface closes, and the rail stays mounted for both, so
+      // the focus does come back there — to a control that is still on screen,
+      // which is what this guard tests.
       if (previous?.isConnected) previous.focus();
     };
   }, []);
