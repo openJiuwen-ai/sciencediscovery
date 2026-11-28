@@ -17,6 +17,7 @@ import type {
   AgentShellExecution,
   Environment,
   KernelMode,
+  PermissionAuthorizationSource,
   ResolvedProxy,
 } from "@sciencediscovery/schema";
 import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
@@ -304,22 +305,37 @@ export function createWorkspaceExecutionBindings(
     ) => {
       options.store.assertSessionWritable(options.sessionId);
       let target = resolveExecutionTarget(machine);
-      await options.permission.requirePrivilege({
-        action: "code",
-        executionId: options.executionId,
-        resource: "workspace-code",
-        signal,
-        ...(toolCallId ? { toolCallId } : {}),
-        summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
-        description: {
-          kind: "shell",
-          ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
-          ...permissionScope(),
-        },
-      });
+      const scope = { code, cwd: environment?.cwd ?? "" };
+      // A one-use network token issued for the execution the user just approved
+      // (same code, cwd and Runner, and not an Always Allow auto-approval)
+      // carries that shell approval into the re-run, so the network card is the
+      // only new decision. A changed command or cwd, an unscoped preflight
+      // token, a revoked grant or an Always Allow-derived approval still asks
+      // for shell approval here; a foreign/consumed token throws before a card.
+      const reusable = await networkConsent.reusableShellApproval(
+        environment?.networkAuthorizationId, target.runnerId, scope, signal);
+      let shellApprovalSource: PermissionAuthorizationSource | undefined;
+      if (reusable) {
+        shellApprovalSource = reusable.source;
+      } else {
+        const authorization = await options.permission.requirePrivilege({
+          action: "code",
+          executionId: options.executionId,
+          resource: "workspace-code",
+          signal,
+          ...(toolCallId ? { toolCallId } : {}),
+          summary: `Run a shell script ${target.remoteHostAlias ? `on ${target.remoteHostAlias} ` : ""}${options.permissionScopeLabel}`,
+          description: {
+            kind: "shell",
+            ...(target.remoteHostAlias ? { remoteHostAlias: target.remoteHostAlias } : {}),
+            ...permissionScope(),
+          },
+        });
+        shellApprovalSource = authorization?.source;
+      }
       target = await prepareExecutionTarget(machine, signal, toolCallId, "Run shell: " + code, true);
       const permissionEpoch = await networkConsent.consume(environment?.networkAuthorizationId, target.runnerId, signal);
-      return {
+      return { prepared: {
         agentId: options.agentId,
         code,
         ...(environment?.recoveryMetadataPath ? { recoveryMetadataPath: environment.recoveryMetadataPath } : {}),
@@ -347,7 +363,7 @@ export function createWorkspaceExecutionBindings(
         turnId: options.executionId,
         workspaceRoot: options.workspaceRoot,
         parentSubagentId: options.parentSubagentId, explicitHandoff: options.explicitHandoff,
-      };
+      }, shellApprovalSource };
   };
   const executionOwner = { sessionId: options.sessionId, agentId: options.agentId };
   const reconcileExecution = (id: string, signal?: AbortSignal) => options.store.shellExecutions.reconcile(id, executionOwner, {
@@ -682,18 +698,20 @@ export function createWorkspaceExecutionBindings(
       });
     },
     executeShell: async (...args) => {
-      const prepared = await prepareShell(...args);
-      return networkConsent.observe(await options.provenanceRecorder.executeShell(prepared), prepared.runnerId, args[2]);
+      const { prepared, shellApprovalSource } = await prepareShell(...args);
+      return networkConsent.observe(await options.provenanceRecorder.executeShell(prepared), prepared.runnerId, args[2],
+        { code: prepared.code, cwd: prepared.cwd ?? "" }, shellApprovalSource);
     },
     shellExecutions: {
       start: async (code, environment, signal, toolCallId, runnerId) => {
-        const prepared = await prepareShell(code, "ephemeral", signal, toolCallId, runnerId, environment);
+        const { prepared, shellApprovalSource } = await prepareShell(code, "ephemeral", signal, toolCallId, runnerId, environment);
         const workspaceId = options.store.workspaceIdentity(options.sessionId, options.agentId, prepared.runnerId).id;
         return delivered(await options.store.shellExecutions.start(executionOwner, {
           runnerId: prepared.runnerId!, turnId: options.executionId,
           workspaceId,
         }, () => resolveExecutionTarget(runnerId).runnerClient,
-        async (id, dispatch, completionStatus) => networkConsent.observe(await options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }), prepared.runnerId),
+        async (id, dispatch, completionStatus) => networkConsent.observe(await options.provenanceRecorder.executeShell({ ...prepared, signal: undefined, executionId: id, dispatch, completionStatus }), prepared.runnerId, undefined,
+          { code: prepared.code, cwd: prepared.cwd ?? "" }, shellApprovalSource),
         (id) => prepareShellExecutionContext({ ...prepared, executionId: id }),
         (context, failure) => options.provenanceRecorder.commitExistingShellExecutionFailure(context, failure),
         environment.recoveryContext ? { context: environment.recoveryContext,

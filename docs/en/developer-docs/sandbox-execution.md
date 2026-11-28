@@ -125,6 +125,17 @@ the deployment's private-address filter and
 outbound route. Neither the global setting nor the shared Session epoch is
 expanded, and calls without a token retain their normal policy.
 
+The token is also bound to the command, cwd and Runner of the execution that
+produced it. A new `run_shell` carrying the token for exactly that command, cwd
+and Runner reuses the shell approval already granted, so the network card is
+the only new decision. A changed command or cwd, a token from an explicit
+preflight request, or a shell approval that was auto-granted by Always Allow
+asks for shell approval again (under Always Allow it is still auto-approved). A
+different Runner or a consumed/foreign token is rejected before any card; a
+revoked grant asks for shell approval again and is then rejected when the token
+is consumed. The re-approved call still spends the token exactly once. This
+reuse does not inherit Always Allow or direct-execution consent.
+
 In allowlist mode each Shell execution has its own gateway. Missing-domain
 denials return `networkDeniedHosts`, mark managed execution as failed even if
 a script catches the HTTP error, and open the same permission card while the

@@ -14,12 +14,26 @@
 
 import { createHash } from "node:crypto";
 import { epochSandboxNetworkAccess, formatAllowedDomain, normalizeAllowedDomains, parseAllowedDomain,
-  type PermissionEpoch, type SandboxNetworkPermissionResult, type ScientificExecutionResult } from "@sciencediscovery/schema";
+  type PermissionEpoch, type PermissionAuthorizationSource, type SandboxNetworkPermissionResult, type ScientificExecutionResult } from "@sciencediscovery/schema";
 import type { AgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { SessionStore } from "../store.js";
 import { sandboxNetworkAccess } from "../store/sandbox-network.js";
 
 const RETRY = "No code was executed by this decision. For a previous execution, reconcile files and remote side effects first. Then explicitly issue a safe NEW run_shell call with network_authorization_id. Never replay a running or unknown execution. Report required retrieval as blocked until it succeeds; do not silently substitute web_search success.";
+
+export interface SandboxNetworkCommandScope {
+  code: string;
+  /** Workspace-relative cwd the blocked execution ran in; empty means the workspace root. */
+  cwd: string;
+}
+
+/**
+ * The shell decision that actually ran the blocked execution. Reuse is only
+ * allowed for a decision the user made or a standing/user grant, never for an
+ * Always Allow auto-authorization that would survive a switch to Ask mode.
+ */
+const reusableShellSource = (source?: PermissionAuthorizationSource) =>
+  source !== undefined && source !== "always_allow";
 
 /** Owned by one binding, never the shared root permission cell or Session epoch. */
 export function createSandboxNetworkConsent(options: {
@@ -27,7 +41,8 @@ export function createSandboxNetworkConsent(options: {
   store: SessionStore; permission: AgentPermissionRuntime;
   assertRunner(runnerId: string): void;
 }) {
-  const tickets = new Map<string, { runnerId: string; hosts: string[]; grantId?: string }>();
+  const tickets = new Map<string, { runnerId: string; hosts: string[]; grantId?: string; scope?: SandboxNetworkCommandScope;
+    shellApprovalSource?: PermissionAuthorizationSource }>();
   const active = async (runnerId: string, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     options.store.assertSessionWritable(options.sessionId);
@@ -36,7 +51,15 @@ export function createSandboxNetworkConsent(options: {
     const run = await options.store.getSessionRun(options.sessionId, options.rootRunId);
     if (!run || !["running", "blocked"].includes(run.status)) throw new Error("Sandbox network consent ended with its run");
   };
-  const request = async (input: { hosts: string[]; purpose: string; runnerId?: string }, signal?: AbortSignal, toolCallId?: string): Promise<SandboxNetworkPermissionResult> => {
+  const grantActive = (grantId?: string) => !grantId || options.store.getPermissionGrant(grantId)?.state === "active";
+  const ticketFor = async (id: string, runnerId: string, signal?: AbortSignal) => {
+    await active(runnerId, signal);
+    const ticket = tickets.get(id);
+    if (!ticket || ticket.runnerId !== runnerId) throw new Error("Unknown, consumed or foreign sandbox network authorization");
+    return ticket;
+  };
+  const request = async (input: { hosts: string[]; purpose: string; runnerId?: string }, signal?: AbortSignal, toolCallId?: string,
+    scope?: SandboxNetworkCommandScope, shellApprovalSource?: PermissionAuthorizationSource): Promise<SandboxNetworkPermissionResult> => {
     const runnerId = input.runnerId?.trim() || "local";
     await active(runnerId, signal);
     if (!Array.isArray(input.hosts) || !input.hosts.length || input.hosts.length > 16) throw new Error("Declare 1–16 exact hosts");
@@ -59,11 +82,31 @@ export function createSandboxNetworkConsent(options: {
     await active(runnerId, signal);
     if (authorization.action !== "sandbox_network" || authorization.outcome !== "allowed" || authorization.resource !== resource) throw new Error("Sandbox network authorization scope mismatch");
     if (tickets.size >= 128) throw new Error("Too many unused network approvals; consume existing tokens first");
-    tickets.set(authorization.id, { runnerId, hosts, grantId: authorization.permissionGrantId });
+    tickets.set(authorization.id, { runnerId, hosts, grantId: authorization.permissionGrantId,
+      ...(scope ? { scope } : {}), ...(scope && shellApprovalSource ? { shellApprovalSource } : {}) });
     return { state: "allowed", hosts, authorizationId: authorization.id, instruction: RETRY };
   };
   return {
     request,
+    /**
+     * The shell approval a matching token re-run may reuse, or undefined when
+     * it must ask again. Reuse requires the exact command/cwd/Runner scope, an
+     * active ticket grant, and a shell decision that was not an Always Allow
+     * auto-authorization. The token is only peeked at here; `consume` below
+     * still enforces its one-use and revocation rules before dispatch. A token
+     * from an explicit preflight request has no command scope and never reuses
+     * an approval it never had. Unknown, consumed or foreign tokens throw here,
+     * so a stale token is rejected before another shell card is opened.
+     */
+    async reusableShellApproval(id: string | undefined, runnerId: string, scope: SandboxNetworkCommandScope,
+      signal?: AbortSignal): Promise<{ source: PermissionAuthorizationSource } | undefined> {
+      if (!id) return undefined;
+      const ticket = await ticketFor(id, runnerId, signal);
+      if (!ticket.scope || !ticket.shellApprovalSource || !grantActive(ticket.grantId)) return undefined;
+      if (!reusableShellSource(ticket.shellApprovalSource)) return undefined;
+      return ticket.scope.code === scope.code && ticket.scope.cwd === scope.cwd
+        ? { source: ticket.shellApprovalSource } : undefined;
+    },
     async consume(id: string | undefined, runnerId: string, signal?: AbortSignal): Promise<PermissionEpoch> {
       const epoch = options.permission.getEpoch();
       if (!id) return epoch;
@@ -81,7 +124,8 @@ export function createSandboxNetworkConsent(options: {
       // Unique epoch prevents a persistent kernel from retaining a broader prior policy.
       return { ...epoch, id: `${epoch.id}:network:${id}`, networkPolicy: access.mode, networkAccess: access };
     },
-    async observe<T extends Pick<ScientificExecutionResult, "networkDeniedHosts" | "networkPermission">>(result: T, runnerId: string, signal?: AbortSignal): Promise<T & { networkPermission?: SandboxNetworkPermissionResult }> {
+    async observe<T extends Pick<ScientificExecutionResult, "networkDeniedHosts" | "networkPermission">>(result: T, runnerId: string, signal?: AbortSignal,
+      scope?: SandboxNetworkCommandScope, shellApprovalSource?: PermissionAuthorizationSource): Promise<T & { networkPermission?: SandboxNetworkPermissionResult }> {
       if (!result.networkDeniedHosts?.length) return result;
       // One unsupported target must not suppress consent for other valid hosts.
       const hosts: string[] = [];
@@ -103,7 +147,7 @@ export function createSandboxNetworkConsent(options: {
         instruction: feedback!.instruction } };
       // The execution has already ended. Consent never revives that execution.
       try {
-        const permission = await request({ hosts, purpose: "Continue the sandbox retrieval blocked by this execution", runnerId }, signal);
+        const permission = await request({ hosts, purpose: "Continue the sandbox retrieval blocked by this execution", runnerId }, signal, undefined, scope, shellApprovalSource);
         const networkPermission = feedback ? { ...permission, blockedHosts,
           instruction: `${permission.instruction} ${feedback.instruction}` } : permission;
         return { ...result, networkPermission };
