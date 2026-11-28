@@ -47,7 +47,8 @@ function parseUsdCnyRate(payload: unknown): { effectiveDate?: string; rate: numb
     }
     if (isRecord(payload.rates)) {
       const legacyRate = parseNumber(payload.rates.CNY);
-      if (legacyRate && payload.base === "USD") {
+      // `base_code` is the open.er-api-style name, used by the AllRatesToday open endpoint.
+      if (legacyRate && (payload.base === "USD" || payload.base_code === "USD")) {
         return {
           ...(typeof payload.date === "string" && payload.date ? { effectiveDate: payload.date } : {}),
           rate: legacyRate,
@@ -74,6 +75,7 @@ function usageExchangeRateProviderName(sourceUrl: string): string {
   try {
     const host = new URL(sourceUrl).hostname.replace(/^www\./, "");
     if (host === "api.frankfurter.dev" || host.endsWith(".frankfurter.dev")) return "Frankfurter";
+    if (host === "allratestoday.com") return "AllRatesToday";
     return host || "custom";
   } catch {
     return "custom";
