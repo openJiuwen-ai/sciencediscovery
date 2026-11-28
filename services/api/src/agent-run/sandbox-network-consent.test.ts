@@ -66,6 +66,39 @@ for (const change of ["revoke", "end"] as const) test(`network token rejects ${c
   await assert.rejects(f.consent.consume(decision.authorizationId, "local"));
 });
 
+test("a scoped ticket reuses the shell approval only for the same command, cwd and Runner while its grant is active", async () => {
+  const f = fixture();
+  const scope = { code: "curl https://example.org", cwd: "retrieval" };
+  const observed = await f.consent.observe({ networkDeniedHosts: input.hosts }, "local", undefined, scope, "user_once");
+  const id = observed.networkPermission!.authorizationId!;
+  assert.deepEqual(await f.consent.reusableShellApproval(id, "local", scope), { source: "user_once" });
+  assert.equal(await f.consent.reusableShellApproval(id, "local", { ...scope, code: "curl https://other.example.org" }), undefined);
+  assert.equal(await f.consent.reusableShellApproval(id, "local", { ...scope, cwd: "elsewhere" }), undefined);
+  await assert.rejects(f.consent.reusableShellApproval(id, "remote", scope), /foreign/);
+  // Peeking never consumes: the token still works exactly once after the check.
+  assert.equal((await f.consent.consume(id, "local")).networkPolicy, "domain-allowlist");
+  await assert.rejects(f.consent.reusableShellApproval(id, "local", scope), /consumed/);
+  const revoked = fixture();
+  const revokedId = (await revoked.consent.observe({ networkDeniedHosts: input.hosts }, "local", undefined, scope, "user_once")).networkPermission!.authorizationId!;
+  revoked.revoke();
+  assert.equal(await revoked.consent.reusableShellApproval(revokedId, "local", scope), undefined);
+});
+
+test("an Always Allow shell approval is never reused, even when command, cwd and Runner match", async () => {
+  const f = fixture();
+  const scope = { code: "curl https://example.org", cwd: "retrieval" };
+  const observed = await f.consent.observe({ networkDeniedHosts: input.hosts }, "local", undefined, scope, "always_allow");
+  assert.equal(await f.consent.reusableShellApproval(observed.networkPermission!.authorizationId!, "local", scope), undefined);
+  // The token remains valid for the re-run; only the shell-approval reuse is refused.
+  assert.equal((await f.consent.consume(observed.networkPermission!.authorizationId, "local")).networkPolicy, "domain-allowlist");
+});
+
+test("an explicit preflight token has no command scope and never reuses a shell approval", async () => {
+  const f = fixture();
+  const decision = await f.consent.request(input);
+  assert.equal(await f.consent.reusableShellApproval(decision.authorizationId, "local", { code: "curl https://example.org", cwd: "" }), undefined);
+});
+
 test("denial/dismissal is visibly blocked and cancellation issues no token", async () => {
   const f = fixture(); f.deny(); const decision = await f.consent.request(input);
   assert.equal(decision.state, "blocked"); assert.equal(decision.authorizationId, undefined);

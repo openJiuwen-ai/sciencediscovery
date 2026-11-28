@@ -26,7 +26,8 @@ import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "../agent-notifications.js";
 import { ShellExecutions } from "../shell-executions.js";
 
-import type { NpuJob, RunnerExecutionCapability } from "@sciencediscovery/schema";
+import type { NpuJob, PermissionEpoch, RunnerExecutionCapability } from "@sciencediscovery/schema";
+import { NO_SANDBOX_NETWORK_ACCESS } from "@sciencediscovery/schema";
 import { VersionStore } from "@sciencediscovery/cas";
 import { ProvenanceRecorder } from "@sciencediscovery/provenance";
 import type { RunnerClient } from "@sciencediscovery/executor";
@@ -1209,6 +1210,221 @@ test("shell and direct-host approvals carry the structured description a client 
     account: "user:1000:1000", command: "printf hello", cwd: "", kind: "direct-host",
     runnerId: "local", target: "machine:instance", workspaceRoot: root,
   });
+});
+
+/**
+ * The approval sequence from #393: shell approval, a network card for the
+ * denied host, then the token re-run. `executeShell` and the managed
+ * `shellExecutions.start` share `prepareShell`, so both paths are covered. The
+ * recorder is the only thing that "runs": it reports the host as denied until
+ * the one-use token adds it.
+ */
+async function networkReuseFixture(t: TestContext) {
+  const root = await mkdtemp(resolve(tmpdir(), "network-reuse-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let runActive = true, revoked = false, denyNetwork = false, alwaysAllow = false, managedExecutions = 0;
+  const epoch = { id: "epoch", networkPolicy: "none", networkAccess: NO_SANDBOX_NETWORK_ACCESS } as PermissionEpoch;
+  const cards: Array<{ action: string; resource: string; summary: string }> = [];
+  const dispatched: Array<{ code: string; cwd: string; networkPolicy: string; allowedDomains: string[] }> = [];
+  let networkApprovals = 0, shellApprovals = 0;
+  const runnerClient = {
+    executionCapability: async () => ({ ready: true, shell: { available: true, name: "bash", utilities: [] } }),
+  } as unknown as RunnerClient;
+  const store = {
+    assertSessionWritable() { if (!runActive) throw new Error("Session ended"); },
+    assertSessionAllowsRunner(_sessionId: string, runnerId: string) {
+      if (!["local", "remote-1"].includes(runnerId)) throw new Error("Runner not allowed");
+    },
+    getSessionRun: async () => ({ status: runActive ? "running" : "completed" }),
+    getPermissionGrant: () => ({ state: revoked ? "revoked" : "active" }),
+    npuDeviceSelection: () => [],
+    notifications: { markRead() {} },
+    resolveSandboxEgressProxy: () => undefined,
+    workspaceIdentity: () => ({ id: "workspace" }),
+    // The managed path is the production `run_shell` route; this fake calls the
+    // recorder callback and returns the observed result as a terminal record.
+    shellExecutions: {
+      start: async (_owner: unknown, _identity: unknown, _runner: unknown,
+        record: (id: string, dispatch: (request: unknown) => Promise<unknown>, status: string) => Promise<Record<string, unknown>>) => {
+        const id = `managed-${++managedExecutions}`;
+        const result = await record(id, async () => ({}), "completed");
+        return { agentId: "main", id, sessionId: "session", state: "completed",
+          startedAt: new Date().toISOString(), version: { digest: "sha256:test", workspaceId: "workspace" }, result };
+      },
+    },
+  } as unknown as SessionStore;
+  const permission = {
+    getEpoch: () => epoch,
+    requirePrivilege: async (request: PrivilegeRequest) => {
+      // Always Allow auto-authorizations do not open cards and carry that
+      // source so a later mode switch can refuse to reuse them.
+      if (!alwaysAllow) cards.push({ action: request.action, resource: request.resource, summary: request.summary });
+      if (request.action === "sandbox_network") {
+        if (denyNetwork) throw new Error("Permission denied by user");
+        networkApprovals++;
+        return { action: request.action, id: `network-${networkApprovals}`, outcome: "allowed",
+          resource: request.resource, source: alwaysAllow ? "always_allow" : "user_once",
+          ...(alwaysAllow ? {} : { permissionGrantId: "network-grant" }) };
+      }
+      shellApprovals++;
+      return { action: request.action, id: `shell-${shellApprovals}`, outcome: "allowed",
+        resource: request.resource, source: alwaysAllow ? "always_allow" : "user_once" };
+    },
+  } as unknown as AgentPermissionRuntime;
+  const recorder = {
+    executeShell: async (input: Record<string, unknown>) => {
+      const access = (input.permissionEpoch as { networkAccess: { allowedDomains: string[] } }).networkAccess;
+      const policy = (input.permissionEpoch as { networkPolicy: string }).networkPolicy;
+      dispatched.push({ code: String(input.code), cwd: String(input.cwd ?? ""), networkPolicy: policy,
+        allowedDomains: [...access.allowedDomains] });
+      const denied = !access.allowedDomains.includes("example.com:443");
+      return { createdFiles: [], exitCode: denied ? 1 : 0, networkDeniedHosts: denied ? ["example.com:443"] : [],
+        stderr: denied ? "CONNECT tunnel failed" : "", stdout: denied ? "" : "HTTP 200" };
+    },
+  } as unknown as ProvenanceRecorder;
+  const make = (agentId = "main", executionId = "run", rootRunId = "run") => createWorkspaceExecutionBindings({
+    rootRunId, agentId, executionId, sessionId: "session", workspaceRoot: root, store,
+    runnerClient,
+    remoteTargets: [{ runnerId: "remote-1", hostAlias: "remote", runnerClient: () => runnerClient, workspaceKey: "remote-workspace" }],
+    permission, permissionScopeLabel: "test", provenanceRecorder: recorder,
+  });
+  const environment = (options: { token?: string; cwd?: string }) => ({
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    ...(options.token ? { networkAuthorizationId: options.token } : {}) });
+  const run = async (binding: ReturnType<typeof make>, code: string,
+    options: { token?: string; cwd?: string; machine?: string } = {}) => binding.executeShell!(code, "ephemeral", undefined, undefined,
+    options.machine ?? "local", environment(options));
+  const runManaged = async (binding: ReturnType<typeof make>, code: string,
+    options: { token?: string; cwd?: string; machine?: string } = {}) => binding.shellExecutions!.start(code, environment(options),
+    undefined, undefined, options.machine ?? "local");
+  return { make, run, runManaged, cards, dispatched, epoch, setAlwaysAllow: (value: boolean) => { alwaysAllow = value; },
+    revoke: () => { revoked = true; }, denyNetwork: () => { denyNetwork = true; } };
+}
+
+const blockedCommand = "curl -sS -m 8 https://example.com/";
+
+async function blockedToken(f: Awaited<ReturnType<typeof networkReuseFixture>>, binding: ReturnType<typeof f.make>) {
+  const first = await f.run(binding, blockedCommand, { cwd: "retrieval" });
+  assert.deepEqual(f.cards.map((card) => card.action), ["code", "sandbox_network"]);
+  assert.equal(first.exitCode, 1);
+  const token = (first as { networkPermission?: { state: string; authorizationId?: string } }).networkPermission;
+  assert.equal(token?.state, "allowed");
+  f.cards.length = 0;
+  return token!.authorizationId!;
+}
+
+test("a token re-run of the same command, cwd and Runner reuses the shell approval", async t => {
+  const f = await networkReuseFixture(t);
+  const binding = f.make();
+  const token = await blockedToken(f, binding);
+  const second = await f.run(binding, blockedCommand, { cwd: "retrieval", token });
+  assert.equal(f.cards.length, 0, "the matching token re-run must not open another shell card");
+  assert.equal(second.exitCode, 0);
+  assert.equal(f.dispatched.length, 2);
+  assert.equal(f.dispatched[1]!.networkPolicy, "domain-allowlist");
+  assert.deepEqual(f.dispatched[1]!.allowedDomains, ["example.com:443"]);
+});
+
+test("the managed shellExecutions.start path reuses the same scoped shell approval", async t => {
+  const f = await networkReuseFixture(t);
+  const binding = f.make();
+  const first = await f.runManaged(binding, blockedCommand, { cwd: "retrieval" });
+  assert.deepEqual(f.cards.map((card) => card.action), ["code", "sandbox_network"]);
+  const token = (first.result as { networkPermission?: { authorizationId?: string } }).networkPermission?.authorizationId;
+  assert.ok(token);
+  f.cards.length = 0;
+  const second = await f.runManaged(binding, blockedCommand, { cwd: "retrieval", token });
+  assert.equal(f.cards.length, 0, "the production managed path must not open another shell card for a matching token");
+  assert.equal((second.result as { exitCode?: number }).exitCode, 0);
+  assert.equal(f.dispatched.length, 2);
+});
+
+test("an Always Allow shell approval is not reused after switching the Session to Ask", async t => {
+  const f = await networkReuseFixture(t);
+  const binding = f.make();
+  f.setAlwaysAllow(true);
+  const first = await f.run(binding, blockedCommand, { cwd: "retrieval" });
+  assert.equal(f.cards.length, 0, "Always Allow auto-approves both the shell and the network request");
+  const token = (first as { networkPermission?: { authorizationId?: string } }).networkPermission?.authorizationId;
+  assert.ok(token);
+  f.setAlwaysAllow(false);
+  f.cards.length = 0;
+  const second = await f.run(binding, blockedCommand, { cwd: "retrieval", token });
+  assert.deepEqual(f.cards.map((card) => card.action), ["code"], "an auto-granted shell approval is not inherited by Ask mode");
+  assert.equal(second.exitCode, 0);
+  assert.equal(f.dispatched.length, 2);
+});
+
+test("a changed command re-asks shell approval instead of reusing it", async t => {
+  const f = await networkReuseFixture(t);
+  const binding = f.make();
+  const token = await blockedToken(f, binding);
+  const changed = blockedCommand + "; echo changed";
+  const second = await f.run(binding, changed, { cwd: "retrieval", token });
+  assert.deepEqual(f.cards.map((card) => card.action), ["code"], "a materially different command must be reviewed again");
+  assert.equal(second.exitCode, 0);
+  assert.equal(f.dispatched.length, 2);
+  assert.equal(f.dispatched[1]!.code, changed);
+  // The re-approved call still spends the one-use token: a replay is rejected
+  // before another shell card, never treated as a second free execution.
+  f.cards.length = 0;
+  await assert.rejects(f.run(binding, changed, { cwd: "retrieval", token }), /Unknown, consumed or foreign/);
+  assert.equal(f.cards.length, 0);
+  assert.equal(f.dispatched.length, 2);
+});
+
+test("a changed cwd re-asks shell approval instead of reusing it", async t => {
+  const f = await networkReuseFixture(t);
+  const binding = f.make();
+  const token = await blockedToken(f, binding);
+  const second = await f.run(binding, blockedCommand, { cwd: "elsewhere", token });
+  assert.deepEqual(f.cards.map((card) => card.action), ["code"], "the same command in another cwd must be reviewed again");
+  assert.equal(second.exitCode, 0);
+  assert.equal(f.dispatched[1]!.cwd, "elsewhere");
+});
+
+test("a consumed token is rejected before another shell card and never starts an execution", async t => {
+  const f = await networkReuseFixture(t);
+  const binding = f.make();
+  const token = await blockedToken(f, binding);
+  await f.run(binding, blockedCommand, { cwd: "retrieval", token });
+  assert.equal(f.dispatched.length, 2);
+  f.cards.length = 0;
+  await assert.rejects(f.run(binding, blockedCommand, { cwd: "retrieval", token }), /Unknown, consumed or foreign/);
+  assert.equal(f.cards.length, 0, "a consumed token is rejected before a new shell card is opened");
+  assert.equal(f.dispatched.length, 2);
+});
+
+test("a token cannot reuse shell approval across a child Agent, a later run or another Runner", async t => {
+  const f = await networkReuseFixture(t);
+  const binding = f.make();
+  const token = await blockedToken(f, binding);
+  for (const other of [f.make("child"), f.make("main", "next-run", "next-run")]) {
+    f.cards.length = 0;
+    await assert.rejects(f.run(other, blockedCommand, { cwd: "retrieval", token }), /Unknown, consumed or foreign/);
+    assert.equal(f.cards.length, 0);
+  }
+  f.cards.length = 0;
+  await assert.rejects(f.run(binding, blockedCommand, { cwd: "retrieval", token, machine: "remote-1" }), /Unknown, consumed or foreign/);
+  assert.equal(f.cards.length, 0);
+  assert.equal(f.dispatched.length, 1);
+});
+
+test("denying the network card leaves retrieval blocked, opens no third card and keeps settings unchanged", async t => {
+  const f = await networkReuseFixture(t);
+  f.denyNetwork();
+  const binding = f.make();
+  const result = await f.run(binding, blockedCommand, { cwd: "retrieval" });
+  assert.deepEqual(f.cards.map((card) => card.action), ["code", "sandbox_network"]);
+  assert.equal((result as { networkPermission?: { state: string; authorizationId?: string } }).networkPermission?.state, "blocked");
+  assert.equal((result as { networkPermission?: { authorizationId?: string } }).networkPermission?.authorizationId, undefined);
+  assert.equal(f.dispatched.length, 1);
+  assert.equal(f.epoch.networkPolicy, "none");
+  assert.equal(f.epoch.networkAccess?.mode, "none");
+  // Without a token the next call cannot ride on any reused approval.
+  f.cards.length = 0;
+  await f.run(binding, blockedCommand, { cwd: "retrieval" });
+  assert.deepEqual(f.cards.map((card) => card.action), ["code", "sandbox_network"]);
 });
 
 for (const machine of ["local", "remote-1"]) {
