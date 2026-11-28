@@ -1473,6 +1473,13 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         // event streams. Those omissions are part of the package contract and
         // must not make an otherwise usable writable copy fail. Only missing
         // immutable payloads or a failed memory restore are fatal.
+        //
+        // A package that declares an immutable payload it lost (#1532) is allowed
+        // to be continued, but it is not a complete copy. Those declarations are
+        // surfaced through `continuationDowngraded` and `missingImmutableEvidence`
+        // instead of being filtered away, so a receipt and both clients can name
+        // what is missing; only omissions this import produced itself stay fatal.
+        const declaredImmutableMissing = imported.receipt.omissions.filter(isFatalRestoreOmission);
         const restoreFailures = omissions.filter((item) => !imported.receipt.omissions.includes(item)
           && !item.startsWith("This package contains no scientific memory snapshot")
           && isFatalRestoreOmission(item));
@@ -1501,13 +1508,20 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
         if (frozenFile) await copyFile(frozenFile, resolve(root, "snapshot.sdresearch"), fsConstants.COPYFILE_EXCL);
         else await writeFile(resolve(root, "snapshot.sdresearch"), frozenBytes!, { flag: "wx" });
         const continuationAvailable = restoreFailures.length === 0;
+        // Allowed, but degraded: the copy can be continued while the evidence it
+        // declares missing is named, so no surface can call it complete.
+        const continuationDowngraded = continuationAvailable && declaredImmutableMissing.length > 0;
         const result = {
           ...imported.receipt,
           artifactCount: artifactIdMap.size,
           continuationAvailable,
+          continuationDowngraded,
+          missingImmutableEvidence: declaredImmutableMissing,
           sessionMapping: Object.fromEntries(targetBySource),
           importedSessionIds: restoredSessionIds,
-          omissions,
+          // The receipt repeats what the package declared as well as what this import
+          // found, so a degraded copy cannot read as one with nothing to say (#1532).
+          omissions: [...new Set([...imported.receipt.omissions, ...omissions])],
           projectId: project.id,
           ...(sessionId ? { sessionId } : {}),
           storagePath: receipt.storagePath,
@@ -1521,7 +1535,8 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           } } : {}), snapshot: { ...snapshot!,
           state: "ready", sessionIds: [...restoredSessionIds], storagePath: `${receipt.storagePath}/snapshot.sdresearch`,
           sourceSnapshotSessionId: options.sourceSessionId ? [...targetBySource].find(([, target]) => target === id)?.[0] : undefined,
-          snapshotChecksum: frozenChecksum, continuationAvailable, omissions } })));
+          snapshotChecksum: frozenChecksum, continuationAvailable, continuationDowngraded,
+          missingImmutableEvidence: declaredImmutableMissing, omissions } })));
         return result;
       } catch (error) {
         const affected = store.researchOperationSessions(operationId);

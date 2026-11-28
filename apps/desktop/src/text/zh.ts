@@ -131,6 +131,7 @@ export const ZH = {
   },
   researchPackage: {
     continueUnavailable: "此导入记录尚未完整恢复，暂不能继续聊天。请恢复缺失的服务后重新导入。", sourceUnavailable: "会话或所属项目已不存在。请刷新会话列表后重试。",
+    degradedCopy: "部分证据缺失，结果不可复现。这个副本不是完整副本，仍可继续研究。", degradedMissing: "此副本缺少的不可变证据：",
     projectDestination: "项目归属", noProject: "无项目", projectDestinationHint: "默认放入「会话」，也可以选择一个已有项目。",
     projectImport: (name: string) => `在「${name}」中导入会话`, messageMenu: "回复菜单", packageContents: "包含会话、工作区文件、产物及相关研究证据。",
     title: "科研证据包", import: "导入会话", export: "导出会话", continue: "继续聊天", branch: "创建新分支聊天", source: "返回来源会话",

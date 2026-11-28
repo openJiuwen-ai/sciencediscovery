@@ -243,6 +243,11 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
   const [messageId, setMessageId] = useState("");
   const readOnly = isEvidenceSessionReadOnly(activeDetail);
   const canContinue = activeDetail?.researchSnapshot?.role === "imported_snapshot" && activeDetail.researchSnapshot.state === "ready" && activeDetail.researchSnapshot.continuationAvailable === true;
+  /** Allowed is not the same as whole: a copy whose package declared lost
+   *  immutable evidence may be continued, and this banner names what is missing
+   *  so the read-only snapshot is never presented as a complete copy (#1532). */
+  const downgraded = activeDetail?.researchSnapshot?.continuationDowngraded === true;
+  const missingEvidence = activeDetail?.researchSnapshot?.missingImmutableEvidence ?? [];
   const branch = activeDetail?.conversationBranch;
   const [sourceTitle, setSourceTitle] = useState<string>();
   useEffect(() => {
@@ -643,7 +648,7 @@ export function ResearchPackage({ client, request, projects, detail: activeDetai
     ? omissionRows(inspection.manifest.omissions, t.omissionText)
     : [];
   return <>
-    {readOnly ? <div className="research-package-resume"><div><strong>{t.readOnlyTitle}</strong><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p></div><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
+    {readOnly ? <div className="research-package-resume"><div><strong>{t.readOnlyTitle}</strong><p className="research-package-notice">{canContinue ? t.readOnly : t.continueUnavailable}</p>{canContinue && downgraded ? <div className="research-package-degraded" role="alert"><p className="research-package-notice">{t.degradedCopy}</p><p className="research-package-notice">{t.degradedMissing}</p><ul>{missingEvidence.map((item, index) => <li key={index}>{item}</li>)}</ul></div> : null}</div><button className="primary-button" disabled={!canContinue || busy || copy?.state === "copying"} onClick={() => void copyResearch()} type="button">{t.continue}</button></div> : null}
     {branch ? <div className="research-package-source">{t.contextFrom} <button aria-label={t.source} onClick={() => onOpen(branch.sourceSessionId)} type="button">{sourceTitle ?? t.source}</button></div> : null}
     {copyStatusLine(copy, t) !== undefined ? <div className="research-package-status" role="status">{copyStatusLine(copy, t)}</div> : null}
     {activeExports.length > 0 || flashQueue.length ? <div className="research-toast-stack">
