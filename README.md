@@ -77,7 +77,7 @@ ScienceDiscovery is available for Windows and Linux. Download the Windows instal
 
 ### Connect a model
 
-ScienceDiscovery does not bundle a model; you connect your own model API. On Linux, open **System configuration** at the bottom of the left sidebar, choose **Model registry**, select a preset provider or add one manually, enter its details and API key, then choose **Save & connect**. The first model also becomes the default task model; change it later under **Global default task model**. Protocol support and connection-check costs are documented in [Model API compatibility](docs/en/model-api-compatibility.md).
+ScienceDiscovery does not bundle a model; you connect your own model API. On Linux, open **System settings → Model registry**, select a preset provider or add one manually, and enter its details and API key. Wait for the model listing, then tick the models to register — or type an exact model ID when the listing does not include it — and click **Add provider**. The first registered model also becomes the default task model; change it later under **Global defaults → Task model**. Protocol support and connection-check costs are documented in [Model API compatibility](docs/en/model-api-compatibility.md).
 
 ### Run your first task
 

@@ -13,10 +13,12 @@ Open **System settings → Model registry**:
 
 1. choose a preset provider or add one manually;
 2. enter the provider details and API key;
-3. select **Save & connect**;
-4. confirm the connection test passes and choose a **Global default task model**.
+3. wait for the model listing, then tick the models to register (or type an exact model ID when the listing does not include it);
+4. select **Add provider**.
 
-The key here is your model provider API key. If the connection test fails, first check the API key, provider URL, model ID, and network connection.
+The first registered model becomes the default task model; change it later under **Global defaults → Task model**.
+
+The key here is your model provider API key. If the model listing fails, first check the API key, provider URL, model ID, and network connection; you can still continue by typing an exact model ID.
 
 Also check the code-execution environment: open **System settings → Local Runner → Scientific environments** and confirm the Python base environment shows **Ready**. A new data directory prepares it in the background after the first start; while it shows **Installing**, wait before you send anything. This walkthrough needs pandas, SciPy and Matplotlib, which the managed environment already includes.
 
