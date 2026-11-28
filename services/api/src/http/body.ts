@@ -17,6 +17,8 @@ import { open, rm } from "node:fs/promises";
 
 import { SKILL_LIMITS } from "@sciencediscovery/specialist";
 
+import { ApiStatusError } from "./api-status-error.js";
+
 const MAX_BODY_BYTES = 1_500_000;
 const MAX_SKILL_IMPORT_BODY_BYTES = SKILL_LIMITS.archiveBytes + 1024 * 1024;
 
@@ -66,13 +68,28 @@ export async function readBytesToFile(request: IncomingMessage, maxBytes: number
   return { bytes: total };
 }
 
+/**
+ * Read a request body that has to be a JSON object.
+ *
+ * `JSON.parse` returns whatever the bytes say, so a bare `null`, an array or a
+ * number used to reach the handler and fail on a property read or a
+ * destructuring. With #1533 that `TypeError` is an internal fault, so the
+ * caller's own malformed body would have been answered as a server fault; the
+ * shape is refused here, at the one place every JSON body enters, with an
+ * error that knows the input was wrong.
+ */
 export async function readJson<T>(request: IncomingMessage): Promise<T> {
   const bytes = await readBytes(request, MAX_BODY_BYTES, "Request body");
+  let body: unknown;
   try {
-    return JSON.parse(bytes.toString("utf8")) as T;
+    body = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw new Error("Request body must be valid JSON");
   }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiStatusError(400, "Request body must be a JSON object");
+  }
+  return body as T;
 }
 
 export async function readOptionalJson<T>(request: IncomingMessage): Promise<T | undefined> {

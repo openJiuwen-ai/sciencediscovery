@@ -90,8 +90,8 @@ describe("PUT /api/web/settings answers a client error that names the rejected f
   test("no shape of a client mistake is answered with a generic 500", async () => {
     // The `null` body used to reach the destructuring in `applyWebSettingsSync`
     // and crash it with a `TypeError` that only the prose fallback turned into a
-    // 400 (#1533). Each of these is now refused by the record guard with the
-    // normalizer's own sentence, so the caller reads what it sent wrong.
+    // 400 (#1533). A JSON body that is not an object is now refused where the
+    // body enters, so every one of these answers the same readable 400.
     for (const [label, body] of [
       ["array", []],
       ["string", "x"],
@@ -100,7 +100,7 @@ describe("PUT /api/web/settings answers a client error that names the rejected f
     ] as const) {
       const response = await request("PUT", body);
       assert.equal(response.status, 400, `${label} body is client input, not a server error`);
-      assert.equal(response.body.error, "Web settings must be an object", `${label} body is named as rejected`);
+      assert.equal(response.body.error, "Request body must be a JSON object", `${label} body is named as rejected`);
     }
   });
 
