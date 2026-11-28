@@ -55,6 +55,14 @@ the result file too. The guard is the discrimination probe, and it is a real
 one — it damages the candidate and requires the score to move. A candidate that
 reports its own score reports the same number after being damaged, which is
 exactly the shape the probe refuses to start.
+
+**The framework owns execution; the model owns the measurement.** Two things a
+per-case evaluator cannot do with threads — stop a call that overran its limit,
+and keep the data it scores against out of the candidate's hands — are staged as
+`evaluator_support.py` beside the evaluator, so the script asks for them instead
+of re-inventing a watchdog that only ends the wait. What it observed per call
+comes back out of the scratch directory, which is how the probe sees a deadline
+fire and the next case still run.
 """
 
 from __future__ import annotations
@@ -63,7 +71,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .cancellation import CAUSE_TEXT, mark_cancelled, stop_reason_of
 from .logging_config import get_logger
@@ -105,6 +113,27 @@ runpy.run_path({evaluator!r}, run_name="__main__")
 """
 
 
+#: The framework's own per-call helper, staged beside the evaluator rather than
+#: installed: an evaluator is a single program that has to be runnable in a
+#: throwaway directory, and `import evaluator_support` has to work there.
+SUPPORT_FILE = "evaluator_support.py"
+
+
+def _support_source() -> str:
+    """The helper's own text, so the scratch copy is the file that ships.
+
+    Read from the package rather than duplicated as a string: two copies of a
+    deadline implementation drift, and the one that would drift is the one
+    inside the sandbox where nobody can read it.
+    """
+    path = Path(__file__).with_name(SUPPORT_FILE)
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ScriptError(
+            f"the evaluator support module is missing from this installation ({path}): {error}"
+        ) from error
+
 class ScriptError(RuntimeError):
     """The evaluator could not be run at all, which is a run-level fault."""
 
@@ -119,8 +148,16 @@ def script_domain(
     candidate_timeout: float = 120.0,
     baseline: Optional[MutableMapping[str, float]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
+    observations: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> Domain:
-    """Build a domain that scores a candidate by running the drafted evaluator."""
+    """Build a domain that scores a candidate by running the drafted evaluator.
+
+    ``observations``, when given, collects one entry per evaluation: what the
+    staged ``evaluator_support`` recorded about each candidate call — whether a
+    deadline fired, whether the call changed its arguments, how long it took.
+    It is how the discrimination probe sees a timeout *and* the case after it
+    instead of inferring both from a score. Left out of ordinary runs.
+    """
     reference: MutableMapping[str, float] = {} if baseline is None else baseline
     criteria = list(scorecard.get("criteria") or [])
     if not criteria:
@@ -141,6 +178,7 @@ def script_domain(
             payload = _run_evaluator(
                 code, script, cases_for(shards, _total, _seed),
                 capability=capability, timeout=candidate_timeout, should_stop=should_stop,
+                observations=observations,
             )
         except RunStopped:
             # Not a broken evaluator and not a bad candidate: the run was
@@ -257,6 +295,39 @@ def _contract_of(script: str) -> str:
     return "\n".join(script.splitlines()[:40])
 
 
+def _collect_observations(
+    scratch: Path, observations: Optional[List[List[Dict[str, Any]]]],
+) -> None:
+    """Read back what the staged support module recorded about each call.
+
+    One line per candidate call, written by ``evaluator_support`` into the
+    scratch directory. An evaluator that does not use the module writes nothing
+    and this contributes nothing — that absence is the disclosure: the probe
+    then says the per-call cleanup could not be observed for this script rather
+    than treating it as verified.
+
+    Read before the scratch directory is removed, and appended once per
+    evaluation so a caller can attribute a record set to one scoring run.
+    """
+    records: List[Dict[str, Any]] = []
+    path = scratch / "evaluator_support.jsonl"
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+    except OSError:
+        pass
+    if observations is not None:
+        observations.append(records)
+
+
 def _run_evaluator(
     code: str,
     script: str,
@@ -265,6 +336,7 @@ def _run_evaluator(
     capability: SandboxCapability,
     timeout: float,
     should_stop: Optional[Callable[[], bool]] = None,
+    observations: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Materialise both programs in a throwaway directory and read the result.
 
@@ -279,6 +351,7 @@ def _run_evaluator(
         (scratch / _SHIM_FILE).write_text(
             _SHIM.format(evaluator=EVALUATOR_FILE), encoding="utf-8",
         )
+        (scratch / SUPPORT_FILE).write_text(_support_source(), encoding="utf-8")
         result = scratch / "result.json"
 
         extra = {
@@ -295,9 +368,15 @@ def _run_evaluator(
             extra_env=extra,
         )
         try:
-            completed = run_killable(
-                argv, cwd=scratch, env=env, timeout=timeout + 30, should_stop=should_stop,
-            )
+            try:
+                completed = run_killable(
+                    argv, cwd=scratch, env=env, timeout=timeout + 30, should_stop=should_stop,
+                )
+            finally:
+                # Collected on every path, so one entry per evaluation and a
+                # caller can attribute a record set to one scoring run — even
+                # when the process was killed for taking too long.
+                _collect_observations(scratch, observations)
         except subprocess.TimeoutExpired as error:
             raise ScriptError(f"the evaluator ran for over {timeout + 30:.0f}s without finishing") from error
 

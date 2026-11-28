@@ -162,18 +162,68 @@ Read what is free first: this conversation, the workspace, science memory. Settl
 
 ## Step 2 — Build the scoring; the probe proves it
 
-Write the starting point and the evaluator, then run the evaluator **once**, against the starting
-point, with `run_shell` (for example `python evaluator.py`, selecting a Python-capable
-`environment_id`). You are checking that it executes and emits a number — a typo, a missing
-import, a result file never written. That is the whole of the local check.
+Write the starting point and the evaluator, then run the evaluator, against the starting point,
+with `run_shell` (for example `python evaluator.py`, selecting a Python-capable
+`environment_id`). First that it executes and emits a number — a typo, a missing import, a result
+file never written. Then the three failure shapes the probe also exercises, because they are cheap
+to reproduce here and two of them cost a live run real measurements:
+
+1. **A candidate that never returns.** Write a two-line `candidate.py` with a `while True:` in its
+   entrypoint and run the evaluator on it. It has to finish, count that case as failed, and keep
+   the score the other cases earned. If it hangs until you kill it, the script has no per-call
+   limit: a `queue.get(timeout=…)` or `thread.join(timeout=…)` only stops *waiting*, and the work
+   it abandoned keeps competing with the next case. Use
+   `evaluator_support.call_with_deadline` (next paragraph) — one call, one hard deadline, the work
+   stopped and reaped before the case is counted as failed.
+2. **A candidate that raises or returns nonsense.** Give the entrypoint a `raise`, and separately
+   return `None`. Both are per-case failures with a line number in `error`, not a crash of the
+   evaluation.
+3. **A candidate that damages its own input.** Have it zero the list it was handed and return the
+   *right* answer anyway. The score must not move: validate and calculate from your own copy, never
+   from the object the candidate got. One evaluator measured the baseline before the call and the
+   candidate's total after it from the same mutable list, and a candidate that replaced the
+   workloads with zeros scored 1.0 with an empty error.
+
+**One thing the local check does not have: `evaluator_support.py`.** In the candidate sandbox the
+framework stages it beside the evaluator, so `import evaluator_support` works there with nothing to
+install. Your `run_shell` workspace is a different place and has no such staging, so a copy that
+imports it fails there with `ModuleNotFoundError` — the local check doing its job, not a reason to
+go back to a thread watchdog. Stage the file yourself before the local run, from the installed
+package (`python -c "import shutil, sciencediscovery_evolve.evaluator_support as s; shutil.copy(s.__file__,
+'.')"`). If that package is not importable in the `run_shell` environment either, skip the local
+rehearsal of the deadline and rely on the probe — it runs the real thing in the real sandbox — but
+write the evaluator against the facility, never against a wait timeout.
+
+What it gives you (details in
+[references/custom-script.md](references/custom-script.md)): `call_with_deadline` for the per-call
+limit, `pristine`/`candidate_copy` for keeping the scored data out of the candidate's hands. The
+deadline covers the child process's startup and the candidate's import as well as the call, so
+budget for a few hundred milliseconds of overhead rather than setting it to exactly the time the
+call takes.
+
+If a candidate's runtime is close to its limit, also measure it **twice** under the same conditions
+before trusting the cases: a fast baseline says nothing about the timing that actually goes wrong,
+and a case whose outcome moves between two runs is measurement noise the search will climb.
 
 **Do not score a broken copy locally.** The server's discrimination probe does exactly that, on
 the real shards in the real sandbox, and hands you both numbers when the run starts. Your
 `run_shell` environment and the candidate sandbox are different places with different shard
 indices, so the numbers can legitimately differ (one session saw local 0.3853, server 0.0000, and
 spent the turn reconciling them). **When they disagree, the server's is true** — do not
-investigate the gap. A probe refusal costs four sandbox evaluations and no model calls, so it is
-cheap to be wrong here.
+investigate the gap. A probe refusal costs seven sandbox evaluations and no model calls, so it is
+cheap to be wrong here. Those seven, in the order they run: the starting point, a damaged copy of
+it, a candidate that cannot be imported, one that damages the inputs it was given, one whose first
+call never returns — twice, because the handling of a timed-out case has to be the same both times —
+and the starting point again, which is what the repeat-noise check compares against. An evaluator
+that a non-returning call can hold open — no per-call limit, one too large for the check's bound, or
+ordinary cases that leave no room — is refused by name, inside that bound, so the answer arrives
+during the run-creation request instead of after the caller has given up. The bound is capped by the
+run's own whole-evaluation budget and floored at 15 seconds plus the starting point's measured time,
+so a slow script gets proportional room and a slow starting point is no reason to skip the refusal.
+A limit of about a second per call is the pattern the guidance asks for. A script that
+limits each call by *waiting* — `queue.get(timeout=…)`, `thread.join(timeout=…)` — is not refused
+while its whole evaluation fits that bound; whether its abandoned work really stopped cannot be
+observed from outside, and the probe says so rather than reporting a pass.
 
 Aim for a starting point in **0.3–0.7**: 0 is a floor, solved is a ceiling. The probe reports
 where it actually landed.

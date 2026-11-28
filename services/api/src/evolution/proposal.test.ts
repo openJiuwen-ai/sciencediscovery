@@ -782,3 +782,120 @@ test("the summary names the winner the engine picked, and only once it has finis
   // A search still moving has no winner to hand over.
   assert.equal(summariseRun({ ...run, status: "running" }, events(null)).bestCodeHash, undefined);
 });
+
+test("an evaluator that imports the staged helper is held to its contract", async () => {
+  // The per-call part is a static check only where the script opts in: a script
+  // that imports the staged helper and then uses nothing from it still has no
+  // deadline and no separated copy, and the probe would spend evaluations
+  // discovering that. `call_with_deadline` takes its deadline as a required
+  // keyword argument, so "uses it without a timeout" is checkable here too.
+  const markers = 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]\n';
+  const cases: Array<[string, RegExp]> = [
+    [`import evaluator_support\n${markers}`, /uses nothing from it/],
+    [
+      `import evaluator_support\n${markers}evaluator_support.call_with_deadline(candidate.solve, value)\n`,
+      /without a timeout/,
+    ],
+    [
+      `from evaluator_support import call_with_deadline\n${markers}`
+        + "answer = call_with_deadline(candidate.solve, value)\n",
+      /without a timeout/,
+    ],
+    // The ordinary multi-line parenthesis, which a line-anchored regex misses.
+    [
+      `from evaluator_support import (\n    call_with_deadline,\n    pristine,\n)\n${markers}`
+        + "answer = call_with_deadline(candidate.solve, value)\n",
+      /without a timeout/,
+    ],
+    // Imported under another name: the call to check is the alias.
+    [
+      `from evaluator_support import call_with_deadline as deadline\n${markers}`
+        + "answer = deadline(candidate.solve, value)\n",
+      /without a timeout/,
+    ],
+    // `import *` opts in and brings the deadline in with it.
+    [
+      `from evaluator_support import *\n${markers}`
+        + "answer = call_with_deadline(candidate.solve, value)\n",
+      /without a timeout/,
+    ],
+    // Opted in, but nothing from it is called.
+    [`from evaluator_support import *\n${markers}value = 1\n`, /uses nothing from it/],
+    [`import os, evaluator_support as support\n${markers}value = 1\n`, /uses nothing from it/],
+    // A trailing comment is part of the line, not of the module name.
+    [`import evaluator_support  # staged by the framework\n${markers}value = 1\n`,
+      /uses nothing from it/],
+  ];
+  for (const [evaluatorSource, expected] of cases) {
+    const { deps: d } = deps();
+    const refused = await startProposedRun(proposal({ mode: "custom_script", evaluatorSource }), d);
+    assert.match(refused.refusedBecause ?? "", expected, evaluatorSource);
+    assert.equal(refused.probe, undefined, "a refused evaluator never reaches the probe");
+  }
+
+  for (const evaluatorSource of [
+    `import evaluator_support\n${markers}`
+      + "answer = evaluator_support.call_with_deadline(candidate.solve, value, timeout=1.0)\n",
+    // The same, imported by name.
+    `from evaluator_support import call_with_deadline\n${markers}`
+      + "answer = call_with_deadline(candidate.solve, value, timeout=1.0)\n",
+    // Only the input split, no deadline: still a use of the helper.
+    `import evaluator_support\n${markers}`
+      + "answer = candidate.solve(evaluator_support.candidate_copy(values))\n",
+    // Imported under another name.
+    `import evaluator_support as support\n${markers}`
+      + "answer = support.call_with_deadline(candidate.solve, value, timeout=1.0)\n",
+    // Parenthesized multi-line import, one member used by its own name.
+    `from evaluator_support import (\n    candidate_copy,\n    pristine,\n)\n${markers}`
+      + "answer = candidate.solve(candidate_copy(values))\n",
+    // `import *` with a member called directly.
+    `from evaluator_support import *\n${markers}answer = candidate.solve(pristine(values))\n`,
+    // An aliased import with a trailing comment: the alias is `support`.
+    `import evaluator_support as support  # staged by the framework\n${markers}`
+      + "answer = support.call_with_deadline(candidate.solve, value, timeout=1.0)\n",
+    // A bare import with a comment is still an opt-in.
+    `import evaluator_support  # staged by the framework\n${markers}`
+      + "answer = evaluator_support.call_with_deadline(candidate.solve, value, timeout=1.0)\n",
+  ]) {
+    const { deps: d } = deps();
+    const result = await startProposedRun(proposal({ mode: "custom_script", evaluatorSource }), d);
+    assert.equal(result.refusedBecause, undefined, evaluatorSource);
+  }
+});
+
+test("a script that merely mentions the helper, or defines its own, is not refused", async () => {
+  // The measured legacy shapes. A comment that names the helper, and a script
+  // with its own `call_with_deadline(func, args, limit)` called positionally,
+  // both work today; a raw-substring opt-in refused them and would have turned a
+  // reliability fix into a migration nobody asked for.
+  const markers = 'import os\nos.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]\n';
+  const cases = [
+    `${markers}# evaluator_support.call_with_deadline is not used here; a queue timeout is enough\n`
+      + "value = 1\n",
+    `${markers}def call_with_deadline(func, args, limit):\n    return func(args, timeout=limit)\n`
+      + "answer = call_with_deadline(candidate.solve, values, 1.0)\n",
+  ];
+  for (const evaluatorSource of cases) {
+    const { deps: d } = deps();
+    const result = await startProposedRun(proposal({ mode: "custom_script", evaluatorSource }), d);
+    assert.equal(result.refusedBecause, undefined, evaluatorSource);
+  }
+});
+
+test("a legacy evaluator that waits on a thread with a timeout is not refused", async () => {
+  // Deliberately not a keyword ban. The daemon-thread watchdog keeps working —
+  // the probe checks what it can observe and says the cleanup was not observed —
+  // because refusing every script written before the helper existed would turn
+  // a reliability fix into a migration nobody asked for.
+  const { deps: d } = deps();
+  const result = await startProposedRun(proposal({
+    mode: "custom_script",
+    evaluatorSource: 'import os, queue, threading\n'
+      + 'os.environ["SCIENCE_AGENT_SHARDS"]\nos.environ["SCIENCE_AGENT_RESULT"]\n'
+      + "box = queue.Queue()\n"
+      + "threading.Thread(target=lambda: box.put(1), daemon=True).start()\n"
+      + "try:\n    box.get(timeout=1)\nexcept queue.Empty:\n    pass\n",
+  }), d);
+
+  assert.equal(result.refusedBecause, undefined);
+});

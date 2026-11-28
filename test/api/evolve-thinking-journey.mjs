@@ -77,14 +77,29 @@ async function step(name, expected, work) {
 const baselinePath = 'baseline.py';
 const baselineSource = 'def solve(case):\n    return 0.4\n';
 const baselineHash = createHash('sha256').update(baselineSource).digest('hex');
+// The per-call limit is the framework's, not a thread's: the discrimination
+// probe deliberately scores a candidate whose first call never returns, and an
+// evaluator with no per-call limit is refused for holding the whole evaluation
+// open (Issue #1437). A timed-out case is a failed case, not a failed run.
 const evaluatorSource = `import os, json, traceback
+import evaluator_support
 shards = os.environ['SCIENCE_AGENT_SHARDS'].split(',')
+scores, failures = [], []
 try:
     import candidate
-    scores = [float(candidate.solve(int(shard))) for shard in shards]
-    result = {'valid': True, 'metrics': {'score': sum(scores) / len(scores)}, 'error': ''}
 except Exception:
     result = {'valid': False, 'metrics': {'score': 0}, 'error': traceback.format_exc()}
+else:
+    for shard in shards:
+        try:
+            scores.append(float(evaluator_support.call_with_deadline(candidate.solve, int(shard), timeout=2.0)))
+        except evaluator_support.DeadlineExceeded as error:
+            failures.append('case %s: %s' % (shard, error))
+        except Exception:
+            failures.append('case %s: %s' % (shard, traceback.format_exc()))
+    result = {'valid': True,
+              'metrics': {'score': sum(scores) / len(scores) if scores else 0.0},
+              'error': '; '.join(failures)}
 with open(os.environ['SCIENCE_AGENT_RESULT'], 'w') as output:
     json.dump(result, output)
 `;

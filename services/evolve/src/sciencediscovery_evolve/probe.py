@@ -34,6 +34,7 @@ going to separate two real candidates.
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -73,8 +74,112 @@ def train_and_predict(train_path, test_path):
 _EMPTY_WORDS = "This work did some things, obtained some results, and has a certain significance."
 
 
+#: The floor of the per-call timeout check's bound, in seconds.
+#:
+#: The check stops one whole evaluation of the gate shards instead of waiting for
+#: the evaluator's own outer budget (``candidate_timeout + 30``), which for the
+#: shipped default is longer than the run-creation request a probe refusal has to
+#: come back inside. The actual bound is
+#: ``min(candidate_timeout, max(TIMEOUT_CHECK_SECONDS, baseline_seconds + TIMEOUT_CHECK_SECONDS))``:
+#: the floor keeps a fast evaluator's refusal inside the request, and the measured
+#: starting-point time is added so a legitimately slow script gets the same amount
+#: of room for its timed check. Any bound expiry is a refusal — a slow starting
+#: point is not a reason to skip it — and the evaluator's own observation file is
+#: never consulted.
+TIMEOUT_CHECK_SECONDS = 15.0
+
+
 class ProbeError(RuntimeError):
     """The probe could not be taken, which is not the same as failing it."""
+
+
+class _SelfDeadline:
+    """A stop predicate the probe sets for itself, on the search's own clock.
+
+    ``run_killable`` polls this while the evaluator runs and kills its process
+    group when it turns true, so a check that has its own bound does not have to
+    wait for the evaluator's outer timeout to expire.
+    """
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = max(0.1, float(seconds))
+        self.deadline = time.monotonic() + self.seconds
+
+    def expired(self) -> bool:
+        return time.monotonic() >= self.deadline
+
+    def arm(self) -> None:
+        """Give the next evaluation the same bound, starting now."""
+        self.deadline = time.monotonic() + self.seconds
+
+
+def _timeout_check_bound(candidate_timeout: float, baseline_seconds: float) -> float:
+    """How long one evaluation of the per-call timeout check may run.
+
+    Capped by the run's own whole-evaluation budget, and never below the check's
+    floor. The measured starting-point evaluation is added to the floor, so a
+    script whose ordinary work is slow gets the same headroom for its timed check
+    that it legitimately spends on one ordinary evaluation. This is a scale, not
+    an exemption: a no-per-call-limit script is still cut and refused at the
+    scaled bound, however slow its starting point is.
+    """
+    return min(
+        float(candidate_timeout),
+        max(TIMEOUT_CHECK_SECONDS, float(baseline_seconds) + TIMEOUT_CHECK_SECONDS),
+    )
+
+
+def _timeout_check_domain(
+    spec: RunSpec,
+    observations: List[List[Dict[str, Any]]],
+    baseline_seconds: float = 0.0,
+    reference: Optional[Dict[str, float]] = None,
+) -> Tuple[Any, _SelfDeadline, float]:
+    """A second domain for the timeout check alone, bounded so it answers early.
+
+    Built from the same frozen script and scorecard, with three differences: its
+    candidate budget is capped, its card carries no constraints, and it carries a
+    stop predicate of its own. An evaluator that a single non-returning call can
+    hold open is refused in at most this bound's worth of seconds instead of the
+    outer ``candidate_timeout + 30``.
+
+    ``reference`` is the baseline mapping the main domain already filled from the
+    starting point's raw measurements, and it is handed over unchanged: this
+    second domain scores the same gate shards of the same script, so a
+    ``relative_to_baseline`` criterion has to divide by the frozen starting point
+    here as well. Left empty, every candidate in the check would be normalised
+    against itself, both timed runs would read the same number for any candidate,
+    and the repeatability arm of ``_refuse_ineffective_timeout`` could not see the
+    leftover work it exists for.
+
+    The card's own ``constraints`` are dropped here, and only here. This check
+    asks one question — does the evaluator stay alive inside the bound and answer
+    the same way twice — with a candidate that is deliberately broken, so a
+    quality constraint answers a different one. With the frozen reference in
+    place, a constraint relative to the baseline ("no slower than 1.5x the
+    starting point") is legitimately violated by that candidate, ``script_domain``
+    reports it as ``valid: false``, and ``_refuse_ineffective_timeout`` reads that
+    as "one timed-out case turned the whole evaluation invalid" — refusing an
+    evaluator that does keep its per-call deadline. The main domain, which scores
+    real candidates, keeps the card's constraints untouched.
+    """
+    from .script_domain import ScriptError, script_domain
+
+    bound = _timeout_check_bound(spec.candidate_timeout_seconds, baseline_seconds)
+    limit = _SelfDeadline(bound)
+    # A copy, so the scorecard the run carries is never mutated and every later
+    # domain still sees the constraints it was written with.
+    card = {**spec.scorecard, "constraints": []}
+    try:
+        domain = script_domain(
+            scorecard=card, script=spec.script, capability=spec.sandbox,
+            baseline_code=spec.baseline_code, candidate_timeout=bound,
+            observations=observations, should_stop=limit.expired,
+            baseline=reference,
+        )
+    except ScriptError as error:
+        raise ProbeError(str(error)) from error
+    return domain, limit, bound
 
 
 def run_probe(spec: RunSpec) -> Dict[str, Any]:
@@ -107,6 +212,11 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
     if mode == "custom_script":
         from .script_domain import ScriptError, script_domain
 
+        # What the staged per-call facility recorded about each call, one entry
+        # per evaluation. Filled by the domain; read by the timeout check, which
+        # is the one place a probe can see "the deadline fired and the next case
+        # still ran" instead of inferring it.
+        observations: List[List[Dict[str, Any]]] = []
         # Held by the domain and filled in below, exactly as the engine's
         # seeding code fills it — the same gap this probe refuses to have in the
         # dataset path below. Without it a `relative_to_baseline` criterion is
@@ -118,6 +228,7 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
                 scorecard=spec.scorecard, script=spec.script, capability=spec.sandbox,
                 baseline_code=spec.baseline_code,
                 candidate_timeout=spec.candidate_timeout_seconds,
+                observations=observations,
                 baseline=reference,
             )
         except ScriptError as error:
@@ -136,12 +247,18 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
         # a start the run then seeded at 0.2218. Two numbers for one program,
         # both called "the starting point".
         shards = _gate_slots(spec)
+        # The check's bound needs to know whether the evaluator's ordinary work
+        # is itself slower than the bound. The starting point is already measured
+        # here, so time it: that is evidence the evaluator cannot fabricate,
+        # unlike the observation file it writes itself.
+        baseline_started = time.monotonic()
         try:
             baseline, raw, why = _measure(domain.evaluate, spec.baseline_code, shards)
         except ScriptError as error:
             raise ProbeError(
                 f"the evaluator could not even finish on the starting point: {error}"
             ) from error
+        baseline_seconds = time.monotonic() - baseline_started
         if baseline is None:
             raise ProbeError(
                 "the starting point does not hold up under your evaluator, and every "
@@ -176,12 +293,32 @@ def run_probe(spec: RunSpec) -> Dict[str, Any]:
             ) from error
         flat = worsened is not None and abs(baseline - worsened) <= TOLERANCE
         # Ordered by what each costs. The first three read numbers already paid
-        # for; the last two each spend one more evaluation, so they come after
-        # everything that can refuse for free.
+        # for; the next three each spend evaluations of their own, so they come
+        # after everything that can refuse for free. Seven sandbox evaluations
+        # in total, in this order: the starting point, the damaged copy, one that
+        # cannot be imported, the input-mutating candidate, the non-returning one
+        # twice (the second run is what says whether a timed-out case behaves the
+        # same way twice), and the starting point again for the noise.
         _refuse_saturated(spec, baseline, worsened)
         _refuse_nameless_diagnosis(damaged_why)
         _refuse_locationless_diagnosis(damaged_why)
         _refuse_rewarding_the_unimportable(domain.evaluate, shards, baseline)
+        _refuse_input_mutation(
+            domain.evaluate, spec.baseline_code, shards, baseline,
+            signal=abs(baseline - worsened) if worsened is not None else None,
+        )
+        # The bounded domain is built for this check alone, so a script with no
+        # per-call limit is refused inside the run-creation request instead of
+        # waiting out the evaluator's own outer budget.
+        timeout_domain, timeout_limit, timeout_bound = _timeout_check_domain(
+            spec, observations, baseline_seconds, reference=reference,
+        )
+        _refuse_ineffective_timeout(
+            timeout_domain.evaluate, spec.baseline_code, shards, observations,
+            signal=abs(baseline - worsened) if worsened is not None else None,
+            limit=timeout_limit, bound=timeout_bound,
+            baseline_seconds=baseline_seconds,
+        )
         _refuse_noisy(domain.evaluate, spec.baseline_code, shards, baseline, worsened)
         return {"baseline": baseline, "flat": flat,
                 "label": damage_label, "worsened": worsened}
@@ -635,6 +772,455 @@ def _refuse_rewarding_the_unimportable(evaluate, shards, baseline: float) -> Non
         "Most likely the import guard has the score inverted: a candidate that fails to "
         "load must score **worst** (0.0, say), not best."
     )
+
+
+#: A candidate that misbehaves in the ways an evaluator has to survive.
+#:
+#: Appended to the starting point instead of written from scratch, for the same
+#: reason the damaged copy is: the probe does not know what the entrypoint is
+#: called or what it takes, and a from-scratch candidate would measure "did not
+#: import" rather than the evaluator's own per-case handling. Every module-level
+#: function keeps working - it is called first, with the arguments it was given
+#: - and the wrapper adds one behaviour around it:
+#:
+#: * one call never returns (only when the probe asks for it), so the evaluator's
+#:   per-call deadline is exercised by a call that would otherwise hold the
+#:   whole evaluation open;
+#: * every call then zeroes the numbers in the arguments it was given and
+#:   returns the *right* answer anyway - which is exactly the shape of a
+#:   candidate that scores itself by damaging the data it is scored against;
+#: * from its fourth call on it raises as well, so one evaluation also covers
+#:   the exception path. Not used for the input-damage run: there every case has
+#:   to reach the scoring for the inflation to show at full strength.
+#:
+#: It works on an evaluator that calls the candidate in process as well as one
+#: that uses ``evaluator_support``: both see a candidate that hangs, mutates and
+#: raises.
+_HOSTILE = '''
+
+# --- injected by the discrimination probe; none of this is part of the candidate ---
+import inspect as _probe_inspect
+import os as _probe_os
+import time as _probe_time
+
+_PROBE_HANG_FIRST = {hang!r}
+_PROBE_RAISE_AFTER = {raise_after!r}
+# The call counter lives in a file beside the candidate, not in a module global:
+# an evaluator that gives each call its own process (evaluator_support does)
+# imports the module afresh every time, and a per-process counter would make
+# every call "the first one", so the timed-out call would never be followed by a
+# valid one.
+_PROBE_COUNTER = _probe_os.path.join(
+    _probe_os.path.dirname(_probe_os.path.abspath(__file__)), "_probe_calls.txt")
+
+
+def _probe_next_call():
+    try:
+        with open(_PROBE_COUNTER, "r", encoding="utf-8") as _probe_handle:
+            _probe_count = int(_probe_handle.read().strip() or "0")
+    except (OSError, ValueError):
+        _probe_count = 0
+    _probe_count += 1
+    try:
+        with open(_PROBE_COUNTER, "w", encoding="utf-8") as _probe_handle:
+            _probe_handle.write(str(_probe_count))
+    except OSError:
+        pass
+    return _probe_count
+
+
+def _probe_damage(_probe_value, _probe_depth=0):
+    """Zero the numbers inside a mutable argument, keeping every length.
+
+    Anything addressable is damaged in place: a list, a dict, a numpy array, an
+    array.array. An immutable *container* cannot be changed itself, so it is
+    walked and its mutable contents are damaged — a candidate entrypoint usually
+    receives a tuple holding the real data. A tuple of numbers, or a string, has
+    nothing mutable inside it and stays as it was; a candidate whose only
+    argument is one of those cannot be exercised this way, and the guidance says
+    so rather than the probe claiming the check passed.
+    """
+    if _probe_depth > 3:
+        return
+    if isinstance(_probe_value, (tuple, frozenset)):
+        for _probe_item in _probe_value:
+            _probe_damage(_probe_item, _probe_depth + 1)
+        return
+    if isinstance(_probe_value, dict):
+        for _probe_key in list(_probe_value):
+            _probe_item = _probe_value[_probe_key]
+            if isinstance(_probe_item, bool) or _probe_item is None:
+                continue
+            if isinstance(_probe_item, (int, float)):
+                _probe_value[_probe_key] = 0
+            else:
+                _probe_damage(_probe_item, _probe_depth + 1)
+        return
+    if not hasattr(_probe_value, "__setitem__"):
+        return
+    for _probe_index in range(len(_probe_value)):
+        try:
+            _probe_item = _probe_value[_probe_index]
+        except (IndexError, KeyError, TypeError):
+            continue
+        if isinstance(_probe_item, bool) or _probe_item is None:
+            continue
+        if isinstance(_probe_item, (int, float)):
+            try:
+                _probe_value[_probe_index] = 0
+            except (TypeError, ValueError):
+                pass
+            continue
+        _probe_damage(_probe_item, _probe_depth + 1)
+
+
+_probe_originals = {{}}
+
+
+def _probe_call(_probe_name, *_probe_args, **_probe_kwargs):
+    _probe_call_number = _probe_next_call()
+    if _PROBE_HANG_FIRST and _probe_call_number == 1:
+        while True:
+            _probe_time.sleep(0.25)
+    if _PROBE_RAISE_AFTER and _probe_call_number >= _PROBE_RAISE_AFTER:
+        raise RuntimeError("probe: this candidate is deliberately broken on this call")
+    _probe_answer = _probe_originals[_probe_name](*_probe_args, **_probe_kwargs)
+    _probe_damage(list(_probe_args))
+    _probe_damage(list(_probe_kwargs.values()))
+    return _probe_answer
+
+
+for _probe_name, _probe_value in list(globals().items()):
+    if _probe_name.startswith("_probe") or isinstance(_probe_value, type):
+        continue
+    if not callable(_probe_value):
+        continue
+    if getattr(_probe_value, "__module__", None) != __name__:
+        continue
+    # An async entrypoint returns a coroutine, which is not a result and cannot
+    # be carried back. Wrapping it would break a working evaluator, so it is
+    # left exactly as it was.
+    if _probe_inspect.iscoroutinefunction(_probe_value):
+        continue
+    _probe_originals[_probe_name] = _probe_value
+
+# Re-defined at module level, with their own names, rather than replaced by
+# closures: an evaluator that hands the call to another process can only carry a
+# function that is importable by name, and a closure is not.
+for _probe_name in list(_probe_originals):
+    exec(
+        "def " + _probe_name + "(*_probe_args, **_probe_kwargs):\\n"
+        "    return _probe_call(" + repr(_probe_name) + ", *_probe_args, **_probe_kwargs)\\n",
+        globals(),
+    )
+'''
+
+
+def _hostile_candidate(source: str, *, hang_first: bool, raise_after: Optional[int] = 4) -> Optional[str]:
+    """The starting point, wrapped so one call never returns -- or ``None``.
+
+    ``None`` means the check cannot be performed on this starting point: it is
+    not Python, or it has no module-level function to wrap. The caller says so
+    and moves on rather than reporting a pass it did not measure.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    # Only a plain function is wrapped. An async entrypoint returns a coroutine
+    # rather than a result — it cannot be transported, and wrapping it would
+    # break an evaluator that currently works — so a starting point made only of
+    # those is reported as one these checks could not be performed on.
+    if not any(isinstance(node, ast.FunctionDef) for node in tree.body):
+        return None
+    return source + _HOSTILE.format(hang=bool(hang_first), raise_after=raise_after)
+
+
+def _records_of(observations: Optional[List[List[Dict[str, Any]]]]) -> List[Dict[str, Any]]:
+    """What the staged facility reported about the evaluation just scored."""
+    if not observations:
+        return []
+    last = observations[-1]
+    return last if isinstance(last, list) else []
+
+
+def _refuse_input_mutation(
+    evaluate: Callable[[str, Any], Tuple[bool, Dict[str, Any], str]],
+    source: str,
+    shards: Any,
+    baseline: float,
+    signal: Optional[float] = None,
+) -> None:
+    """Refuse a scoring whose answer changes when the candidate edits its input.
+
+    The damaging candidate here returns the starting point's own answer and
+    zeroes the numbers in the arguments it was handed. Two evaluators score it
+    in two ways, and only one is sound:
+
+    * authoritative inputs kept away from the candidate (a copy handed over, or
+      a process boundary like ``call_with_deadline``) -> the score is the
+      starting point's score, because nothing the candidate did reached the
+      data being measured;
+    * the candidate's own object reused for validation or arithmetic -> the
+      score moves, usually to a perfect one. One real evaluator measured its
+      baseline before the call and the candidate's makespan after it from the
+      same mutable lists, and a candidate that replaced the workloads with
+      zeros scored 1.0 with an empty error.
+
+    A *lower* score is not refused. Losing points by mutating your own input is
+    a bad candidate, not a broken measuring apparatus; the defect this closes
+    is the reward.
+
+    The allowance is a tenth of what damaging the candidate is worth (never
+    below `TOLERANCE`), the same shape as the timeout check: a scoring that
+    wobbles by a hundredth around the starting point is inside what
+    `_refuse_noisy` accepts, and must not be called an integrity failure.
+
+    Limits: arguments that are immutable (a tuple of numbers, a string) or that
+    have no addressable items cannot be damaged, so for a candidate shaped only
+    that way nothing is exercised — the score cannot move and the gate cannot
+    tell "the evaluator copied" from "the damage did nothing". The guidance
+    states that limit rather than the probe claiming a check it did not make.
+    """
+    from .script_domain import ScriptError
+
+    # No raising calls here: every case has to reach the scoring for the
+    # inflation to show at full strength, and an exception path is already
+    # covered by the damaged copy and by the timeout candidate's later calls.
+    hostile = _hostile_candidate(source, hang_first=False, raise_after=None)
+    if hostile is None:
+        log.info("probe: the input-integrity check was not performed - the starting "
+                  "point is not Python with a module-level function to wrap")
+        return
+    try:
+        score = _score(evaluate, hostile, shards)
+    except ScriptError:
+        # An evaluator that dies on a misbehaving candidate is the other
+        # failure, and the damaged-copy path already names it.
+        return
+    allowance = max(TOLERANCE, 0.1 * float(signal or 0.0))
+    if score is None or score <= baseline + allowance:
+        return
+    raise ProbeError(
+        f"a candidate that returns the starting point's own answer while zeroing the "
+        f"inputs it was given scores {score:.4f}, above the {baseline:.4f} the starting "
+        f"point itself scores — so the score is being computed from data the candidate "
+        "changed. Give the candidate a copy (`evaluator_support.candidate_copy`, or a "
+        "call through `evaluator_support.call_with_deadline`) and validate and score "
+        "against the evaluator's own copy; a candidate may damage its own input, but "
+        "never the data it is graded on."
+    )
+
+
+def _refuse_ineffective_timeout(
+    evaluate: Callable[[str, Any], Tuple[bool, Dict[str, Any], str]],
+    source: str,
+    shards: Any,
+    observations: Optional[List[List[Dict[str, Any]]]] = None,
+    signal: Optional[float] = None,
+    limit: Optional["_SelfDeadline"] = None,
+    bound: Optional[float] = None,
+    baseline_seconds: Optional[float] = None,
+) -> None:
+    """Refuse an evaluator that a single non-returning call can take down.
+
+    One call of the candidate never returns. What the evaluator does next is the
+    whole question: a per-call deadline makes that case a per-case failure and
+    the evaluation continues, while an evaluator with only an outer timeout
+    either never finishes (the probe sees the outer timeout as a refusal) or
+    counts the call as success once a wait expires — the shape #1437 reports,
+    where a daemon thread plus `queue.get(timeout=...)` left the timed-out work
+    running.
+
+    So the starting point is wrapped into a candidate whose first call never
+    returns and whose fourth raises, and it is scored twice:
+
+    * an evaluator that cannot finish inside the check's bound is refused: it has
+      no per-call limit, one too large to fit, or ordinary cases slower than the
+      bound — and none of those leaves the search safe from one slow candidate.
+      The bound is scaled from the starting point's own measured evaluation, so a
+      legitimately slow script gets proportional room; a bound expiry is still a
+      refusal, never a reason to skip the check;
+    * an evaluator that reports the whole evaluation invalid is refused: a
+      timed-out case is a per-case failure, not an invalid run, and marking it
+      invalid throws away every other case's score;
+    * the two runs must agree. A timed-out case that scores differently the
+      second time means the leftover work is still competing with the next
+      case, which is the residual-contention part of #1437. This is checked on
+      a *timed* candidate rather than on the fast baseline, because repeating a
+      fast baseline says nothing about the timing that actually goes wrong. The
+      allowance is a tenth of what damaging the candidate is worth (never below
+      `TOLERANCE`), so ordinary jitter in a scoring that already discriminates
+      is not mistaken for leftover work.
+
+    The check runs on its own bounded domain: the evaluator's outer budget is
+    ``candidate_timeout + 30`` seconds, which for the shipped default is longer
+    than the run-creation request a refusal has to come back inside, so the check
+    stops at its bound instead. The bound is
+    ``min(candidate_timeout, max(TIMEOUT_CHECK_SECONDS, baseline_seconds + TIMEOUT_CHECK_SECONDS))``:
+    the floor keeps a fast evaluator's refusal inside the request, and the
+    starting point's own measured time is added so a slow script's timed check has
+    room proportional to its ordinary work. The bound covers one *whole*
+    evaluation of the same gate shards. `baseline_seconds` is timed by the probe
+    and never read from the observation file the evaluator writes, which a script
+    with no limit could forge. The bound ending an evaluation is never reported as
+    the evaluator marking the run invalid.
+
+    What cannot be observed: whether a script that waits on a thread with a
+    timeout — without using `evaluator_support` — actually stopped that thread.
+    Nothing outside the process can tell "the thread is gone" from "the thread
+    is still sleeping", so the probe checks what it can (the run survives, the
+    run repeats) and the observations recorded by the staged facility are used
+    where they exist. That limit is stated in the generated guidance as well,
+    rather than being papered over.
+
+    The domain this is handed is the bounded one built by
+    `_timeout_check_domain`, whose card carries no constraints: the candidate here
+    is deliberately broken, so a quality constraint would answer a different
+    question and its `valid: false` would look like the invalid run below.
+    """
+    from .script_domain import ScriptError
+
+    hostile = _hostile_candidate(source, hang_first=True)
+    if hostile is None:
+        log.info("probe: the per-call timeout check was not performed - the starting "
+                  "point is not Python with a module-level function to wrap")
+        return
+    if limit is not None:
+        # The check owns this clock: it may have been built a moment ago, or the
+        # caller may hand over a limit that has already been armed elsewhere, and
+        # neither may shorten the first evaluation.
+        limit.arm()
+    try:
+        first = _score(evaluate, hostile, shards)
+        first_records = _records_of(observations)
+        if first is None and _cut_by_the_bound(limit, bound):
+            # The bound is the check's own clock, so this is a refusal whether the
+            # script has no per-call limit or one too large for the room its own
+            # starting point earned. The evaluator's observation file is not read.
+            raise _bounded_timeout_refusal(bound, baseline_seconds)
+        if limit is not None:
+            # The second run gets its own allowance: the first one may have spent
+            # most of the bound on the hung case, and a sound evaluator must not
+            # lose its repeatability reading to the first run's clock.
+            limit.arm()
+        second = _score(evaluate, hostile, shards)
+        second_records = _records_of(observations)
+        if second is None and _cut_by_the_bound(limit, bound):
+            # The probe's own clock ended the second evaluation, so this is the
+            # bound's refusal — never the invalid-run message below.
+            raise _bounded_timeout_refusal(bound, baseline_seconds)
+    except ScriptError as error:
+        raise ProbeError(
+            "the evaluator did not survive a candidate whose call never returns: "
+            f"{error}. One non-returning call currently holds the whole evaluation "
+            "open until the outer timeout, so a single slow candidate would burn the "
+            "run's budget. Give each candidate call its own hard limit — "
+            "`evaluator_support.call_with_deadline(candidate.solve, ..., timeout=...)` "
+            "stops the work and reaps its process when the deadline passes — and "
+            "count that case as failed, then carry on with the next one. A wait with "
+            "a timeout (`queue.get(timeout=...)`, `thread.join(timeout=...)`) stops "
+            "waiting but leaves the work running, which is not a limit."
+        ) from error
+
+    if first is None or second is None:
+        raise ProbeError(
+            "one candidate call that never returns turned the whole evaluation invalid. "
+            "A timed-out case is a failed case, not a failed run: score it as the worst "
+            "case and keep the score the other cases earned, so the search still sees a "
+            "(lower) number for this candidate instead of losing the measurement."
+        )
+
+    _report_timeout_observations(first_records, second_records)
+
+    # Relative to what one real change is worth, with the flat threshold as the
+    # floor: an evaluator whose scores wobble by a hundredth is not necessarily
+    # leaving work behind.
+    allowance = max(TOLERANCE, 0.1 * float(signal or 0.0))
+    if abs(first - second) > allowance:
+        raise ProbeError(
+            f"a candidate whose first call never returns scored {first:.4f} on one "
+            f"evaluation and {second:.4f} on the next, with nothing else changed — the "
+            "handling of a timed-out case is not repeatable, which is what leftover "
+            "work from the first one looks like from outside. Stop the timed-out call "
+            "rather than abandoning the wait on it: "
+            "`evaluator_support.call_with_deadline` kills and reaps its process before "
+            "the case is counted as failed, so the next case starts clean."
+        )
+
+
+def _cut_by_the_bound(limit: Optional["_SelfDeadline"], bound: Optional[float]) -> bool:
+    """Whether the check's own clock, not the evaluator, ended an evaluation."""
+    return limit is not None and bound is not None and limit.expired()
+
+
+def _bounded_timeout_refusal(
+    bound: float, baseline_seconds: Optional[float] = None,
+) -> ProbeError:
+    """What to say when the check's own bound ended the evaluation.
+
+    Three scripts produce this observation and the bound alone cannot tell them
+    apart: one with no per-call limit at all, one whose per-call limit is too
+    large to fit the bound, and one whose per-call limit is real but whose
+    ordinary cases leave no room inside the bound. So the message says what was
+    observed (the bound, and the starting point's own time when it was measured),
+    names all three possibilities, and states the pattern the guidance asks for —
+    about a second per call, well under the bound — rather than asserting one of
+    them as a fact. The numbers are what let the author tell which applies.
+    """
+    measured = (
+        f" (the starting point itself took {baseline_seconds:.2f}s)"
+        if baseline_seconds is not None else ""
+    )
+    return ProbeError(
+        f"a candidate whose first call never returns did not finish within the "
+        f"{bound:.0f}s this check allows one whole evaluation of the gate shards"
+        f"{measured}. That means either the evaluator has no per-call limit — it "
+        "waits for the whole-evaluation timeout, and one slow candidate holds every "
+        "case open — or its limit is too large to fit this check, or its ordinary "
+        f"cases are slower than this check allows. The guidance's pattern is a limit "
+        f"of about a second per call, so a whole evaluation stays well inside "
+        f"{bound:.0f}s. Give each call its own hard limit with "
+        "`evaluator_support.call_with_deadline(candidate.solve, ..., timeout=1.0)`, "
+        "which stops the work and reaps its process when the deadline passes, and "
+        "count that case as failed while the other cases keep their scores. A wait "
+        "with a timeout (`queue.get(timeout=...)`, `thread.join(timeout=...)`) stops "
+        "waiting but leaves the work running, which is not a limit."
+    )
+
+
+def _report_timeout_observations(
+    first: List[Dict[str, Any]], second: List[Dict[str, Any]],
+) -> None:
+    """Record what could and could not be observed about the timed-out call.
+
+    Not a refusal: an evaluator that never touched the staged facility is a
+    legacy script, not a broken one, and the score checks above already cover
+    what is observable from outside. But "we did not check this" has to be said
+    somewhere, and this is where.
+    """
+    if not first and not second:
+        log.info("probe: the evaluator does not use evaluator_support, so whether the "
+                  "timed-out call was stopped could not be observed; the run surviving "
+                  "it and repeating the same score were checked")
+        return
+    deadline_at = next(
+        (index for index, record in enumerate(first) if record.get("outcome") == "deadline"),
+        None,
+    )
+    if deadline_at is None:
+        log.info("probe: the per-call deadline never fired during the timeout check, so "
+                  "the call was survived some other way and its cleanup was not observed")
+        return
+    later = [record for record in first[deadline_at + 1:] if record.get("outcome") == "ok"]
+    if not later:
+        log.info("probe: a deadline fired but no later candidate call completed, so "
+                  "'timeout, then another case still scored' was not observed")
+        return
+    log.info("probe: deadline %s fired, then %d later candidate call(s) completed",
+             first[deadline_at].get("target"), len(later))
 
 
 def _refuse_locationless_diagnosis(said: str) -> None:
