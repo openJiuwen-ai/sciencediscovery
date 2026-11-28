@@ -385,9 +385,11 @@ export interface WorkbenchSearchResult {
   projectName?: string;
   /** For an artifact: the title of the Session that created it, absent when that Session was deleted. */
   sessionTitle?: string;
-  /** For a Session matched by its message text: the first matching line, clipped
-   *  around the needle and including ellipses when it was cut. Both clients
-   *  render it under the label; `detail` alone is their Project line. */
+  /** For a Session matched by its message text: the newest matching line, clipped
+   *  around the needle and including ellipses when it was cut. The scan and its
+   *  per-Session caps run from the newest turn backwards, so this is the line a
+   *  reader is most likely to remember writing. Both clients render it under the
+   *  label; `detail` alone is their Project line. */
   snippet?: string;
   archived?: boolean;
   origin?: ArtifactOrigin;
