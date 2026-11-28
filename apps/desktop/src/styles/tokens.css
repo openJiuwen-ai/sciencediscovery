@@ -34,13 +34,21 @@
   --muted: #777777;
   --muted-light: #a6a6a6;
   --text-faint: #8c8c8c;
-  /* Hint text: the small informational lines under a field, a flyout row's
-     explanation and the folder beside a document's name. It has to clear WCAG
-     AA (4.5:1) on every surface it is painted on — the settings panel #ffffff,
-     the selected capability option #f4f8ff, the session flyout #ffffff and its
-     hovered row #f5f5f5. --muted (#777777, 4.48:1 on white) and --text-faint
-     (#8c8c8c, 3.36:1) do not clear the floor on the darker ones, and both have
-     call sites that are not text, so this is its own token. */
+  /* Hint text: every informational aside the shell paints in muted grey. Two
+     halves share it. The sidebar's: `.side-label`, `.side-more`,
+     `.side-session-time`, `.side-project-rule` and `.side-empty`, together with
+     the hover-composited counts, plus the landing lockup's tagline. The
+     settings/flyout/document half: the small line under a settings field, a
+     flyout row's explanation, the selected capability option's note and the
+     folder beside a document's name. It has to clear WCAG AA (4.5:1) on every
+     surface it is painted on: the sidebar column #f5f5f5, the open row
+     #e8e8e8, the hover composite #ececec, the settings panel #ffffff, the
+     selected option #f4f8ff, the session flyout #ffffff and its hovered row
+     #f5f5f5, the document panel #ffffff (and defensively --surface-sunk
+     #f0f0f0). --muted (#777777, 4.48:1 on white) and --text-faint (#8c8c8c,
+     3.36:1) do not clear the floor on the darker surfaces, and both have call
+     sites that are not text at all, so this is its own token rather than a
+     repaint of the shared muted ramp. */
   --text-hint: #666666;
 
   --primary: #1476ff;

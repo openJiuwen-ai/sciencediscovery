@@ -426,11 +426,15 @@ body.is-resizing * {
 }
 .side-session.is-running .side-session-name { color: var(--text-strong); }
 
-/* The list before there is anything in it. */
+/* The list before there is anything in it. design.css declares the same
+   selector later in the bundle and wins `color`, `padding` and `font-size` at
+   equal specificity; what still applies from here is the line's `margin` and
+   `text-align`. The colour is kept at `--text-hint` alongside design.css, so
+   the two rules cannot drift into two literals the way they did before. */
 .side-empty {
   margin: 6px 0 2px;
   padding: 6px 8px;
-  color: var(--text-faint);
+  color: var(--text-hint);
   font-size: 11.5px;
   text-align: center;
 }
