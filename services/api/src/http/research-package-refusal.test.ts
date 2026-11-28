@@ -51,6 +51,7 @@ test("a package the parser refused answers 400 with the parser's own reason", ()
   for (const message of [
     "Invalid .sdresearch gzip archive",
     "Research package is missing its manifest or records",
+    "Research package contains a non-regular file",
     "Package checksum mismatch: objects/abc",
     "File is not listed in the package inventory: objects/abc",
     "Unsafe research package path",
@@ -101,6 +102,40 @@ function archiveBytes() {
   return gzipSync(Buffer.alloc(4096, 7));
 }
 
+/** One tar header, checksum filled in: the parser reads the type flag and
+ *  refuses everything that is not a regular file. */
+function tarHeader(name: string, size: number, type: string): Buffer {
+  const header = Buffer.alloc(512, 0);
+  header.write(name, 0, 100, "utf8");
+  header.write("0000644\0", 100, 8);
+  header.write("0000000\0", 108, 8);
+  header.write("0000000\0", 116, 8);
+  header.write(`${size.toString(8).padStart(11, "0")}\0`, 124, 12);
+  header.write("00000000000\0", 136, 12);
+  header.write("        ", 148, 8);
+  header.write(type, 156, 1);
+  header.write("ustar\0" + "00", 257, 8);
+  let sum = 0;
+  for (const byte of header) sum += byte;
+  header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, 8);
+  return header;
+}
+
+/** What `tar czf` of a folder produces: a directory entry before the file, so
+ *  the "simply the wrong file" case reaches the parser's own refusal rather
+ *  than the decompressor's. */
+function archiveWithDirectoryEntry(): Buffer {
+  const body = Buffer.from("hello\n");
+  const padding = Buffer.alloc((512 - (body.length % 512)) % 512, 0);
+  return gzipSync(Buffer.concat([
+    tarHeader("pkg/", 0, "5"),
+    tarHeader("pkg/a.txt", body.length, "0"),
+    body,
+    padding,
+    Buffer.alloc(1024, 0),
+  ]));
+}
+
 async function fixture(context: TestContext) {
   const root = await mkdtemp(resolve(tmpdir(), "research-package-invalid-"));
   const graph = createServer((_request, response) => {
@@ -149,7 +184,11 @@ test("a malformed package answers 4xx on both package endpoints, not 500", async
     { name: "inspect", path: `/api/projects/${target.id}/research-package/inspect`, method: "POST" },
     { name: "import", path: `/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, method: "POST" },
   ];
-  for (const payload of malformedPayloads(archive)) {
+  // A gzipped folder is the "simply the wrong file" case: the decompressor is
+  // happy and the parser refuses the archive's own structure, which no zlib code
+  // would classify.
+  const wrongFile = { name: "a gzipped folder, not a package", bytes: archiveWithDirectoryEntry() };
+  for (const payload of [...malformedPayloads(archive), wrongFile]) {
     for (const endpoint of endpoints) {
       const response = await request(endpoint.path, { method: endpoint.method, body: payload.bytes });
       const body = await response.json() as { code?: string; error?: string };

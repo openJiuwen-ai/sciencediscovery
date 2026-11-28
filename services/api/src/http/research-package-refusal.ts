@@ -37,7 +37,7 @@ const RESEARCH_PACKAGE_UPLOAD_PATH = /^\/api\/projects\/[^/]+\/research-package\
  *  too, or it keeps answering 500 — which is the safe direction. */
 const PARSER_REFUSAL = new RegExp([
   String.raw`^(?:Invalid|Unsafe|Unsupported|Duplicate) (?:\.sdresearch |research package|package)\b`,
-  String.raw`^Research package (?:is missing|inventory is incomplete|carries data|exceeds its limits|metadata entry)`,
+  String.raw`^Research package (?:is missing|inventory is incomplete|carries data|exceeds its limits|metadata entry|contains a non-regular file)`,
   String.raw`^Package (?:path is too long|entry is too large for a tar header)`,
   String.raw`^Package (?:checksum mismatch|inventory entry is missing): `,
   String.raw`^File is not listed in the package inventory: `,
