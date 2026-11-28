@@ -95,6 +95,19 @@ test("DuckDuckGo parsing honours the result cap and skips malformed rows", () =>
   assert.equal(parseDuckDuckGoHtml(html, 5).length, 5);
 });
 
+test("DuckDuckGo parsing decodes named references in result titles and snippets", () => {
+  // The free-engine path shares the same extractor as the paid adapters; a page
+  // that entity-escapes its titles must not leak `&eacute;` into the report.
+  const html = `<div class="result">
+      <a class="result__a" href="https://example.test/mull">M&uuml;ller &mdash; TP53</a>
+      <a class="result__snippet">5&ndash;10 &hellip; &lsquo;tumour&rsquo; suppressor &deg;</a>
+    </div>`;
+  const rows = parseDuckDuckGoHtml(html, 5);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.title, "M\u00FCller \u2014 TP53");
+  assert.equal(rows[0]?.content, "5\u201310 \u2026 \u2018tumour\u2019 suppressor \u00B0");
+});
+
 test("Bing parsing decodes the /ck/a redirect instead of returning a tracker URL", () => {
   // `a1` + base64url of https://example.test/p53 — the shape Bing wraps organic
   // hits in. Without decoding, every result URL would point back at bing.com.
