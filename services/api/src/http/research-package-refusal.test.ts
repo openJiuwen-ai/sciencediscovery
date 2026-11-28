@@ -204,7 +204,7 @@ test("a malformed package answers 4xx on both package endpoints, not 500", async
   // A gzip whose header is intact and whose CRC is damaged: the decompressor
   // reports `incorrect data check`, which is corruption, not "wrong file type".
   const corruptCrc = Buffer.from(archive);
-  corruptCrc[corruptCrc.length - 5] ^= 0xff;
+  corruptCrc[corruptCrc.length - 5] = (corruptCrc[corruptCrc.length - 5] ?? 0) ^ 0xff;
   const corrupt = { name: "a gzip with a damaged CRC", bytes: corruptCrc };
   for (const payload of [...malformedPayloads(archive), wrongFile, corrupt]) {
     for (const endpoint of endpoints) {
