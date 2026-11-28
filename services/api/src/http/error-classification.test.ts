@@ -17,7 +17,38 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import { isKnownClientInputError } from "./error-classification.js";
+import { isInternalFault, isKnownClientInputError } from "./error-classification.js";
+
+test("a runtime error or a system-coded error is never claimed as client input", () => {
+  // The #1520 instance and its siblings: the prose says "cannot"/"invalid", but
+  // the exception is this server dereferencing something that was not there.
+  const runtimeFaults = [
+    new TypeError("Cannot read properties of undefined (reading 'match')"),
+    new TypeError("Invalid value used as weak map key"),
+    new RangeError("Invalid array length"),
+    new ReferenceError("helper is not defined"),
+  ];
+  for (const fault of runtimeFaults) {
+    assert.equal(isInternalFault(fault), true, fault.message);
+    assert.equal(isKnownClientInputError(fault), false, `the word list must not claim: ${fault.message}`);
+  }
+  // Node, the filesystem and dependencies tag their failures with a stable code.
+  const coded = Object.assign(new Error("sqlite cannot start a transaction within a transaction"), { code: "ERR_SQLITE_ERROR" });
+  assert.equal(isInternalFault(coded), true);
+  assert.equal(isKnownClientInputError(coded), false);
+  // A SyntaxError is still the parser's way of naming the caller's bad JSON.
+  assert.equal(isInternalFault(new SyntaxError("Malformed JSON")), false);
+  assert.equal(isKnownClientInputError(new SyntaxError("Malformed JSON")), true);
+});
+
+test("the legacy list still answers the plain Error the stores throw", () => {
+  // The store validators have no code and no type; the list is their only 400.
+  for (const message of ["Notification page must contain 1-100 entries", "modelId is required"]) {
+    const fault = new Error(message);
+    assert.equal(isInternalFault(fault), false, message);
+    assert.equal(isKnownClientInputError(fault), true, message);
+  }
+});
 
 test("keeps known validation failures at 400 without hiding internal faults", () => {
   for (const message of [

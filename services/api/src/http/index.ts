@@ -361,7 +361,7 @@ import { isAuthorized } from "./auth.js";
 import { readBytes, readBytesToFile, readJson, readMultipartSkill, readOptionalJson } from "./body.js";
 import { accessTokenBanner } from "./bootstrap-tokens.js";
 import { loadServerConfig, repositoryRoot, type ServerConfig } from "../bootstrap/config.js";
-import { isKnownClientInputError } from "./error-classification.js";
+import { isInternalFault, isKnownClientInputError } from "./error-classification.js";
 import { ApiStatusError } from "./api-status-error.js";
 import { send, sendError, sendJson } from "./response.js";
 import { handleCustomMcpRequest, handleMcpOAuthCallback } from "./custom-mcp.js";
@@ -5299,7 +5299,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       // `unclassified_request_error` line describing a client mistake as a
       // server fault.
       else if (code === "MALFORMED_PATH_PARAM") sendError(response, 400, message);
-      else if (isKnownClientInputError(error)) sendError(response, 400, message);
+      // The prose list is evidence only for the plain `Error`s legacy validators
+      // throw (#1533). A JavaScript runtime error or an error carrying a `code`
+      // is this server's own fault whatever words its message uses, so it is
+      // decided before the list and keeps the generic 500 and the
+      // `unclassified_request_error` line below.
+      else if (!isInternalFault(error) && isKnownClientInputError(error)) sendError(response, 400, message);
       else {
         apiLog.error("unclassified_request_error", {
           errorMessage: shortErrorMessage(error),
