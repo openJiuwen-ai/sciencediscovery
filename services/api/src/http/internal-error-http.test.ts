@@ -113,6 +113,23 @@ describe("an internal fault is answered 500 and never quotes its own message", (
       `the fault must be logged as unclassified for the team to find it, saw ${JSON.stringify(events)}`);
   });
 
+  test("an error carrying a system code is a 500 even when its text says \"cannot\"", async (context) => {
+    const events: string[] = [];
+    context.mock.method(apiLog, "error", (event: string) => { events.push(event); });
+    // A `code` marks the layer that raised the error, not the caller: the
+    // catch-all answers the codes it knows before it reads any prose (#1533).
+    failOnceWith(context as never, Object.assign(new Error("cannot start a transaction within a transaction"), { code: "ERR_SQLITE_ERROR" }));
+
+    const response = await request("GET", "/api/projects");
+
+    assert.equal(response.status, 500, "a coded fault is this server's, not the caller's");
+    assert.equal(response.body.error, "Internal server error");
+    assert.equal(JSON.stringify(response.body).includes("cannot start a transaction"), false,
+      "the dependency's text must not reach the client");
+    assert.ok(events.includes("unclassified_request_error"),
+      `the fault must be logged as unclassified for the team to find it, saw ${JSON.stringify(events)}`);
+  });
+
   test("a validator's own rejection still answers 400 with its wording", async () => {
     const response = await request("POST", "/api/specialists", { description: "d", instructions: "i" });
     assert.equal(response.status, 400, "legacy validator wording keeps its 400");

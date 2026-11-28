@@ -134,3 +134,20 @@ test("a plain Error quoting the engine's own sentence is not client input either
     assert.equal(isKnownClientInputError(new Error(message)), true, message);
   }
 });
+
+test("an error that carries an explicit code is not read from its prose", () => {
+  // #1533 names an explicit code as a legitimate source of a 400 beside
+  // `ApiStatusError`. The catch-all reads the codes it knows (`CONFLICT`,
+  // `INVALID_UPLOAD_PATH`, ...) before this list, so a coded error that still
+  // arrives here is a system fault whatever its sentence says.
+  for (const fault of [
+    Object.assign(new Error("cannot start a transaction within a transaction"), { code: "ERR_SQLITE_ERROR" }),
+    Object.assign(new Error("must not lose the audit row"), { code: "ENOTDIR" }),
+    Object.assign(new Error("Invalid array length"), { code: "ERR_OUT_OF_RANGE" }),
+  ]) {
+    assert.equal(isKnownClientInputError(fault), false, `${(fault as { code: string }).code}: ${fault.message}`);
+  }
+
+  // An empty code is not a label, so the validator's sentence still decides.
+  assert.equal(isKnownClientInputError(Object.assign(new Error("Project name is required"), { code: "" })), true);
+});

@@ -88,9 +88,10 @@ describe("PUT /api/web/settings answers a client error that names the rejected f
   });
 
   test("no shape of a client mistake is answered with a generic 500", async () => {
-    // A non-object body is destructured against the stored settings before
-    // normalisation runs, so each shape lands somewhere else. What must hold for
-    // all of them is the report's premise: none of them is a server fault.
+    // The `null` body used to reach the destructuring in `applyWebSettingsSync`
+    // and crash it with a `TypeError` that only the prose fallback turned into a
+    // 400 (#1533). Each of these is now refused by the record guard with the
+    // normalizer's own sentence, so the caller reads what it sent wrong.
     for (const [label, body] of [
       ["array", []],
       ["string", "x"],
@@ -98,7 +99,8 @@ describe("PUT /api/web/settings answers a client error that names the rejected f
       ["number", 7],
     ] as const) {
       const response = await request("PUT", body);
-      assert.notEqual(response.status, 500, `${label} body is not an internal server error`);
+      assert.equal(response.status, 400, `${label} body is client input, not a server error`);
+      assert.equal(response.body.error, "Web settings must be an object", `${label} body is named as rejected`);
     }
   });
 
