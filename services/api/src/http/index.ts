@@ -641,23 +641,6 @@ async function switchJiuwenSwarmSkills(options: {
   return results;
 }
 
-/**
- * Read a Specialist body that has to be a JSON object.
- *
- * `readJson` returns whatever `JSON.parse` produced, so a bare `null` body
- * reaches the store and fails on a property read. That `TypeError` names
- * nothing in `SPECIALIST_REJECTIONS`, so the route would answer it as a 500
- * fault; rejecting it here keeps the status class the base answered for a
- * malformed client body, before any of it touches the store.
- */
-async function readSpecialistBody<T>(request: IncomingMessage): Promise<T> {
-  const body = (await readJson<unknown>(request)) as unknown;
-  if (body === null || typeof body !== "object" || Array.isArray(body)) {
-    throw new ApiStatusError(400, "Request body must be a JSON object");
-  }
-  return body as T;
-}
-
 /** The only graph labels a person may delete one record of from the desktop
  *  citation card. Evidence is a declaration with no shared identity; Artifact
  *  version lineage and SourceFile/DbRecord citation inputs stay immutable.
@@ -2857,13 +2840,13 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/specialists") {
-        const body = await readSpecialistBody<CreateSpecialistRequest>(request);
+        const body = await readJson<CreateSpecialistRequest>(request);
         await answerSpecialistRoute(response, request, url.pathname, 201, () => store.createSpecialist(body));
         return;
       }
       const specialistMatch = url.pathname.match(/^\/api\/specialists\/([^/]+)$/);
       if (specialistMatch && request.method === "PUT") {
-        const body = await readSpecialistBody<UpdateSpecialistRequest>(request);
+        const body = await readJson<UpdateSpecialistRequest>(request);
         await answerSpecialistRoute(response, request, url.pathname, 200, () => store.updateSpecialist(specialistMatch[1]!, body));
         return;
       }
