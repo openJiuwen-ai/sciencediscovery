@@ -601,6 +601,7 @@
 .provider-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 /* The registry title owns its width so the read-only default value cannot
    squeeze it into two lines; the value truncates instead. */
+.provider-registry .provider-section-heading { min-width: 0; }
 .provider-registry .provider-section-heading > div:first-child { flex: none; }
 .provider-registry .provider-section-heading > .compact-button { flex: none; white-space: nowrap; }
 .provider-section-heading h4, .provider-registry > h4 { color: var(--text-heading); font-size: 14px; }
@@ -651,7 +652,8 @@
    as 全局默认值 → 任务模型) as a read-only value in the 已配置服务商 heading
    row. Both the label and the value stay compact there: the label never wraps
    and the value truncates instead of widening or growing the heading row. */
-.registry-default-inline { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; justify-content: flex-end; }
+.registry-default-inline { display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; justify-content: flex-end; }
+@media (max-width: 600px) { .registry-default-inline { flex: 0 0 auto; width: 100%; } }
 .provider-settings .registry-default-inline > span { color: var(--muted); font-size: 11px; white-space: nowrap; margin-bottom: 0; }
 .provider-settings .registry-default-inline output { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-heading); font-size: 11px; line-height: 1.5; }
 .registry-default-inline .compact-button { flex: none; white-space: nowrap; }
