@@ -504,16 +504,18 @@ repository:
   are not committed: host them on a branch in your own fork, or at another URL
   that does not change, and embed them in the body from there. When that URL
   comes from a git branch, pin it to a commit SHA rather than the branch name —
-  a branch moves and the body silently starts showing something else. Some
-  directories under `docs/screenshots/` still hold frames committed by earlier
-  changes; that is history, not the rule, and a frame committed by mistake stays
-  in the repository's history after the pull request is reverted.
+  a branch moves and the body silently starts showing something else. Earlier
+  changes committed frames under `docs/screenshots/`; those files have been
+  removed, so what is left of them is a commit in the repository's history —
+  history, not the rule — and a frame committed by mistake stays in that history
+  even after the pull request that added it is reverted.
 - **Self-describing.** Under each frame, say what it shows, the viewport and
   device scale, the harness, what is mocked, and which part of the copy on
-  screen comes from this diff rather than from a fixture. Some of the committed
-  directories kept that in a `README.md`; the rest left it in the pull request
-  that added them; with the frames outside the tree it belongs in the body
-  beside them.
+  screen comes from this diff rather than from a fixture. While frames were
+  committed under `docs/screenshots/`, some of those directories described them
+  in a `README.md` and the rest left that description in the pull request that
+  added them; with the frames outside the tree, it is a caption under each frame
+  in the pull request body.
 - **Redacted.** A frame of a real stack shows what the stack shows: keys on the
   settings page, bearer tokens in a log panel, `/home/<user>` and
   `C:\Users\<name>` paths, hostnames, other people's session titles. Journey
