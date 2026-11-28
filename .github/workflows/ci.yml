@@ -470,7 +470,8 @@ jobs:
     needs: [policy, l1]
     name: ST
     if: ${{ success() && needs.policy.outputs.test_layers == 'true' && needs.policy.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
-    runs-on: ubuntu-latest
+    # Same pool as UT: self-hosted only for opted-in merge_group runs.
+    runs-on: ${{ fromJSON(needs.policy.outputs.ut_runner) }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -480,17 +481,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: pnpm
+          cache: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' && 'pnpm' || '' }}
 
       - uses: astral-sh/setup-uv@v6
         with:
-          enable-cache: true
+          enable-cache: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' }}
 
       - name: Provision sandbox for the installed Evolve task journey
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          if ! bwrap --unshare-user --ro-bind / / --dev /dev true 2>/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends bubblewrap
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          fi
           bwrap --ro-bind / / --dev /dev true
 
       # `fetch-runtime.mjs` downloads the pinned CPython archive for the
@@ -508,7 +511,10 @@ jobs:
           version=$(node -p "require('./scripts/binary-release/runtimes.json').python.version")
           echo "pin=cpython-${version}-${release}" >> "$GITHUB_OUTPUT"
 
+      # Self-hosted runners keep the verified archive in their persistent local
+      # cache instead (BINARY_CACHE_DIR below), so no cross-region transfer.
       - name: Cache the pinned CPython archive
+        if: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' }}
         uses: actions/cache@v4
         with:
           # Same path as BINARY_CACHE_DIR on Run ST.
@@ -527,8 +533,9 @@ jobs:
           CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
           CI_RUNTIME_DIR: ${{ runner.temp }}/ci-runtime
           # Where the cache step above restores the verified archive, and where
-          # fetch-runtime.mjs looks for it before touching the network.
-          BINARY_CACHE_DIR: ${{ runner.temp }}/binary-cache
+          # fetch-runtime.mjs looks for it before touching the network. Self-hosted
+          # runners use their persistent /ci-cache volume instead.
+          BINARY_CACHE_DIR: ${{ needs.policy.outputs.self_hosted_merge_queue == 'true' && '/ci-cache/binary-cache' || format('{0}/binary-cache', runner.temp) }}
           # A cache miss must not sit on a trickle: 128 KB/s is the floor at
           # which the pinned 34 MB archive finishes inside this job's budget,
           # and a slower read now fails in seconds with one readable line
@@ -700,7 +707,8 @@ jobs:
     name: Desktop UI-ST and mocked E2E
     needs: [policy, l1]
     if: ${{ success() && needs.policy.outputs.docs_only != 'true' && needs.policy.outputs.desktop_specs != 'none' }}
-    runs-on: ubuntu-latest
+    # Same pool as UT: self-hosted only for opted-in merge_group runs.
+    runs-on: ${{ fromJSON(needs.policy.outputs.ut_runner) }}
     timeout-minutes: 60
     env:
       CI_RESULTS_DIR: ${{ github.workspace }}/.ci-results
@@ -710,7 +718,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: pnpm
+          cache: ${{ needs.policy.outputs.self_hosted_merge_queue != 'true' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: node test/sync-e2e.mjs --write
       - run: npm ci --prefix .e2e
@@ -718,7 +726,17 @@ jobs:
       - name: Build Desktop workspace dependencies
         run: pnpm --filter "@sciencediscovery/desktop^..." build
       - name: Install Chromium
-        run: .e2e/node_modules/.bin/playwright install --with-deps chromium
+        env:
+          SELF_HOSTED: ${{ needs.policy.outputs.self_hosted_merge_queue }}
+        run: |
+          # Self-hosted runner images already carry Chromium's system libraries
+          # and grant no sudo; they only need the pinned browser, which their
+          # persistent PLAYWRIGHT_BROWSERS_PATH usually has already.
+          if [ "$SELF_HOSTED" = "true" ]; then
+            .e2e/node_modules/.bin/playwright install chromium
+          else
+            .e2e/node_modules/.bin/playwright install --with-deps chromium
+          fi
       - name: Run deterministic UI-ST
         if: ${{ needs.policy.outputs.profile != 'pr' }}
         env:

@@ -26,7 +26,7 @@ import {
   swarmChecks,
 } from '../test/support/tagged/execution.mjs';
 import { sharedCacheEnv } from '../test/support/tagged/shared.mjs';
-import { HEAVY_MOCKED_SHARDS, buildMockedMatrix } from './mocked-matrix.mjs';
+import { SELF_HOSTED_MOCKED_SHARDS, buildMockedMatrix } from './mocked-matrix.mjs';
 import { reconcileMocked } from './mocked-report.mjs';
 import { SELF_HOSTED_RUNNER, route } from './tier-policy.mjs';
 
@@ -89,7 +89,7 @@ test('only merge_group with explicit toggle routes UT to self-hosted runners', (
   }
 });
 
-test('mocked E2E matrix routes only the three heavy shards to self-hosted when enabled', () => {
+test('mocked E2E matrix routes every mocked shard to self-hosted when enabled', () => {
   const plan = fiveShardPlan();
   const hosted = buildMockedMatrix(plan, { selfHostedMergeQueue: false });
   assert.equal(hosted.include.length, 5);
@@ -102,17 +102,11 @@ test('mocked E2E matrix routes only the three heavy shards to self-hosted when e
   const routed = buildMockedMatrix(plan, { selfHostedMergeQueue: true });
   assert.equal(routed.include.length, 5);
   const byShard = Object.fromEntries(routed.include.map(entry => [entry.shard, entry]));
-  for (const shard of ['standard-config', 'standard-journeys', 'research']) {
-    assert.ok(HEAVY_MOCKED_SHARDS.has(shard), shard);
+  for (const shard of ['standard-config', 'standard-journeys', 'research', 'governed', 'literature']) {
+    assert.ok(SELF_HOSTED_MOCKED_SHARDS.has(shard), shard);
     assert.deepEqual(byShard[shard].runner, [...SELF_HOSTED_RUNNER], shard);
     assert.equal(byShard[shard].self_hosted, true, shard);
     assert.equal(byShard[shard].local_concurrency, PARALLEL_MOCKED_SHARDS.has(shard) ? 2 : 1, shard);
-  }
-  for (const shard of ['governed', 'literature']) {
-    assert.ok(!HEAVY_MOCKED_SHARDS.has(shard), shard);
-    assert.equal(byShard[shard].runner, 'ubuntu-latest', shard);
-    assert.equal(byShard[shard].self_hosted, false, shard);
-    assert.equal(byShard[shard].local_concurrency, 1, shard);
   }
 });
 
@@ -152,7 +146,7 @@ test('tier-policy and mocked-matrix CLIs propagate CI_SELF_HOSTED_MERGE_QUEUE ac
   const planPath = join(root, 'plan.json');
   writeFileSync(planPath, JSON.stringify(fiveShardPlan()));
   for (const [name, flag, expectedSelfHosted] of [
-    ['matrix-on', 'true', 3],
+    ['matrix-on', 'true', 5],
     ['matrix-off', 'false', 0],
   ]) {
     const out = join(root, `${name}.out`);
@@ -205,9 +199,18 @@ test('ci.yml wires merge-queue self-hosted routing, cache toggles and idempotent
       jobName,
     );
   }
-  for (const jobName of ['st', 'desktop-mocked', 'docker']) {
-    assert.match(jobs[jobName], /runs-on: ubuntu-latest/, jobName);
+  // ST and Desktop share UT's pool, with the same cache and no-sudo adaptations.
+  for (const jobName of ['st', 'desktop-mocked']) {
+    assert.match(jobs[jobName], /runs-on: \$\{\{ fromJSON\(needs\.policy\.outputs\.ut_runner\) \}\}/, jobName);
+    assert.match(jobs[jobName], /cache: \$\{\{ needs\.policy\.outputs\.self_hosted_merge_queue != 'true' && 'pnpm' \|\| '' \}\}/, jobName);
   }
+  assert.match(jobs.st, /enable-cache: \$\{\{ needs\.policy\.outputs\.self_hosted_merge_queue != 'true' \}\}/);
+  assert.match(jobs.st, /if ! bwrap --unshare-user --ro-bind \/ \/ --dev \/dev true 2>\/dev\/null; then/);
+  assert.match(jobs.st, /name: Cache the pinned CPython archive\n\s+if: \$\{\{ needs\.policy\.outputs\.self_hosted_merge_queue != 'true' \}\}/);
+  assert.match(jobs.st, /BINARY_CACHE_DIR: \$\{\{ needs\.policy\.outputs\.self_hosted_merge_queue == 'true' && '\/ci-cache\/binary-cache' \|\| format\('\{0\}\/binary-cache', runner\.temp\) \}\}/);
+  assert.match(jobs['desktop-mocked'], /SELF_HOSTED: \$\{\{ needs\.policy\.outputs\.self_hosted_merge_queue \}\}/);
+  assert.match(jobs['desktop-mocked'], /playwright install chromium\n\s+else\n\s+\.e2e\/node_modules\/\.bin\/playwright install --with-deps chromium/);
+  assert.match(jobs.docker, /runs-on: ubuntu-latest/);
   assert.match(jobs.binary, /runner: ubuntu-latest/);
   assert.match(jobs.binary, /runner: ubuntu-24\.04-arm/);
   assert.doesNotMatch(jobs.binary, /self-hosted/);
