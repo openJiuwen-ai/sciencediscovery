@@ -850,7 +850,18 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
     const environmentRevisions = store.listEnvironmentRevisions().filter((revision) => usedEnvironments.has(revision.id));
     stage("summarize", summarizeStarted, { includedEvents: included.runEvents, omittedEvents: omitted.runEvents, environmentRevisions: environmentRevisions.length });
     const sizingStarted = performance.now();
-    const needed = new Set([...selectedSessionRecords.flatMap((record) => record.workspace.map((file) => file.objectPath)), ...selectedArtifacts.flatMap((artifact) => artifact.versions.flatMap((version) => version.objectPath ? [version.objectPath] : [])), ...evolveCandidateSources.map((source) => source.objectPath), ...casHashes({ sessionRecords: selectedSessionRecords, environmentRevisions, memoryGraph: packageMemoryGraph }), ...(preview?.hashes ?? [])]);
+    // A workspace file whose current revision has no `contentHash` has no address in a
+    // preview: its bytes are already booked in `unpinnedObjectBytes`, and the export
+    // hashes it while it copies, so the package does carry it. An empty address must
+    // never reach the CAS work set — looking `""` up throws and would report
+    // `cas::unavailable source object`, a loss the package does not have (#1543).
+    const needed = new Set([
+      ...selectedSessionRecords.flatMap((record) => record.workspace.flatMap((file) => file.objectPath ? [file.objectPath] : [])),
+      ...selectedArtifacts.flatMap((artifact) => artifact.versions.flatMap((version) => version.objectPath ? [version.objectPath] : [])),
+      ...evolveCandidateSources.flatMap((source) => source.objectPath ? [source.objectPath] : []),
+      ...casHashes({ sessionRecords: selectedSessionRecords, environmentRevisions, memoryGraph: packageMemoryGraph }),
+      ...(preview?.hashes ?? []),
+    ]);
     for (const hash of objects.keys()) if (!needed.has(hash)) objects.delete(hash);
     for (const hash of needed) {
       signal.throwIfAborted();
