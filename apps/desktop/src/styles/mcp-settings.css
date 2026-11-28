@@ -1,25 +1,15 @@
 /* Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
  * Licensed under the Apache License, Version 2.0 (the "License"); */
 
-.mcp-settings { container-type: inline-size; }
+.mcp-settings { container: mcp-catalog settings-catalog / inline-size; }
 .mcp-page-header { margin-bottom: 28px; }
 .mcp-page-header h2 { margin: 0 0 12px; font-size: 28px; font-weight: 600; color: #191919; }
 .mcp-page-header p { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.6; }
-.mcp-catalog-tabs { display: flex; gap: 22px; flex-shrink: 0; }
-.mcp-catalog-tabs button { display: flex; gap: 6px; border: 0; border-bottom: 2px solid transparent; padding: 12px 0; background: transparent; cursor: pointer; color: var(--muted); font-size: 13px; white-space: nowrap; }
-.mcp-catalog-tabs button[aria-selected="true"] { color: #191919; border-bottom-color: #191919; font-weight: 600; }
-.mcp-catalog-tabs span { font-weight: 400; }
-.mcp-toolbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
-.mcp-search.field-input { width: 170px; min-width: 100px; border-radius: 999px; height: 36px; font-size: 12px; }
-.mcp-bulk-button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 6px 0; font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
-.mcp-bulk-button:disabled { opacity: .45; cursor: default; }
 .mcp-bulk-hint { margin: -8px 0 20px; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .mcp-selection-help { margin: 0 0 24px; color: var(--muted); font-size: 12px; }
 .mcp-selection-help summary { cursor: pointer; width: fit-content; }
 .mcp-selection-help .settings-note { margin: 10px 0 0; line-height: 1.7; }
-.mcp-page-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.mcp-page-toolbar h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.mcp-toolbar-actions { flex-wrap: wrap; }
+.mcp-page-toolbar { margin-bottom: 20px; }
 .mcp-servers-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .mcp-servers-grid > .settings-bulk { grid-column: 1 / -1; margin: 0; justify-content: flex-start; }
 .settings-group-detail .settings-card.mcp-server-card {
@@ -117,13 +107,8 @@
 .mcp-config-modal .settings-row:has(.settings-check) .row-title { display: none; }
 .mcp-settings .primary-button { box-shadow: none; }
 
-@container (max-width: 1000px) { .mcp-servers-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .mcp-page-toolbar { flex-wrap: wrap; } .mcp-toolbar-actions { justify-content: flex-start; flex-wrap: wrap; } }
-@container (max-width: 620px) {
-  .mcp-servers-grid { grid-template-columns: minmax(0, 1fr); }
-  .mcp-page-toolbar { align-items: flex-start; flex-direction: column; }
-  .mcp-toolbar-actions { width: 100%; gap: 10px; }
-  .mcp-search.field-input { flex: 1; width: 120px; }
-}
+@container mcp-catalog (max-width: 1000px) { .mcp-servers-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container mcp-catalog (max-width: 620px) { .mcp-servers-grid { grid-template-columns: minmax(0, 1fr); } }
 
 .mcp-settings .primary-button { background: #191919; border-color: #191919; }
 .mcp-settings .primary-button:hover { background: #353535; border-color: #353535; }

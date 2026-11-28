@@ -1783,8 +1783,6 @@ export const EN: Text = {
         myMcp: "My MCP",
         officialMcp: "Official MCP",
         searchMcp: "Search MCP",
-        enableAll: "Enable all",
-        disableAll: "Disable all",
         bulkHint: "Bulk actions affect only the custom servers shown. Built-in switches select sources by default.",
         bulkFailed: (names: string) => `Could not update: ${names}. Retry to update the remaining servers.`,
         tryIt: "Try it",

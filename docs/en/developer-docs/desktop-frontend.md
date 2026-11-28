@@ -158,6 +158,11 @@ built-ins remain read-only. Bulk actions leave the fixed Reviewer alone.
 Delete requires confirmation, and cancelling preserves the role. The previous
 row/chevron/modal presentation is retained in Git history.
 
+Skills, Specialists, and MCP share a catalog toolbar that adapts to the content width.
+Tabs and actions share a row when space allows. At narrower widths, the actions
+move together to a right-aligned row. The bulk controls move up as a pair at
+compact widths, leaving Search and Add together.
+
 `PUT /api/specialists/:id` validates and persists custom `enabled` flags;
 omission continues to mean enabled. Flag-only patches do not revalidate core
 fields or old skill references, so an unavailable skill cannot prevent a role

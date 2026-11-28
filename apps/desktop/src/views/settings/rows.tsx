@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 
 import type { Loaded } from "../../app/use-loaded.js";
 import { TEXT } from "../../text.js";
@@ -148,24 +148,60 @@ const PowerGlyph = () => (
  */
 export function BulkToggles({
   busy,
+  enableDisabled,
+  disableDisabled,
   onAll,
   variant = "segmented",
 }: {
   busy?: boolean;
+  enableDisabled?: boolean;
+  disableDisabled?: boolean;
   onAll: (enabled: boolean) => void;
   variant?: "segmented" | "toolbar";
 }) {
   const inline = variant === "toolbar";
   return (
     <div className={`settings-bulk${inline ? " is-toolbar" : ""}`}>
-      <button className="bulk-button" disabled={busy} onClick={() => onAll(true)} type="button">
+      <button className="bulk-button" disabled={busy || enableDisabled} onClick={() => onAll(true)} type="button">
         {inline ? <PlayGlyph /> : null}
         {TEXT.settings.enableAll}
       </button>
-      <button className="bulk-button" disabled={busy} onClick={() => onAll(false)} type="button">
+      <button className="bulk-button" disabled={busy || disableDisabled} onClick={() => onAll(false)} type="button">
         {inline ? <PowerGlyph /> : null}
         {TEXT.settings.disableAll}
       </button>
+    </div>
+  );
+}
+
+export function CatalogSearch({ label, placeholder = label, value, onChange }: {
+  label: string;
+  placeholder?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <div className="settings-catalog-search">
+      <input
+        aria-label={label}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        ref={input}
+        type="search"
+        value={value}
+      />
+      {value !== "" ? (
+        <button
+          aria-label={TEXT.settings.skills.clearSearch}
+          onClick={() => { onChange(""); input.current?.focus(); }}
+          type="button"
+        >
+          <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" viewBox="0 0 24 24" width="14">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+      ) : null}
     </div>
   );
 }

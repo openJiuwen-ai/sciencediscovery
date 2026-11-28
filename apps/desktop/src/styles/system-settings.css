@@ -414,17 +414,7 @@
 .mcp-secret-row .field-input { flex: 1; min-width: 0; }
 .mcp-secret-fields > .secondary-button { justify-self: start; }
 
-/* The two ways in for a server this machine has never seen, above the list they
-   add to. */
-.mcp-toolbar-actions {
-  display: flex;
-  gap: 8px;
-  margin: 0 0 10px;
-  flex-wrap: wrap;
-}
-
 .mcp-import-menu { position: relative; }
-.mcp-import-trigger { display: inline-flex; align-items: center; gap: 7px; }
 .mcp-server-row { flex-wrap: wrap; }
 .mcp-server-row > .settings-card-main { flex: 1 1 220px; }
 .mcp-server-row > .settings-card-main strong { flex-wrap: wrap; }
