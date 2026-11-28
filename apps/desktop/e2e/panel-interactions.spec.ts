@@ -236,7 +236,16 @@ test.describe("版本", () => {
 
     await panel.getByRole("button", { name: "版本" }).click();
     const menu = panel.getByRole("menu", { name: "版本" });
-    await expect(menu.getByRole("menuitemradio")).toHaveText(["v3", "v2", "v1"]);
+    // A row may also carry the producer and time meta the picker shows when
+    // same-named versions from several Sessions share a Project. That marker's
+    // own wording and format belong to its render test; here the version number
+    // and the row order are what this journey asserts, with the marker optional
+    // so the expectation holds whether or not the picker states it.
+    await expect(menu.getByRole("menuitemradio")).toHaveText([
+      /^v3(?:当前会话 · \d{2}:\d{2})?$/u,
+      /^v2(?:当前会话 · \d{2}:\d{2})?$/u,
+      /^v1(?:当前会话 · \d{2}:\d{2})?$/u,
+    ]);
     await expect(menu.getByRole("menuitemradio", { name: "v3" })).toHaveAttribute("aria-checked", "true");
 
     await menu.getByRole("menuitemradio", { name: "v2" }).click();
