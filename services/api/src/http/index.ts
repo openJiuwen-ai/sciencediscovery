@@ -5268,6 +5268,11 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       else if (code === "SKILL_LIBRARY_CONFLICT") sendError(response, 409, message);
       else if (code === "SKILL_LIBRARY_VALIDATION") sendError(response, 400, message);
       else if (code === "INVALID_WEB_SETTINGS") sendError(response, 400, message);
+      // `normalizeSandboxNetworkSettings` tags every rejection with this code,
+      // so the status follows the code rather than the prose of a message a
+      // later edit could reword. Only the validation is tagged: a catalog write
+      // failure in the same save keeps its 500 and the log line below.
+      else if (code === "INVALID_SANDBOX_NETWORK_SETTINGS") sendError(response, 400, message);
       // A refused upload name is the caller's own input, whatever the wording of
       // the guard that refused it: `sanitizeUploadFilename` tags every branch with
       // this code, so the status follows the code rather than the prose of a
