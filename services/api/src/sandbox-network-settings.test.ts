@@ -62,6 +62,25 @@ test("sandbox network settings are normalized and rejected when malformed", () =
   assert.throws(() => normalizeSandboxNetworkSettings({ proxyUrl: "http://x" }), /Unknown sandbox network setting/);
 });
 
+test("every validation rejection carries the stable client-input code", () => {
+  // The route maps this code to 400. The messages stay as written; the code is
+  // what keeps the status pinned when a later edit rewords one of them.
+  for (const body of [
+    null,
+    { mode: "open", allowedDomains: ["a.example.org"] },
+    { mode: "domain-allowlist" },
+    { allowedDomains: ["10.0.0.1"], mode: "domain-allowlist" },
+    { egressProxyPolicy: "socks", mode: "open" },
+    { proxyUrl: "http://x" },
+  ]) {
+    assert.throws(
+      () => normalizeSandboxNetworkSettings(body),
+      (error: unknown) => (error as { code?: string }).code === "INVALID_SANDBOX_NETWORK_SETTINGS",
+      `the status follows the code, not the wording: ${JSON.stringify(body)}`,
+    );
+  }
+});
+
 test("the egress proxy policy takes the same shape as every other module policy", () => {
   const allowlist = { allowedDomains: ["a.example.org"], mode: "domain-allowlist" as const };
   // Same three forms the model draft offers; a catalog written before the field

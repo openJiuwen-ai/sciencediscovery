@@ -44,35 +44,61 @@ const SANDBOX_NETWORK_FIELDS = [
   "mode",
 ] as const satisfies readonly (keyof SandboxNetworkSettings)[];
 
+/**
+ * A body this module refuses is the caller's own input, whatever wording the
+ * validator chose. The code is the stable signal the HTTP catch-all maps to
+ * 400, so the route keeps answering 500 for the catalog write that follows the
+ * validation in the same save.
+ */
+const INVALID_SANDBOX_NETWORK_SETTINGS = "INVALID_SANDBOX_NETWORK_SETTINGS";
+
+function rejectSandboxNetworkSettings(message: string): Error {
+  return Object.assign(new Error(message), { code: INVALID_SANDBOX_NETWORK_SETTINGS });
+}
+
+/** The schema validators only check input; keep their sentences and tag them. */
+function normalizeSandboxAllowedDomains(entries: readonly string[]): string[] {
+  try {
+    return normalizeAllowedDomains(entries);
+  } catch (error) {
+    throw rejectSandboxNetworkSettings(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function normalizeEgressProxyPolicy(value: unknown): SandboxNetworkSettings["egressProxyPolicy"] {
+  try {
+    return normalizeProxyPolicy(value, "egressProxyPolicy");
+  } catch (error) {
+    throw rejectSandboxNetworkSettings(error instanceof Error ? error.message : String(error));
+  }
+}
+
 export function normalizeSandboxNetworkSettings(value: unknown): SandboxNetworkSettings {
-  if (!isRecord(value)) throw new Error("Sandbox network settings must be an object");
+  if (!isRecord(value)) throw rejectSandboxNetworkSettings("Sandbox network settings must be an object");
   const unknown = Object.keys(value)
     .find((key) => !SANDBOX_NETWORK_FIELDS.includes(key as keyof SandboxNetworkSettings));
-  if (unknown) throw new Error(`Unknown sandbox network setting: ${unknown}`);
+  if (unknown) throw rejectSandboxNetworkSettings(`Unknown sandbox network setting: ${unknown}`);
   const mode = value.mode ?? DEFAULT_SANDBOX_NETWORK_SETTINGS.mode;
   if (!isSandboxNetworkMode(mode)) {
-    throw new Error("Sandbox network mode must be none, domain-allowlist or open");
+    throw rejectSandboxNetworkSettings("Sandbox network mode must be none, domain-allowlist or open");
   }
   const rawDomains = value.allowedDomains ?? [];
   if (!Array.isArray(rawDomains) || rawDomains.some((entry) => typeof entry !== "string")) {
-    throw new Error("Allowed domains must be an array of strings");
+    throw rejectSandboxNetworkSettings("Allowed domains must be an array of strings");
   }
   const allowPrivateNetwork = value.allowPrivateNetwork ?? false;
   if (typeof allowPrivateNetwork !== "boolean") {
-    throw new Error("allowPrivateNetwork must be a boolean");
+    throw rejectSandboxNetworkSettings("allowPrivateNetwork must be a boolean");
   }
-  const allowedDomains = normalizeAllowedDomains(rawDomains as string[]);
+  const allowedDomains = normalizeSandboxAllowedDomains(rawDomains as string[]);
   if (mode === "domain-allowlist" && allowedDomains.length === 0) {
-    throw new Error("Sandbox network mode domain-allowlist requires at least one allowed domain");
+    throw rejectSandboxNetworkSettings("Sandbox network mode domain-allowlist requires at least one allowed domain");
   }
   if (mode === "open" && allowedDomains.length > 0) {
-    throw new Error("Sandbox network mode open does not use allowed domains; remove them or use domain-allowlist");
+    throw rejectSandboxNetworkSettings("Sandbox network mode open does not use allowed domains; remove them or use domain-allowlist");
   }
   // Catalogs written before this field existed behave as the shared default.
-  const egressProxyPolicy = normalizeProxyPolicy(
-    value.egressProxyPolicy ?? PROXY_POLICY_INHERIT,
-    "egressProxyPolicy",
-  );
+  const egressProxyPolicy = normalizeEgressProxyPolicy(value.egressProxyPolicy ?? PROXY_POLICY_INHERIT);
   return { allowPrivateNetwork, allowedDomains, egressProxyPolicy, mode };
 }
 
@@ -82,7 +108,7 @@ export function resolveSandboxNetworkSettings(
   fallback: SandboxNetworkSettings,
 ): SandboxNetworkSettings {
   if (value === undefined || value === null) return structuredClone(fallback);
-  if (!isRecord(value)) throw new Error("Sandbox network settings must be an object");
+  if (!isRecord(value)) throw rejectSandboxNetworkSettings("Sandbox network settings must be an object");
   return normalizeSandboxNetworkSettings({
     allowPrivateNetwork: value.allowPrivateNetwork ?? fallback.allowPrivateNetwork,
     allowedDomains: value.allowedDomains ?? fallback.allowedDomains,
