@@ -938,9 +938,10 @@ export function useWorkspace(client: ApiClient, onAuthRejected: () => void): Wor
 
   /** Ask the route for a query, once it settles.
    *
-   *  The route matches names and titles; the field's copy says so. Each request
-   *  takes a ticket so an answer for an older query cannot paint over a newer
-   *  one, and the timer is cleared on every keystroke. */
+   *  The route matches names, titles and — for a non-empty query — message
+   *  bodies; the field's copy says so. Each request takes a ticket so an answer
+   *  for an older query cannot paint over a newer one, and the timer is cleared
+   *  on every keystroke. */
   const search = useCallback((query: string) => {
     setSearchQuery(query);
     setSearchError(undefined);

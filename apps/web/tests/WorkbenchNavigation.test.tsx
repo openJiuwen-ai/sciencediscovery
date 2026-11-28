@@ -27,12 +27,14 @@ import {
   composerInsertionCaret,
   composerReferenceToken,
   composerSkillSuggestions,
+  filterSearchResults,
   GLOBAL_SEARCH_DEBOUNCE_MS,
   getComposerTrigger,
   GlobalSearchDialog,
   insertComposerCommand,
   insertComposerReference,
   removeSkillAuthoringCommand,
+  searchResultSnippet,
   selectedSkillAuthoringCommands,
   SKILL_AUTHORING_COMMANDS,
 } from "../src/WorkbenchNavigation.js";
@@ -204,4 +206,61 @@ test("search results read in the UI's language when the API sends their parts", 
   assert.match(zh, /<em>会话<\/em>/);
   assert.match(zh, /<em>产物<\/em>/);
   assert.doesNotMatch(zh, /llm_declared|user_upload|<em>session<\/em>/);
+});
+
+test("a Session found by its message text shows the matching line on its own row", () => {
+  const projectName = "Mixed catalog with a deliberately long descriptive Project name";
+  const result: WorkbenchSearchResult = {
+    detail: projectName,
+    id: "session:s1",
+    kind: "session",
+    label: "Untitled notes",
+    projectId: "p1",
+    projectName,
+    sessionId: "s1",
+    snippet: "We grew a crystal at 300 K",
+  };
+  const html = renderToStaticMarkup(createElement(GlobalSearchDialog, {
+    hasMore: false,
+    loading: false,
+    onClose: () => undefined,
+    onQueryChange: () => undefined,
+    onSelect: () => undefined,
+    query: "crystal",
+    results: [result],
+    total: 1,
+  }));
+  assert.match(html, new RegExp(projectName, "u"), "the long Project name is still drawn");
+  assert.match(html, /class="global-search-snippet">We grew a crystal at 300 K/u, "the matching line is its own row");
+  assert.equal(searchResultSnippet(result), "We grew a crystal at 300 K");
+  assert.equal(searchResultSnippet({ ...result, kind: "artifact", snippet: "ignored" }), undefined);
+  assert.deepEqual(filterSearchResults([result], "crystal").map((item) => item.id), ["session:s1"],
+    "filtering keeps a content hit whose snippet carries the query");
+
+  const plain = renderToStaticMarkup(createElement(GlobalSearchDialog, {
+    hasMore: false,
+    loading: false,
+    onClose: () => undefined,
+    onQueryChange: () => undefined,
+    onSelect: () => undefined,
+    query: "figure",
+    results: [{ detail: projectName, id: "artifact:a1", kind: "artifact", label: "figure.png", projectId: "p1", projectName }],
+    total: 1,
+  }));
+  assert.doesNotMatch(plain, /global-search-snippet/u, "a hit without a snippet keeps the old two-line row");
+});
+
+test("an empty answer says so without claiming message text is excluded", () => {
+  const html = renderToStaticMarkup(createElement(GlobalSearchDialog, {
+    hasMore: false,
+    loading: false,
+    onClose: () => undefined,
+    onQueryChange: () => undefined,
+    onSelect: () => undefined,
+    query: "phrase that was never said",
+    results: [],
+    total: 0,
+  }));
+  assert.match(html, /No matching projects, sessions, or artifacts\./u);
+  assert.doesNotMatch(html, /not message text|不包含消息正文/u);
 });

@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { WorkbenchSearchResponse, WorkbenchSearchResult } from "../api/types.js";
-import { groupsFor, searchDetail } from "../app/session-search.js";
+import { groupsFor, searchDetail, searchSnippet } from "../app/session-search.js";
 import { TEXT } from "../text.js";
 import { SearchHitIcon } from "./search-hit-icons.js";
 import { useTopmostEscape } from "./use-dialog-escape.js";
@@ -167,6 +167,9 @@ export function SearchDialog({
                       <span className="search-hit-label">{result.label}</span>
                       {searchDetail(result) === result.label ? null : (
                         <span className="search-hit-detail">{searchDetail(result)}</span>
+                      )}
+                      {searchSnippet(result) === undefined ? null : (
+                        <span className="search-hit-snippet">{searchSnippet(result)}</span>
                       )}
                     </span>
                   </button>

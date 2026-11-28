@@ -8,7 +8,7 @@ import { StubClient, split } from "./api-stub.js";
 import { searchWorkbench } from "../src/api/workbench.js";
 import {
   artifactHitPlan, bareSearchId, flatResults, groupSearchResults, isSearchable, moveHit, pendingArtifactHit,
-  searchDetail, withoutArchivedHits,
+  searchDetail, searchSnippet, withoutArchivedHits,
 } from "../src/app/session-search.js";
 import type { WorkbenchSearchResponse, SessionArtifactOutput, WorkbenchSearchResult } from "../src/api/types.js";
 
@@ -50,6 +50,10 @@ test("a result's detail names its Project and, for an artifact, its Session", ()
   assert.equal(searchDetail(hit("session", "a", { projectName: "材料" })), "材料");
   assert.equal(searchDetail(hit("artifact", "f", { projectName: "材料", sessionTitle: "本周实验" })), "材料 · 本周实验");
   assert.equal(searchDetail(hit("session", "a")), "", "absent parts print nothing rather than undefined");
+  assert.equal(searchDetail(hit("session", "a", { projectName: "材料", snippet: "We grew a crystal" })), "材料",
+    "a content hit keeps its Project line separate");
+  assert.equal(searchSnippet(hit("session", "a", { snippet: "We grew a crystal" })), "We grew a crystal");
+  assert.equal(searchSnippet(hit("artifact", "f", { snippet: "ignored" })), undefined);
 });
 
 test("an empty query is not sent, and an archived result is marked", () => {
