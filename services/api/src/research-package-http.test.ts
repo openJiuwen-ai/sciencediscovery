@@ -21,6 +21,26 @@ import type { TrajectoryIndex, TrajectoryDetail } from "@sciencediscovery/trajec
 import type { ServerConfig } from "./bootstrap/config.js";
 import type { ArtifactVersionProvenance, WorkspaceFileProvenance, SessionRun, AgentShellExecution, SessionRunEvent, ArtifactReviewRun, Claim, EvidenceItem, EvidenceLink } from "@sciencediscovery/schema";
 import type { SessionDetail, ResearchContinuationOperation } from "@sciencediscovery/schema";
+import { waitUntil } from "../../../test/helpers/wait-until.js";
+
+/**
+ * Follow a Research continuation from the answer that started it until it leaves `copying`.
+ *
+ * The copy runs in the background after that answer. A wall-clock deadline bounds the wait, not a
+ * count of polls: on a loaded host the copy can finish correctly after 100 polls' worth of time.
+ */
+async function settledContinuation<T extends { state: string }>(started: T, read: () => Promise<T>): Promise<T> {
+  let pending: T | undefined = started;
+  return await waitUntil(async () => {
+    const current = pending ?? await read();
+    pending = undefined;
+    return current;
+  }, (operation) => operation.state !== "copying", {
+    intervalMs: 50,
+    description: "Research continuation leaving `copying`",
+    describe: (operation) => `state ${operation.state}`,
+  });
+}
 
 async function fixture(context: TestContext, graphAvailable = false, sampleSession = false, dependencies: Partial<ApiServerDependencies> = {}) {
   const root = await mkdtemp(resolve(tmpdir(), "research-package-http-"));
@@ -572,11 +592,8 @@ test("a package carrying evolve candidate source restores it beside the imported
   const operation = await (await request(`/api/sessions/${second.firstSession.id}/research-continuations`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "evolve-copy-regression" }),
   })).json() as { id: string; state: string; entrySessionId?: string; error?: string };
-  let completed = operation;
-  for (let attempt = 0; attempt < 100 && !["ready", "failed"].includes(completed.state); attempt++) {
-    await new Promise((done) => setTimeout(done, 50));
-    completed = await (await request(`/api/sessions/${second.firstSession.id}/research-continuations/${operation.id}`)).json() as typeof operation;
-  }
+  const completed = await settledContinuation(operation, async () =>
+    await (await request(`/api/sessions/${second.firstSession.id}/research-continuations/${operation.id}`)).json() as typeof operation);
   assert.equal(completed.state, "ready", completed.error ?? "Research continuation did not finish");
   const copyRuns = await (await request(`/api/evolve/runs?sessionId=${completed.entrySessionId}`)).json() as Array<{ id: string }>;
   assert.equal(copyRuns.length, 1);
@@ -714,11 +731,8 @@ test("public chat branching preserves the selected prefix, evidence and immediat
   await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, { method: "POST", body: Buffer.from(bytes) });
   const snapshotId = target.firstSession.id;
   const continuation = await (await request(`/api/sessions/${snapshotId}/research-continuations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "branch-from-writable-research-copy" }) })).json() as ResearchContinuationOperation;
-  let writable = continuation;
-  for (let attempt = 0; attempt < 100 && writable.state === "copying"; attempt++) {
-    await new Promise((done) => setTimeout(done, 50));
-    writable = await (await request(`/api/sessions/${snapshotId}/research-continuations/${continuation.id}`)).json() as ResearchContinuationOperation;
-  }
+  const writable = await settledContinuation(continuation, async () =>
+    await (await request(`/api/sessions/${snapshotId}/research-continuations/${continuation.id}`)).json() as ResearchContinuationOperation);
   assert.equal(writable.state, "ready", writable.error ?? "Research continuation did not finish");
   const sourceId = writable.entrySessionId!;
   const detail = async (id: string) => await (await request(`/api/sessions/${id}`)).json() as SessionDetail;
@@ -727,11 +741,9 @@ test("public chat branching preserves the selected prefix, evidence and immediat
   const start = async (sessionId: string, selected: string, requestId: string) => await (await request(`/api/sessions/${sessionId}/conversation-branches`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messageId: selected, requestId }),
   })).json() as ResearchContinuationOperation;
-  const wait = async (sourceId: string, operation: ResearchContinuationOperation) => {
-    for (let attempt = 0; attempt < 100 && operation.state === "copying"; attempt++) {
-      await new Promise((done) => setTimeout(done, 50));
-      operation = await (await request(`/api/sessions/${sourceId}/research-continuations/${operation.id}`)).json() as ResearchContinuationOperation;
-    }
+  const wait = async (sourceId: string, started: ResearchContinuationOperation) => {
+    const operation = await settledContinuation(started, async () =>
+      await (await request(`/api/sessions/${sourceId}/research-continuations/${started.id}`)).json() as ResearchContinuationOperation);
     assert.equal(operation.state, "ready", operation.error ?? "Chat branch did not finish");
     assert.ok(operation.entrySessionId);
     return operation;
@@ -860,11 +872,8 @@ test("necessary export keeps current evidence dependencies, reports omissions an
   assert.equal(receipt.exportProfile.level, "necessary");
   await restart();
   const operation = await (await request(`/api/sessions/${next.firstSession.id}/research-continuations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "necessary-scope-copy" }) })).json() as { id: string; state: string; entrySessionId?: string; error?: string };
-  let completed = operation;
-  for (let attempt = 0; attempt < 100 && completed.state === "copying"; attempt++) {
-    await new Promise((done) => setTimeout(done, 50));
-    completed = await (await request(`/api/sessions/${next.firstSession.id}/research-continuations/${operation.id}`)).json() as typeof operation;
-  }
+  const completed = await settledContinuation(operation, async () =>
+    await (await request(`/api/sessions/${next.firstSession.id}/research-continuations/${operation.id}`)).json() as typeof operation);
   assert.equal(completed.state, "ready", completed.error ?? "Research continuation did not finish");
   const copied = await (await request(`/api/sessions/${completed.entrySessionId}`)).json() as { researchSnapshot: { exportLevel: string; historyLimited: boolean }; messages: unknown[] };
   assert.equal(copied.researchSnapshot.exportLevel, "necessary");
@@ -903,11 +912,8 @@ test("imported trajectory retains exact input and complete reasoning after resta
   await request(`/api/projects/${next.id}/research-package/import?sessionId=${next.firstSession.id}`, { method: "POST", body: Buffer.from(exported) });
   await inspect(next.firstSession.id);
   const operation = await (await request(`/api/sessions/${sessionId}/research-continuations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "trajectory-copy-regression" }) })).json() as { entrySessionId?: string; state: string; id: string };
-  let completed = operation;
-  for (let attempt = 0; attempt < 100 && completed.state === "copying"; attempt++) {
-    await new Promise((done) => setTimeout(done, 50));
-    completed = await (await request(`/api/sessions/${sessionId}/research-continuations/${operation.id}`)).json() as typeof operation;
-  }
+  const completed = await settledContinuation(operation, async () =>
+    await (await request(`/api/sessions/${sessionId}/research-continuations/${operation.id}`)).json() as typeof operation);
   assert.equal(completed.state, "ready");
   await inspect(completed.entrySessionId!);
 });
@@ -919,11 +925,8 @@ test("a finished continuation stays readable after its source session is deleted
   const sourceId = target.firstSession.id;
   await request(`/api/projects/${target.id}/research-package/import?sessionId=${sourceId}`, { method: "POST", body: Buffer.from(source.bytes) });
   const operation = await (await request(`/api/sessions/${sourceId}/research-continuations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId: "delete-source-after-copy" }) })).json() as ResearchContinuationOperation;
-  let last = operation;
-  for (let attempt = 0; attempt < 100 && last.state === "copying"; attempt++) {
-    await new Promise((done) => setTimeout(done, 50));
-    last = await (await request(`/api/sessions/${sourceId}/research-continuations/${operation.id}`)).json() as ResearchContinuationOperation;
-  }
+  const last = await settledContinuation(operation, async () =>
+    await (await request(`/api/sessions/${sourceId}/research-continuations/${operation.id}`)).json() as ResearchContinuationOperation);
   assert.equal(last.state, "ready", last.error ?? "Research continuation did not finish");
   assert.ok(last.entrySessionId);
   // A mismatched source id is a 404: the status route checks the operation's own source id.

@@ -36,6 +36,7 @@ import type {
   ShellExecutionResult,
 } from "@sciencediscovery/schema";
 
+import { waitUntil } from "../../../test/helpers/wait-until.js";
 import { appendBounded, boundedExecutionTimeoutMs, executePython, executeShell, localPythonPackageCandidatePaths, RESOURCE_LIMIT_MODE, sandboxLaunchProfile, truncateToBudget, validatedWorkspace } from "./executor.js";
 import { EnvironmentStore } from "./environment-store.js";
 import { ExecutionManager } from "./execution-manager.js";
@@ -171,6 +172,21 @@ function pythonForTest(): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Poll a submitted NPU job until it leaves `queued` and `running`. The broker runs it as a separate
+ * process, so the wait is a wall-clock deadline: a count of short polls ran out on a loaded host
+ * while the job was still correct.
+ */
+async function settledNpuJob(origin: string, submitted: NpuJob): Promise<NpuJob> {
+  return await waitUntil(async () => await (await fetch(`${origin}/npu/jobs/${submitted.id}?session_id=session-test`, {
+    headers: { authorization: "Bearer runner-test-token" },
+  })).json() as NpuJob, (job) => job.state !== "queued" && job.state !== "running", {
+    intervalMs: 10,
+    description: `NPU job ${submitted.id} finishing`,
+    describe: (job) => `state ${job.state}`,
+  });
 }
 
 function createNpuTestServer(runnerConfig: RunnerConfig, pythonPath: string) {
@@ -1157,13 +1173,7 @@ test("runner NPU Broker runs a signed allowlisted smoke job", async (context) =>
   }))).json() as NpuJob;
   assert.equal(submitted.state, "queued");
 
-  let job = submitted;
-  for (let attempt = 0; attempt < 300 && job.state !== "succeeded"; attempt += 1) {
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
-    job = await (await fetch(`${origin}/npu/jobs/${job.id}?session_id=session-test`, {
-      headers: { authorization: "Bearer runner-test-token" },
-    })).json() as NpuJob;
-  }
+  const job = await settledNpuJob(origin, submitted);
   assert.equal(job.state, "succeeded", job.logs.stderr || job.logs.stdout);
   assert.equal(job.exitCode, 0);
   assert.equal(job.logs.truncated, false);
@@ -1384,13 +1394,7 @@ test("runner NPU Broker runs the Protenix manager workload through its own allow
   }))).json() as NpuJob;
   assert.equal(submitted.state, "queued");
 
-  let job = submitted;
-  for (let attempt = 0; attempt < 300 && job.state !== "succeeded"; attempt += 1) {
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
-    job = await (await fetch(`${origin}/npu/jobs/${job.id}?session_id=session-test`, {
-      headers: { authorization: "Bearer runner-test-token" },
-    })).json() as NpuJob;
-  }
+  const job = await settledNpuJob(origin, submitted);
   assert.equal(job.state, "succeeded", job.logs.stderr || job.logs.stdout);
   assert.equal(job.exitCode, 0);
   assert.match(job.logs.stdout, /RUN_DIR=.*broker-protenix-test/);
@@ -1523,13 +1527,7 @@ test("runner NPU Broker rewrites workspace helper directory arguments even when 
   }))).json() as NpuJob;
   assert.equal(submitted.state, "queued");
 
-  let job = submitted;
-  for (let attempt = 0; attempt < 300 && job.state !== "succeeded"; attempt += 1) {
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
-    job = await (await fetch(`${origin}/npu/jobs/${job.id}?session_id=session-test`, {
-      headers: { authorization: "Bearer runner-test-token" },
-    })).json() as NpuJob;
-  }
+  const job = await settledNpuJob(origin, submitted);
   assert.equal(job.state, "succeeded", job.logs.stderr || job.logs.stdout);
   assert.match(job.logs.stdout, /no workspace helpers run ok/);
   await stat(resolve(fixture.workspaceRoot, "antibody_pipeline", "helpers"));
@@ -1917,13 +1915,7 @@ test("runner NPU Broker loads allowlisted workloads from config", async (context
   }))).json() as NpuJob;
   assert.equal(submitted.state, "queued");
 
-  let job = submitted;
-  for (let attempt = 0; attempt < 300 && job.state !== "succeeded"; attempt += 1) {
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
-    job = await (await fetch(`${origin}/npu/jobs/${job.id}?session_id=session-test`, {
-      headers: { authorization: "Bearer runner-test-token" },
-    })).json() as NpuJob;
-  }
+  const job = await settledNpuJob(origin, submitted);
   assert.equal(job.state, "succeeded", job.logs.stderr || job.logs.stdout);
   assert.match(job.logs.stdout, /custom workload ok/);
   assert.equal(await readFile(resolve(fixture.workspaceRoot, "antibody_pipeline", "custom-result.txt"), "utf8"), "custom:configured-workload-test");
@@ -1957,13 +1949,7 @@ test("runner NPU Broker rejects repo command templates that resolve outside the 
   }))).json() as NpuJob;
   assert.equal(submitted.state, "queued");
 
-  let job = submitted;
-  for (let attempt = 0; attempt < 300 && job.state !== "failed"; attempt += 1) {
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
-    job = await (await fetch(`${origin}/npu/jobs/${job.id}?session_id=session-test`, {
-      headers: { authorization: "Bearer runner-test-token" },
-    })).json() as NpuJob;
-  }
+  const job = await settledNpuJob(origin, submitted);
   assert.equal(job.state, "failed");
   assert.match(job.error ?? "", /repo: path must resolve inside the repository/);
 });
@@ -2351,11 +2337,12 @@ test("managed recovery HTTP contract returns original receipts, scoped conflicts
   }
   const owner = new URLSearchParams({ sessionId: input.permissionEpoch.sessionId, agentId: input.agentId });
   const headers = { authorization: "Bearer runner-test-token" };
-  let execution = accepted;
-  for (let poll = 0; poll < 100 && execution.state !== "completed"; poll++) {
-    await new Promise(done => setTimeout(done, 5));
-    execution = await fetch(`${origin}/shell-executions/cpu-http?${owner}`, { headers }).then(response => response.json()) as typeof execution;
-  }
+  // The execution finishes in the background; wait against a deadline, not a count of polls.
+  const execution = await waitUntil(
+    async () => await fetch(`${origin}/shell-executions/cpu-http?${owner}`, { headers }).then(response => response.json()) as typeof accepted,
+    (current) => current.state !== "queued" && current.state !== "running",
+    { intervalMs: 5, description: "managed execution cpu-http finishing", describe: (current) => `state ${current.state}` },
+  );
   assert.equal(execution.state, "completed");
   assert.equal(launches, 1);
   assert.equal(execution.evidence?.processTerminated, true);

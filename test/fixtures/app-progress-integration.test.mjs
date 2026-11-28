@@ -34,7 +34,12 @@ const { ApiRequestError } = await load("../../apps/web/src/api/auth.ts");
 const { RunTimeline, reduceRunTimeline } = await load("../../apps/web/src/RunTimeline.tsx");
 const { SessionStore } = await load("../../services/api/src/store.ts");
 const { buildCompletedToolTrace, publishRunEvent } = await load("../../services/api/src/runs/index.ts");
+const { waitUntil } = await load("../helpers/wait-until.ts");
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+// Pause between observations inside `act()`, so React commits what the mocked API answered meanwhile.
+const actPause = (ms) => act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+});
 function browserFixture(context, autoRestore = true, initialToken = "old") {
   let url = new URL("http://localhost/");
   const values = /* @__PURE__ */ new Map([[TOKEN_STORAGE_KEY, initialToken], ["sciencediscovery.workspace-collapsed", "1"]]);
@@ -225,35 +230,49 @@ async function mountRecordedApp(context, fixture, options = {}) {
       restore();
     }
   });
-  for (let attempt = 0; attempt < 50; attempt++) {
-    if (renderer.root.findAllByType(RunTimeline).some((view) => view.props.entries.some((entry) => entry.type === "tool"))) break;
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    });
-  }
   return { renderer, streams, win };
+}
+// The stored run's timeline appears only after the App has loaded the session and hydrated the run,
+// several mocked round trips after mounting. Wait for it against a deadline and fail there, naming
+// what was rendered, instead of returning after a fixed number of tries for the caller to find nothing.
+async function renderedToolTimeline(renderer) {
+  const timelines = () => renderer.root.findAllByType(RunTimeline);
+  return await waitUntil(() => timelines().find((view) => view.props.entries.some((entry) => entry.type === "tool")), Boolean, {
+    intervalMs: 10,
+    pause: actPause,
+    description: "a stored terminal run rendered by the mounted App",
+    describe: () => `${timelines().length} RunTimeline(s) with entries ${JSON.stringify(timelines().map((view) => view.props.entries.map((entry) => entry.type)))}`,
+  });
 }
 test("mounted App keeps a replacement-token rejection after a cold-start empty-token 401", async (context) => {
   const fixture = await recordedSession(context);
   let releaseEmpty;
+  let emptyTokenRequests = 0;
   const empty401 = new Promise((resolve) => { releaseEmpty = resolve; });
   const listProjects = function () {
-    if (this.token === "") return empty401.then(() => { this.reportAuthStatus?.(401); throw new ApiRequestError("Unauthorized", 401); });
+    if (this.token === "") {
+      emptyTokenRequests++;
+      return empty401.then(() => { this.reportAuthStatus?.(401); throw new ApiRequestError("Unauthorized", 401); });
+    }
     if (this.token === "wrong-token") { this.reportAuthStatus?.(401); return Promise.reject(new ApiRequestError("Unauthorized", 401)); }
     return Promise.resolve([fixture.project]);
   };
   const { win, renderer } = await mountRecordedApp(context, fixture, { initialToken: "", listProjects });
+  // The replacement token must arrive while the cold-start request is still pending.
+  await waitUntil(() => emptyTokenRequests, (count) => count > 0, { intervalMs: 10, pause: actPause, description: "the cold-start empty-token project request" });
   await act(async () => {
     win.location.href = "http://localhost/#token=wrong-token";
     win.dispatchEvent(new Event("hashchange"));
-    await new Promise((resolve) => setTimeout(resolve, 50));
   });
-  assert.ok(JSON.stringify(renderer.toJSON()).includes("Local service access token rejected"));
+  const rejected = "Local service access token rejected";
+  await waitUntil(() => JSON.stringify(renderer.toJSON()), (rendered) => rendered.includes(rejected), {
+    intervalMs: 10, pause: actPause, description: `the "${rejected}" notice`, describe: () => "the notice is not rendered",
+  });
   await act(async () => {
     releaseEmpty();
     await Promise.resolve();
   });
-  assert.ok(JSON.stringify(renderer.toJSON()).includes("Local service access token rejected"), "the late cold-start failure must not clear the replacement-token notice");
+  assert.ok(JSON.stringify(renderer.toJSON()).includes(rejected), "the late cold-start failure must not clear the replacement-token notice");
 });
 test("mounted App loads canonical full transcripts for empty, progress-only, result-only and mixed streams", async (context) => {
   const fixture = await recordedSession(context);
@@ -261,8 +280,7 @@ test("mounted App loads canonical full transcripts for empty, progress-only, res
   const trace = buildCompletedToolTrace({ type: "tool_execution_end", toolCallId: "search", toolName: "search_pubmed", isError: false, result: { content: [{ type: "text", text: "result" }] } });
   await publishRunEvent(store, session.id, run.id, { type: "tool.completed", trace });
   const { renderer, streams } = await mountRecordedApp(context, fixture);
-  const timeline = renderer.root.findAllByType(RunTimeline).find((view) => view.props.entries.some((entry) => entry.type === "tool"));
-  assert.ok(timeline, "a stored terminal run is rendered by the mounted App");
+  const timeline = await renderedToolTimeline(renderer);
   const load2 = timeline.props.onLoadToolOutput;
   assert.equal(await load2({ ...trace, outputStream: void 0 }), void 0);
   assert.equal(streams.mock.callCount(), 0);
@@ -296,8 +314,7 @@ test("completed search evidence survives real main-stream hydration without fetc
   for (const event of events) await publishRunEvent(store, session.id, run.id, event);
   const live = events.reduce(reduceRunTimeline, []);
   const { renderer, streams } = await mountRecordedApp(context, fixture);
-  const timeline = renderer.root.findAllByType(RunTimeline).find((view) => view.props.entries.some((entry) => entry.type === "tool"));
-  assert.ok(timeline);
+  const timeline = await renderedToolTimeline(renderer);
   const entries = timeline.props.entries;
   const tool = entries.find((entry) => entry.type === "tool");
   assert.ok(tool?.type === "tool");

@@ -477,7 +477,10 @@ Research preparation and `run-research-python.sh unit` share the exact pins in
 Both default to Python 3.14 independently of the product service environments;
 `SCIENCE_RESEARCH_PYTHON` overrides only the benchmark interpreter. The existing
 offline research UT check therefore exercises the same dependencies as real
-workers without model calls or gated dataset downloads.
+workers without model calls or gated dataset downloads. The shared runner runs
+`run-research-python.sh prepare` before the UT slice, so the evaluator checkout,
+the interpreter and the wheels are downloaded there, not inside a UT case's time
+budget.
 
 ### Transient model-gateway faults in the real-model suite
 

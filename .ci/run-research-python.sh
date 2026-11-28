@@ -15,21 +15,26 @@ prepare_upstream() {
     fi
   fi
 }
-race_unit() {
-  uv run --no-project --python "$research_python" --no-build --with-requirements .ci/research-requirements.txt \
-    python .ci/research-unittest.py test/benchmarks/deepresearchbench
+research_run() {
+  uv run --no-project --python "$research_python" --no-build --with-requirements .ci/research-requirements.txt "$@"
 }
 case "${1:-}" in
-  unit|race)
+  prepare|unit|race)
     if [[ -n "${SCIENCE_AGENT_PYPI_INDEX:-}" ]]; then
       export UV_DEFAULT_INDEX="$SCIENCE_AGENT_PYPI_INDEX"
     fi
     prepare_upstream
-    if [[ "$1" == unit ]]; then
-      uv run --no-project --python "$research_python" --no-build --with-requirements .ci/research-requirements.txt \
-        python .ci/research-unittest.py test/benchmarks/biomnibench-da
+    if [[ "$1" == prepare ]]; then
+      # Fetch what `unit` and `race` would otherwise download inside a test's time budget: the
+      # evaluator checkout above, the interpreter and the pinned wheels. The shared runner runs
+      # this before the UT slice, so those checks start from a warm cache.
+      research_run python -c pass
+      exit 0
     fi
-    race_unit
+    if [[ "$1" == unit ]]; then
+      research_run python .ci/research-unittest.py test/benchmarks/biomnibench-da
+    fi
+    research_run python .ci/research-unittest.py test/benchmarks/deepresearchbench
     ;;
   contract)
     export SCIENCE_AGENT_JIUWENSWARM_OVERRIDES=1
@@ -53,5 +58,5 @@ cases = ET.parse(sys.argv[1]).findall('.//testcase')
 assert cases and not any(c.find('skipped') is not None for c in cases), 'empty/skipped contract suite'
 PY
     ;;
-  *) echo 'Usage: run-research-python.sh unit|race|contract' >&2; exit 2;;
+  *) echo 'Usage: run-research-python.sh prepare|unit|race|contract' >&2; exit 2;;
 esac
