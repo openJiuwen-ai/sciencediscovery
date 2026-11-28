@@ -65,6 +65,7 @@
 
 .settings-catalog-actions {
   display: grid;
+  grid-column: -2 / -1;
   grid-template-columns: minmax(120px, 360px) max-content;
   align-items: center;
   justify-content: end;
