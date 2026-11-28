@@ -96,7 +96,7 @@ for (const language of languages) {
             expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
           });
 
-          await journey.step("用键盘直接打开模型设置", "Enter 打开模型注册表，并展示连接模型向导，无需再查找设置分组。", async () => {
+          await journey.step("用键盘直接打开模型设置", "Enter 打开模型注册表，并展示添加服务商向导，无需再查找设置分组。", async () => {
             await configure.focus();
             await expect(configure).toBeFocused();
             await configure.press("Enter");

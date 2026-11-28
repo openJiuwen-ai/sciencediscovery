@@ -84,12 +84,12 @@ for (const locale of ["en", "zh-CN"] as const) {
         await expect(page.getByRole("alert")).toHaveCount(0);
         expect(await page.evaluate((key) => localStorage.getItem(key), BROWSER_TOKEN_STORAGE_KEY) === requireApiToken()).toBe(true);
       });
-      await journey.step("查看模型凭据名称", "连接模型表单明确显示外部模型 API Key，与本地服务访问令牌区分。", async () => {
+      await journey.step("查看模型凭据名称", "添加服务商表单明确显示外部模型 API Key，与本地服务访问令牌区分。", async () => {
         await page.goto("/settings/models");
         await expect(dialog).toBeVisible();
-        // 新建服务商已并入连接模型卡片；没有已配置服务商时它默认展开。
+        // 新建服务商已并入添加服务商向导；没有已配置服务商时它默认展开。
         if (!await dialog.locator(".model-connect-wizard").count()) {
-          await dialog.getByRole("button", { name: zh ? "连接模型" : "Connect model" }).click();
+          await dialog.getByRole("button", { name: zh ? "添加服务商" : "Add provider" }).click();
         }
         const modelKey = dialog.getByLabel(zh ? "外部模型 API Key" : "External model API Key", { exact: true });
         await modelKey.scrollIntoViewIfNeeded();

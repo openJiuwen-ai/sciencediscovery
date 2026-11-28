@@ -26,11 +26,11 @@ test.use({ locale: "zh-CN" });
 /**
  * E2E-META
  * Purpose: 以服务商为中心的注册表：添加控件与编辑器分组紧凑可扫读；行内模型表（一行一模型）可扫读；
- *   手动登记支持逗号分隔的强度档声明；保存失败保留 Provider 草稿；旧的独立“模型卡片”入口已删除；桌面与窄屏可用。
+ *   唯一的「添加模型」对话框承载列表勾选与手动回退，手动登记支持逗号分隔的强度档声明；保存失败保留 Provider 草稿；旧的独立“模型卡片”入口已删除；桌面与窄屏可用。
  * Steps:
- *   1. 打开系统设置并进入模型注册表：空态下连接模型默认展开且是唯一新建入口；不再有独立的「添加 Provider」按钮或自定义表单；编辑器默认隐藏；旧独立模型入口不再出现。
+ *   1. 打开系统设置并进入模型注册表：空态下添加服务商默认展开且是唯一新建入口；不再有独立的「添加 Provider」按钮或自定义表单；编辑器默认隐藏；旧独立模型入口不再出现。
  *   2. 编辑已有自定义服务商：编辑器按分组展开，协议与变种同行紧凑。
- *   3. 行内手动表单登记模型并以逗号分隔声明可接受强度档（原文）；视觉紧跟强度、与它同行底对齐，价格另起一行；“已添加”计数与行内模型行出现。
+ *   3. 在唯一的「添加模型」对话框里用手动回退登记模型，并以逗号分隔声明可接受强度档（原文）；视觉紧跟强度、与它同行底对齐，价格另起一行；“已添加”计数与行内模型行出现。
  *   4. 编辑 Provider 时保存失败：错误清楚、草稿保留；恢复后保存成功并重开保持一致。
  *   5. manual 发现为空时已添加模型仍在行内表占一行且排前、不出空态；模型自身名称无服务商前缀，已添加行提供删除；最后一行悬停详情逃出设置对话框裁切链且完整位于视口。
  *   6. 窄屏（600px）：对话框不越界、高级网格单列、模型行不横向溢出。
@@ -65,7 +65,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
   let createdModelId: string | undefined;
   const geometryModelIds = new Set<string>();
 
-  // 新建服务商已并入连接模型卡片；编辑器只服务已有服务商，由 API 直接预置。
+  // 新建服务商已并入添加服务商向导；编辑器只服务已有服务商，由 API 直接预置。
   const seedProvider = async () => {
     const response = await page.request.fetch(`${apiBaseUrl()}/api/providers`, {
       data: {
@@ -105,8 +105,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
 
   try {
     await journey.step(
-      "打开模型注册表：空态下连接模型是唯一新建入口，编辑器默认隐藏",
-      "注册表入口高亮；右侧出现标题与说明；还没有服务商时给出指向连接模型的空态引导，连接卡片默认展开作为唯一新建入口。"
+      "打开模型注册表：空态下添加服务商是唯一新建入口，编辑器默认隐藏",
+      "注册表入口高亮；右侧出现标题与说明；还没有服务商时给出指向添加服务商的空态引导，向导默认展开作为唯一新建入口。"
       + "不再有独立的「添加 Provider」按钮、预置下拉或自定义表单；编辑器默认隐藏；旧的高级独立模型入口不再存在。",
       async () => {
         // The empty-state copy this step reads only renders while no Provider
@@ -119,7 +119,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         const dialog = await openModelRegistry();
         await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
         await expect(dialog.getByText("管理运行时设置可用的模型配置和凭证。")).toBeVisible();
-        await expect(dialog.getByText("还没有服务商——先在上方「连接模型」里选择服务商并填入 API Key。")).toBeVisible();
+        await expect(dialog.getByText("还没有服务商——在上方点「添加服务商」并填入 API Key。")).toBeVisible();
         // 空态即首启路径：连接卡片默认展开，且是唯一的新建表单
         await expect(dialog.locator(".model-connect-wizard")).toBeVisible();
         await expect(dialog.getByRole("button", { name: /添加 Provider/ })).toHaveCount(0);
@@ -138,7 +138,7 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
       "编辑已有自定义服务商：编辑器分组紧凑可扫读",
       "服务商行点「编辑」后才出现编辑器。主区是名称与密钥；高级连接默认展开：基础 URL 独占一行，接口协议、接口变种与 LLM 网络代理服务器同一行，不再单独选择模型列表策略。",
       async () => {
-        // 新建已并入连接模型卡片；编辑器只服务已有服务商，这里先用 API 预置一个。
+        // 新建已并入添加服务商向导；编辑器只服务已有服务商，这里先用 API 预置一个。
         await seedProvider();
         await page.reload();
         const dialog = await openModelRegistry();
@@ -179,8 +179,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
     );
 
     await journey.step(
-      "行内手动登记模型，选最强思考",
-      "服务商行展开后，行内手动表单收在「添加模型」按钮后；用逗号分隔的原文强度档（如 max）声明可接受思考强度，"
+      "在添加模型对话框中手动登记模型，选最强思考",
+      "服务商行展开后，手动回退收在唯一的「添加模型」对话框里；用逗号分隔的原文强度档（如 max）声明可接受思考强度，"
       + "支持视觉紧跟思考强度且不与价格一组；不提供强度时默认省略思考参数。登记后出现“已添加”计数与行内模型行，操作变为删除。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
@@ -190,9 +190,14 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
           await row.locator(".provider-row-summary").click();
         }
         await expect(row.locator(".provider-row-detail")).toBeVisible();
-        // 手动表单收在“添加模型”按钮后，不常驻。
+        // 手动表单是唯一「添加模型」对话框里的回退，不常驻。
         await expect(row.locator(".provider-manual-form")).toHaveCount(0);
         await row.locator(".provider-add-model-toggle").click();
+        const addDialog = row.getByRole("dialog", { name: /添加模型/ });
+        await expect(addDialog).toBeVisible();
+        if (!await addDialog.locator("details").evaluate((element) => (element as HTMLDetailsElement).open)) {
+          await addDialog.locator("summary").click();
+        }
         await expect(row.locator(".provider-manual-form")).toBeVisible();
         await expect(dialog.getByLabel("思考默认值（可选）")).toHaveCount(0);
         await dialog.getByLabel("手动模型 ID").fill("deepseek-chat");
@@ -224,7 +229,8 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         const modelResponsePromise = page.waitForResponse((response) =>
           response.request().method() === "POST" && new URL(response.url()).pathname
             === `/api/providers/${createdProviderId}/models`);
-        await dialog.locator(".provider-manual-form").getByRole("button", { name: "添加模型" }).click();
+        await dialog.locator(".provider-manual-form").getByRole("button", { name: "加入待添加列表" }).click();
+        await addDialog.getByRole("button", { name: "添加所选模型" }).click();
         const created = await (await modelResponsePromise).json() as { id: string };
         createdModelId = created.id;
         await expect(row).toContainText("已添加 1");
@@ -432,10 +438,16 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         expect(geometry.singleColumn).toBe(true);
         expect(geometry.modelRowsInside).toBe(true);
         expect(geometry.selectsInside).toBe(true);
-        // 思考档输入在收起的手动表单里：先点该行「添加模型」展开。
+        // 思考档输入在唯一「添加模型」对话框的手动回退里。
         await row.locator(".provider-add-model-toggle").click();
+        const addDialog = row.getByRole("dialog", { name: /添加模型/ });
+        if (!await addDialog.locator("details").evaluate((element) => (element as HTMLDetailsElement).open)) {
+          await addDialog.locator("summary").click();
+        }
         await dialog.getByLabel("思考强度档（逗号分隔，可选）").scrollIntoViewIfNeeded();
         await expect(dialog.getByLabel("思考强度档（逗号分隔，可选）")).toBeInViewport();
+        await addDialog.getByRole("button", { name: "取消", exact: true }).click();
+        await expect(addDialog).toHaveCount(0);
       },
     );
 
@@ -463,8 +475,13 @@ test("J6 模型设置分组紧凑、可扫读且窄屏可用", { tag: "@mocked" 
         await page.unroute(modelUrl);
 
         // Delete the real global default without clearing its reference first.
-        await dialog.getByLabel("全局默认任务模型").selectOption(modelId);
-        await expect(dialog.getByLabel("全局默认任务模型")).toHaveValue(modelId);
+        const stored = await page.request.get(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader() });
+        const storedOverrides = ((await stored.json()) as { overrides: Record<string, unknown> }).overrides;
+        await page.request.fetch(`${apiBaseUrl()}/api/settings`, {
+          data: { ...storedOverrides, modelId },
+          headers: authorizationHeader(),
+          method: "PUT",
+        });
 
         const responsePromise = page.waitForResponse((response) => response.request().method() === "DELETE"
           && new URL(response.url()).pathname === modelPath);

@@ -24,7 +24,6 @@ import type {
   ModelProvider,
   ModelProviderPreset,
   ProviderModelEntry,
-  ProviderModelList,
   ProviderModelPreview,
   ProxyPolicy,
   ProxySettingsDetails,
@@ -40,13 +39,7 @@ import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { AlertCircleIcon, CheckIcon, SparkleIcon, SpinnerIcon } from "./icons.js";
 import { failureCopy } from "./ModelConnectivityButton.js";
 import { isPlaintextModelUrl, normalizedModelBaseUrl } from "./model-url.js";
-import {
-  EMPTY_MANUAL_MODEL,
-  ManualModelFields,
-  manualModelRequest,
-  ModelRowFacts,
-  type ManualModelForm,
-} from "./ProviderModelFields.js";
+import { ModelRowFacts } from "./ProviderModelFields.js";
 import { ProxyPolicySelect } from "./ProxySettingsEditor.js";
 import { useLocale } from "./i18n/index.js";
 
@@ -59,6 +52,7 @@ export interface ModelConnectWizardProps {
   onProvidersChange?: (providers: ModelProvider[]) => void;
   onSuccess?: (model: ModelProfile, provider: ModelProvider) => void;
   presets: readonly ModelProviderPreset[];
+  providers?: readonly ModelProvider[];
   proxySettings?: ProxySettingsDetails;
   /** Inline configuration binds a Session without changing the global default. */
   setFirstModelAsGlobalDefault?: boolean;
@@ -81,6 +75,7 @@ export function ModelConnectWizard({
   onProvidersChange,
   onSuccess,
   presets,
+  providers = [],
   proxySettings,
   setFirstModelAsGlobalDefault = true,
 }: ModelConnectWizardProps) {
@@ -118,11 +113,13 @@ export function ModelConnectWizard({
   // Save & connect runs; that keeps the whole card one atomic attempt.
   const [preview, setPreview] = useState<ProviderModelPreview>();
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewPending, setPreviewPending] = useState(false);
   const [previewError, setPreviewError] = useState<string>();
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [manualEntries, setManualEntries] = useState<CreateProviderModelRequest[]>([]);
-  const [manualOpen, setManualOpen] = useState(false);
-  const [manualForm, setManualForm] = useState<ManualModelForm>({ ...EMPTY_MANUAL_MODEL });
+  // A typed identifier is the listing's explicit fallback: it registers
+  // exactly that model whether or not discovery returned anything.
+  const [manualModelId, setManualModelId] = useState("");
+  const previewSequence = useRef(0);
 
   // Expanding grows the card; keep the expanded fields and the action row
   // inside the dialog's scroll viewport instead of letting them slip under
@@ -137,6 +134,8 @@ export function ModelConnectWizard({
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
   const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string }>();
+  const successInfoRef = useRef(successInfo);
+  successInfoRef.current = successInfo;
 
   const selectedPreset = !isCustom ? presets.find((p) => p.id === selectedPresetId) : undefined;
   const keyUrl = selectedPreset?.keyUrl;
@@ -145,28 +144,59 @@ export function ModelConnectWizard({
   // registered on its own; the listing is never consulted for it.
   const explicitModelId = isCustom ? customModelId.trim() : "";
   const tokenOptional = selectedPreset?.tokenOptional === true;
-  const busy = testing || previewLoading;
+  // Editing the provider/key must stay possible while the debounced listing
+  // fetch is pending. Only actions that would race that fetch are gated.
+  const busy = testing;
+  const interactionBusy = testing || previewLoading || previewPending;
   const endpoint = providerInput();
   const hasHttpDestination = isPlaintextModelUrl(endpoint.baseUrl);
 
   const previewSelectedCount = preview ? preview.models.filter((entry) => selectedIds.has(entry.id)).length : 0;
-  // How many models Save & connect will register right now; undefined means
-  // "every model the provider lists", fetched at that moment.
-  const plannedCount = explicitModelId || preview || manualEntries.length
-    ? new Set([
-        ...(explicitModelId ? [explicitModelId] : []),
-        ...(preview ? preview.models.filter((entry) => selectedIds.has(entry.id)).map((entry) => entry.id) : []),
-        ...manualEntries.map((entry) => entry.model),
-      ]).size
-    : undefined;
+  const typedModelIds = [explicitModelId, manualModelId.trim()].filter(Boolean);
+  // How many models Add provider will register right now. Zero is an explicit
+  // choice too: the submit path then asks for a tick or a typed ID instead of
+  // silently registering the whole listing.
+  const plannedCount = new Set([
+    ...typedModelIds,
+    ...(preview ? preview.models.filter((entry) => selectedIds.has(entry.id)).map((entry) => entry.id) : []),
+  ]).size;
+  // A complete typed plan does not depend on the listing, so it may submit
+  // while the automatic preview is still pending or hanging.
+  const submitBlockedByPreview = interactionBusy && typedModelIds.length === 0;
+  const endpointIdentity = JSON.stringify({
+    apiProtocol,
+    apiVariant,
+    baseUrlOverride,
+    customBaseUrl,
+    isCustom,
+    proxyPolicy,
+    selectedPresetId,
+  });
+  const endpointIdentityRef = useRef(endpointIdentity);
 
-  function resetPlan() {
+  // A listing belongs to one endpoint. When the endpoint changes, old ticks
+  // must not remain submitable while the new preview is in flight or failed.
+  // The display name and API key are deliberately excluded: neither changes
+  // the endpoint, so editing them keeps the listing and only refreshes it.
+  useEffect(() => {
+    if (endpointIdentityRef.current === endpointIdentity) return;
+    endpointIdentityRef.current = endpointIdentity;
+    previewSequence.current += 1;
     setPreview(undefined);
     setPreviewError(undefined);
     setSelectedIds(new Set());
-    setManualEntries([]);
-    setManualForm({ ...EMPTY_MANUAL_MODEL });
-    setManualOpen(false);
+    setPreviewPending(false);
+    setPreviewLoading(false);
+  }, [endpointIdentity]);
+
+  function resetPlan() {
+    previewSequence.current += 1;
+    setPreviewPending(false);
+    setPreviewLoading(false);
+    setPreview(undefined);
+    setPreviewError(undefined);
+    setSelectedIds(new Set());
+    setManualModelId("");
   }
 
   function handleProviderChange(value: string) {
@@ -251,33 +281,64 @@ export function ModelConnectWizard({
     };
   }
 
-  // Fetch (or refresh) the listing of the not-yet-saved provider so the user
-  // can tick models by hand. Every row starts ticked — the same "all of them"
-  // the simple path registers — and a refresh keeps the user's choices for
-  // ids that are still listed.
+  // Fetch (or refresh) the listing of the not-yet-saved provider. The list is
+  // visible before the user commits anything; a refresh keeps the ticks for
+  // ids that are still listed. Nothing is ticked automatically.
   async function fetchPreview(): Promise<void> {
     const problem = inputProblem();
     if (problem) {
       setValidationError(problem);
       return;
     }
+    const sequence = previewSequence.current + 1;
+    previewSequence.current = sequence;
     setValidationError(undefined);
     setPreviewError(undefined);
+    setPreviewPending(false);
     setPreviewLoading(true);
     try {
       const next = await client.previewProviderModels(providerInput());
-      const known = new Set(preview?.models.map((entry) => entry.id) ?? []);
+      if (previewSequence.current !== sequence) return;
       setPreview(next);
-      setSelectedIds(new Set(next.models
+      setSelectedIds((current) => new Set(next.models
         .map((entry) => entry.id)
-        .filter((id) => !known.has(id) || selectedIds.has(id))));
+        .filter((id) => current.has(id))));
     } catch (reason) {
+      if (previewSequence.current !== sequence) return;
       const detail = reason instanceof Error ? reason.message : String(reason);
       setPreviewError(t("wizard.error.listingFailed", { detail }));
     } finally {
-      setPreviewLoading(false);
+      if (previewSequence.current === sequence) {
+        setPreviewLoading(false);
+        setPreviewPending(false);
+      }
     }
   }
+
+  // The listing is the default view, not a hidden second step: fetch it as
+  // soon as the provider inputs can make a request, debounced while typing.
+  useEffect(() => {
+    // Invalidate any in-flight response as soon as newer inputs are scheduled;
+    // otherwise an older listing could land during the debounce and clear the
+    // pending gate before the request for these inputs has even started.
+    previewSequence.current += 1;
+    if (successInfo || inputProblem()) {
+      setPreviewPending(false);
+      setPreviewLoading(false);
+      return;
+    }
+    setPreviewPending(true);
+    const timer = setTimeout(() => {
+      // A submit may have finished while this timer was queued; never start a
+      // listing fetch behind the Done state.
+      if (successInfoRef.current) return;
+      void fetchPreview();
+    }, 450);
+    return () => clearTimeout(timer);
+    // The provider inputs are the trigger; fetchPreview reads the values of
+    // this render when the debounce fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCustom, selectedPresetId, apiKey, customBaseUrl, apiProtocol, apiVariant, proxyPolicy, baseUrlOverride]);
 
   function toggleSelected(id: string, checked: boolean) {
     setSelectedIds((current) => {
@@ -292,26 +353,11 @@ export function ModelConnectWizard({
     setSelectedIds(checked ? new Set(preview?.models.map((entry) => entry.id) ?? []) : new Set());
   }
 
-  function addManualEntry() {
-    const modelId = manualForm.modelId.trim();
-    if (!modelId) return;
-    const request = manualModelRequest(modelId, manualForm);
-    setManualEntries((current) => [...current.filter((entry) => entry.model !== modelId), request]);
-    setManualForm({ ...EMPTY_MANUAL_MODEL });
-    setManualOpen(false);
-  }
-
-  function removeManualEntry(modelId: string) {
-    setManualEntries((current) => current.filter((entry) => entry.model !== modelId));
-  }
-
-  // The models to register on the new provider, first one first. Anything the
-  // user chose by hand — a typed identifier, ticked listing rows, manual
-  // entries — is registered exactly; with no choice at all, every model the
-  // provider lists is fetched now and registered. Throws a readable,
-  // already-translated error when nothing can be registered; the caller's
-  // rollback path treats it like any other failure.
-  async function resolveModelPlan(providerId: string): Promise<CreateProviderModelRequest[]> {
+  // The models to register on the new provider, first one first. A typed ID
+  // and ticked listing rows are the complete plan; there is no "register
+  // everything" fallback. Reads only what the user chose and never touches
+  // the saved provider's listing.
+  function resolveModelPlan(): CreateProviderModelRequest[] {
     const chosen: CreateProviderModelRequest[] = [];
     const seen = new Set<string>();
     const choose = (request: CreateProviderModelRequest) => {
@@ -320,33 +366,17 @@ export function ModelConnectWizard({
       chosen.push(request);
     };
     if (explicitModelId) choose({ label: explicitModelId, model: explicitModelId });
+    if (manualModelId.trim()) choose({ model: manualModelId.trim() });
     for (const entry of preview?.models ?? []) {
       if (selectedIds.has(entry.id)) choose({ model: entry.id });
     }
-    for (const entry of manualEntries) choose(entry);
     if (chosen.length) return chosen;
-    // A fetched list with every row unticked is an explicit "none", not a
-    // request for all of them.
-    if (preview) throw new Error(t("wizard.error.noSelection"));
-
-    let listing: ProviderModelList;
-    try {
-      listing = await client.listProviderModels(providerId);
-    } catch (reason) {
-      const detail = reason instanceof Error ? reason.message : String(reason);
-      throw new Error(t("wizard.error.listingFailed", { detail }));
-    }
-    const ids = listing.models
-      .map((entry) => entry.id?.trim())
-      .filter((id): id is string => Boolean(id));
-    if (!ids.length) {
-      throw new Error(t("wizard.error.noModels"));
-    }
-    return ids.map((id) => ({ model: id }));
+    if (preview && preview.models.length === 0) throw new Error(t("wizard.error.noModels"));
+    throw new Error(t("wizard.error.noSelection"));
   }
 
   async function handleTestAndEnable(): Promise<void> {
-    if (!probeConsent || busy) return;
+    if (!probeConsent || testing || submitBlockedByPreview) return;
     setValidationError(undefined);
     setTestResult(undefined);
     setSuccessInfo(undefined);
@@ -356,8 +386,21 @@ export function ModelConnectWizard({
       setValidationError(problem);
       return;
     }
-    if (preview && !plannedCount) {
-      setValidationError(t("wizard.error.noSelection"));
+    if (!plannedCount) {
+      const emptyListing = preview !== undefined && preview.models.length === 0;
+      const noSelection = emptyListing ? t("wizard.error.noModels") : t("wizard.error.noSelection");
+      setValidationError(previewError ?? noSelection);
+      return;
+    }
+    // A typed plan may be complete while a preview is still in flight. Claim
+    // the current sequence so a late listing cannot land after this submit.
+    previewSequence.current += 1;
+    setPreviewPending(false);
+    setPreviewLoading(false);
+    const input = providerInput();
+    const inputName = input.name ?? providerDisplayName;
+    if (providers.some((provider) => provider.name === inputName)
+      && !window.confirm(t("wizard.error.duplicateProvider", { name: inputName }))) {
       return;
     }
 
@@ -383,11 +426,11 @@ export function ModelConnectWizard({
       // Always create a fresh provider: the same vendor may be added several
       // times with its own name and key. Existing rows stay untouched —
       // failure rolls back only what this attempt created.
-      const provider = await client.createProvider(providerInput());
+      const provider = await client.createProvider(input);
       createdProviderId = provider.id;
 
       // Register the first model and prove the wire before registering more.
-      const requests = await resolveModelPlan(provider.id);
+      const requests = resolveModelPlan();
       const firstProfile = await client.addProviderModel(provider.id, {
         ...requests[0]!,
         ...(setFirstModelAsGlobalDefault ? {} : { setGlobalDefault: false }),
@@ -462,9 +505,15 @@ export function ModelConnectWizard({
         latencyMs: testOutcome.latencyMs,
         modelName: firstProfile.name,
       });
-      // The plan belonged to the provider that now exists; the next connect
-      // starts from a clean slate.
+      // The flow is over: nothing from the completed attempt stays in the
+      // form, so a second press cannot create a duplicate provider.
       resetPlan();
+      setApiKey("");
+      setCustomName("");
+      setCustomBaseUrl("");
+      setCustomModelId("");
+      setPresetNameOverride("");
+      setBaseUrlOverride("");
 
       onNotice?.(t("wizard.successTitle"), successDesc);
       onSuccess?.(firstProfile, provider);
@@ -501,10 +550,26 @@ export function ModelConnectWizard({
     );
   }
 
-  const planSummary = plannedCount === undefined
-    ? t("wizard.plan.all")
-    : t("wizard.plan.count", { count: plannedCount });
+  const planSummary = plannedCount
+    ? t("wizard.plan.count", { count: plannedCount })
+    : t("wizard.plan.none");
   const allSelected = preview !== undefined && preview.models.length > 0 && previewSelectedCount === preview.models.length;
+  const doneNode = successInfo ? <div className="wizard-alert wizard-alert-success wizard-done" role="status">
+    <CheckIcon size={16} />
+    <div className="wizard-alert-content">
+      <strong>{t("wizard.doneTitle")}</strong>
+      <span>{t("wizard.doneDesc")}</span>
+      <span>
+        {successInfo.defaultChanged
+          ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
+          : t("wizard.successDescKeepDefault", { count: successInfo.count })}
+        {" "}({successInfo.latencyMs} ms)
+      </span>
+      <button className="secondary-button compact-button" onClick={() => { setSuccessInfo(undefined); setValidationError(undefined); }} type="button">
+        {t("wizard.doneAgain")}
+      </button>
+    </div>
+  </div> : null;
 
   return (
     <section aria-label={t("wizard.title")} className="model-connect-wizard">
@@ -516,7 +581,7 @@ export function ModelConnectWizard({
         <p className="wizard-header-desc">{t(setFirstModelAsGlobalDefault ? "wizard.desc" : "wizard.descSession")}</p>
       </div>
 
-      <div className="wizard-body">
+      {successInfo ? doneNode : <div className="wizard-body">
         <div className="wizard-inputs-row">
           <div className="wizard-field wizard-field-provider">
             <label htmlFor="wizard-provider-select">{t("wizard.providerLabel")}</label>
@@ -667,6 +732,22 @@ export function ModelConnectWizard({
           )
         ) : null}
 
+        {!isCustom && (preview || previewError || !inputProblem()) ? <div className="wizard-field wizard-manual-model">
+          <label htmlFor="wizard-manual-model">{t("wizard.manualModelLabel")}</label>
+          <input
+            disabled={busy}
+            id="wizard-manual-model"
+            onChange={(event) => {
+              noteUserConfigured();
+              setManualModelId(event.target.value);
+              setValidationError(undefined);
+            }}
+            placeholder={t("wizard.manualModelPlaceholder")}
+            type="text"
+            value={manualModelId}
+          />
+        </div> : null}
+
         {advancedOpen ? (
           <div className="wizard-advanced">
             {/* Provider side: everything the provider editor asks for when it
@@ -759,58 +840,6 @@ export function ModelConnectWizard({
               </div>
             </section>
 
-            {/* Manual model entry stays in 高级配置; the fetched listing lives
-                in the card's main area. */}
-            <section aria-label={t("wizard.section.manualModels")} className="wizard-advanced-section wizard-models">
-              <div className="wizard-section-heading">
-                <h5 className="wizard-section-title">{t("wizard.section.manualModels")}</h5>
-              </div>
-
-              {manualEntries.length ? (
-                <ul aria-label={t("wizard.models.manualList")} className="wizard-manual-list">
-                  {manualEntries.map((entry) => (
-                    <li className="wizard-manual-item" key={entry.model}>
-                      <span className="provider-model-cell-name">
-                        <strong>{entry.label ?? entry.model}</strong>
-                        <code>{entry.model}</code>
-                      </span>
-                      <em>{t("wizard.models.manualTag")}</em>
-                      <button
-                        className="danger-button compact-button wizard-manual-remove"
-                        disabled={busy}
-                        onClick={() => removeManualEntry(entry.model)}
-                        type="button"
-                      >
-                        {t("wizard.models.remove")}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-
-              <button
-                aria-expanded={manualOpen}
-                className="provider-add-model-toggle"
-                disabled={busy}
-                onClick={() => setManualOpen((open) => !open)}
-                type="button"
-              >
-                {t("providers.models.add")}
-              </button>
-              {manualOpen ? (
-                <ManualModelFields
-                  busy={busy}
-                  form={manualForm}
-                  onChange={(form) => {
-                    noteUserConfigured();
-                    setManualForm(form);
-                  }}
-                  onSubmit={addManualEntry}
-                  presetId={selectedPreset?.id}
-                  submitLabel={t("wizard.models.enqueue")}
-                />
-              ) : null}
-            </section>
           </div>
         ) : null}
 
@@ -825,32 +854,17 @@ export function ModelConnectWizard({
 
         {failureNode}
 
-        {successInfo ? (
-          <div className="wizard-alert wizard-alert-success" role="status">
-            <CheckIcon size={16} />
-            <div className="wizard-alert-content">
-              <strong>{t("wizard.successTitle")}: </strong>
-              <span>
-                {successInfo.defaultChanged
-                  ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
-                  : t("wizard.successDescKeepDefault", { count: successInfo.count })}
-                {" "}({successInfo.latencyMs} ms)
-              </span>
-            </div>
-          </div>
-        ) : null}
-
         <div className="wizard-footer-row" ref={footerRef}>
-          {/* Fetch the provider's model list right here next to Save & connect —
-              no trip through 高级配置 needed; the ticked plan appears above. */}
+          {/* The listing and its explicit ticks sit above; fetching lives next
+              to the submit so the plan is visible before anything is written. */}
           <div className="wizard-fetch-side">
             <button
               className="secondary-button compact-button wizard-fetch-models"
-              disabled={busy}
+              disabled={interactionBusy}
               onClick={() => void fetchPreview()}
               type="button"
             >
-              {previewLoading ? t("wizard.models.fetching") : preview ? t("providers.models.refresh") : t("wizard.models.fetch")}
+              {previewLoading || previewPending ? t("wizard.models.fetching") : preview ? t("providers.models.refresh") : t("wizard.models.fetch")}
             </button>
             <div className="wizard-fetch-copy">
               <span className="wizard-plan-summary">{planSummary}</span>
@@ -864,7 +878,7 @@ export function ModelConnectWizard({
             <button
               aria-busy={testing}
               className="primary-button wizard-submit-button"
-              disabled={busy || !probeConsent}
+              disabled={testing || submitBlockedByPreview || !probeConsent}
               onClick={() => void handleTestAndEnable()}
               type="button"
             >
@@ -895,7 +909,7 @@ export function ModelConnectWizard({
             </button>
           </div>
         </div>
-      </div>
+      </div>}
     </section>
   );
 }

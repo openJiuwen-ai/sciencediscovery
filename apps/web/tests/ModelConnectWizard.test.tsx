@@ -104,6 +104,11 @@ function createMockClient(overrides: Partial<SettingsApiClient> = {}): SettingsA
       providerId,
       source: "remote" as const,
     }),
+    previewProviderModels: async () => ({
+      fetchedAt: "2026-09-17T00:00:00.000Z",
+      models: [{ id: "listed-model-first" }, { id: "listed-model-second" }],
+      source: "remote" as const,
+    }),
     getGlobalSettings: async () => ({ effective: {}, overrides: {} } as any),
     listProviders: async () => ({ presets: [...MODEL_PROVIDER_PRESETS], providers: [] }),
     replaceGlobalSettings: async () => ({} as any),
@@ -121,6 +126,23 @@ async function acceptProbeCost(renderer: ReactTestRenderer): Promise<void> {
   const label = renderer.root.findAllByType("label").find(node => /我同意发送一次|I agree to one/.test(extractText(node)));
   assert.ok(label, "Cost disclosure must be reachable before a model request");
   await act(async () => { label.findByType("input").props.onChange({ target: { checked: true } }); });
+}
+
+/** The listing is visible by default but starts unselected; "register all
+ *  listed models" is an explicit tick. Fetch first when the debounce has not
+ *  fired yet, so a test never depends on wall-clock timing. */
+async function chooseAllListed(renderer: ReactTestRenderer, locale: "en" | "zh-CN" = "zh-CN"): Promise<void> {
+  const fetchButton = renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
+  await act(async () => { await fetchButton.props.onClick(); });
+  const selectAll = renderer.root.findByProps({ "aria-label": locale === "en" ? "Register all listed models" : "登记全部列出的模型" });
+  await act(async () => { selectAll.props.onChange({ target: { checked: true } }); });
+}
+
+function successNode(renderer: ReactTestRenderer) {
+  const node = renderer.root.findAll((candidate) => typeof candidate.props.className === "string"
+    && candidate.props.className.includes("wizard-alert-success"))[0];
+  assert.ok(node, "success state is rendered");
+  return node;
 }
 
 test("CFG-R14 manual HTTP lists without an extra checkbox, retains paid consent and preserves a retry", async () => {
@@ -145,10 +167,11 @@ test("CFG-R14 manual HTTP lists without an extra checkbox, retains paid consent 
   const submit = () => renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   const preview = () => renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
   assert.equal(renderer!.root.findAllByProps({ className: "manual-http-consent" }).length, 0);
-  assert.equal(preview().props.disabled, false);
+  assert.equal(preview().props.disabled, true, "the scheduled preview gates a second fetch");
   await act(async () => { preview().props.onClick(); });
   assert.equal(listings, 1);
-  assert.equal(submit().props.disabled, true, "Only the existing paid probe consent gates Save & connect");
+  await act(async () => { renderer!.root.findByProps({ "aria-label": "fixture" }).props.onChange({ target: { checked: true } }); });
+  assert.equal(submit().props.disabled, true, "Only the existing paid probe consent gates Add provider");
   await act(async () => { submit().props.onClick(); });
   assert.equal(connects, 0);
   await acceptProbeCost(renderer!);
@@ -158,8 +181,8 @@ test("CFG-R14 manual HTTP lists without an extra checkbox, retains paid consent 
   await act(async () => { submit().props.onClick(); });
   assert.equal(probes.length, 2);
   assert.deepEqual(probes[1], ["model-2", false, { baseUrl: "http://gateway.invalid/v1", profileUpdatedAt: "revision-2" }]);
+  await act(async () => { successNode(renderer!).findByType("button").props.onClick(); });
   await act(async () => { renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://another.invalid/v1" } }); });
-  assert.equal(preview().props.disabled, false);
   assert.equal(submit().props.disabled, true);
   await act(async () => renderer!.unmount());
 });
@@ -254,6 +277,11 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
         source: "remote" as const,
       };
     },
+    previewProviderModels: async () => ({
+      fetchedAt: "2026-09-17T00:00:00.000Z",
+      models: [{ id: "listed-model-first" }, { id: "deepseek-chat" }],
+      source: "remote" as const,
+    }),
     testModel: async (modelId: string) => {
       testedModelId = modelId;
       return successResult;
@@ -277,13 +305,14 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
     );
   });
 
-  // Enter API Key
+  // Enter API Key and explicitly register the listed models.
   const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
+  await chooseAllListed(renderer!);
 
-  // Click "保存并连接"
+  // Click "添加服务商"
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
@@ -295,17 +324,17 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
   assert.equal(createdProviderInput?.apiToken, "sk-deepseek-test-123");
   assert.equal(createdProviderInput?.baseUrl, "https://api.deepseek.com");
 
-  // Every listing entry is registered (deepseek-chat sits second on purpose,
-  // proving the order comes from the listing, not any preset recommendation).
-  assert.equal(listingProviderId, "provider-deepseek-1");
+  // Every ticked listing entry is registered, and the saved provider's own
+  // listing is never read behind the user's selection.
+  assert.equal(listingProviderId, undefined);
   assert.deepEqual(registeredModels, ["listed-model-first", "deepseek-chat"]);
 
   assert.equal(testedModelId, "profile-listed-model-first");
   assert.equal(defaultModelSetId, "profile-listed-model-first");
 
-  // Success alert is visible, reports the count and the new default
-  const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
-  assert.match(extractText(successAlert), /基础连接检查通过/);
+  // Success ends the form with a Done state that reports the count and the new default.
+  const successAlert = successNode(renderer!);
+  assert.match(extractText(successAlert), /服务商已添加/);
   assert.match(extractText(successAlert), /登记 2 个模型；listed-model-first 已设为全局默认任务模型/);
   // The pass is a qualified basic check, never an unqualified task-readiness claim.
   assert.match(extractText(successAlert), /不验证完整会话执行路径、思考或工具调用/);
@@ -339,6 +368,7 @@ test("inline connection keeps the global default unset on an empty system", asyn
   await act(async () => {
     renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "demo-test-key" } });
   });
+  await chooseAllListed(renderer!, "en");
   await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
@@ -429,6 +459,7 @@ test("successful flow with existing models: registers all listed models but leav
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
+  await chooseAllListed(renderer!);
 
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
@@ -443,7 +474,7 @@ test("successful flow with existing models: registers all listed models but leav
   assert.equal(replaceSettingsCalledWithModel, false);
 
   // Success copy says the default was kept.
-  const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
+  const successAlert = successNode(renderer!);
   assert.match(extractText(successAlert), /登记 2 个模型；全局默认任务模型保持不变/);
 });
 
@@ -515,8 +546,9 @@ test("failure flow: rollbacks temporary model and provider on test failure, show
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-invalid-key" } });
   });
+  await chooseAllListed(renderer!);
 
-  // Click "测试并启用"
+  // Click "添加服务商"
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
@@ -608,8 +640,9 @@ test("bad key with an existing provider: new provider is rolled back, existing r
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-bad-key-should-not-override" } });
   });
+  await chooseAllListed(renderer!);
 
-  // Click "测试并启用"
+  // Click "添加服务商"
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
@@ -724,6 +757,9 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-custom-key" } });
   });
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.onClick();
+  });
 
   // Submit
   await acceptProbeCost(renderer!);
@@ -740,7 +776,7 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   assert.equal(defaultModelSetId, "profile-custom-model");
 });
 
-test("custom provider without model id: registers every listed model", async () => {
+test("custom provider without a typed id: an explicit model ID is required and is registered alone", async () => {
   const registeredModels: string[] = [];
   let defaultModelSetId: string | undefined;
 
@@ -790,18 +826,24 @@ test("custom provider without model id: registers every listed model", async () 
     keyInput.props.onChange({ target: { value: "sk-custom-key" } });
   });
 
-  // Model identifier intentionally left empty: the listing decides.
+  // No silent register-all: the typed identifier is the explicit plan.
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-model" }).props.onChange({ target: { value: "custom-manual-model" } });
+  });
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.onClick();
+  });
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
     await submitButton.props.onClick();
   });
 
-  assert.deepEqual(registeredModels, ["listed-model-first", "listed-model-second"]);
-  assert.equal(defaultModelSetId, "profile-listed-model-first");
+  assert.deepEqual(registeredModels, ["custom-manual-model"]);
+  assert.equal(defaultModelSetId, "profile-custom-manual-model");
 
-  const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
-  assert.match(extractText(successAlert), /listed-model-first/);
+  const successAlert = successNode(renderer!);
+  assert.match(extractText(successAlert), /custom-manual-model/);
 });
 
 test("empty model listing: readable error, provider rolled back, default untouched", async () => {
@@ -818,10 +860,9 @@ test("empty model listing: readable error, provider rolled back, default untouch
       deletedProviderId = providerId;
       return { deleted: providerId };
     },
-    listProviderModels: async (providerId: string) => ({
+    previewProviderModels: async () => ({
       fetchedAt: "2026-09-17T00:00:00.000Z",
       models: [],
-      providerId,
       source: "remote" as const,
     }),
   });
@@ -847,6 +888,9 @@ test("empty model listing: readable error, provider rolled back, default untouch
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.onClick();
+  });
 
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
@@ -854,10 +898,10 @@ test("empty model listing: readable error, provider rolled back, default untouch
     await submitButton.props.onClick();
   });
 
-  // Readable error, no half-created provider, no model registration, no default change.
+  // Readable error, no provider is created, no model registration, no default change.
   const errorAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
-  assert.match(extractText(errorAlert), /未返回任何可用模型/);
-  assert.equal(deletedProviderId, "created-provider-1");
+  assert.match(extractText(errorAlert), /没有返回任何模型/);
+  assert.equal(deletedProviderId, undefined);
   assert.equal(addModelCalled, false);
   assert.equal(defaultModelSetCalled, false);
 });
@@ -871,7 +915,7 @@ test("model listing failure: readable error with detail, provider rolled back, d
       deletedProviderId = providerId;
       return { deleted: providerId };
     },
-    listProviderModels: async () => {
+    previewProviderModels: async () => {
       throw new Error("The provider model list request failed with status 401");
     },
   });
@@ -897,6 +941,9 @@ test("model listing failure: readable error with detail, provider rolled back, d
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-bad-key" } });
   });
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.onClick();
+  });
 
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
@@ -904,11 +951,11 @@ test("model listing failure: readable error with detail, provider rolled back, d
     await submitButton.props.onClick();
   });
 
-  const errorAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-error" });
-  const alertText = extractText(errorAlert);
+  const alertText = renderer!.root.findAllByProps({ className: "wizard-alert wizard-alert-error" })
+    .map((node) => extractText(node)).join(" ");
   assert.match(alertText, /无法获取该服务商的模型列表/);
   assert.match(alertText, /401/);
-  assert.equal(deletedProviderId, "created-provider-1");
+  assert.equal(deletedProviderId, undefined);
   assert.equal(defaultModelSetCalled, false);
 });
 
@@ -968,7 +1015,7 @@ test("advanced configuration expands fine-tuning fields in place; the wizard sta
   assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
 
   const manualBtn = renderer!.root.findByProps({ className: "secondary-button compact-button" });
-  assert.equal(extractText(manualBtn), "高级配置");
+  assert.equal(extractText(manualBtn), "高级服务商设置");
   assert.equal(manualBtn.props["aria-expanded"], false);
   await act(async () => {
     manualBtn.props.onClick();
@@ -1037,6 +1084,7 @@ test("advanced preset fields: base URL override is honored when creating a provi
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-test" } });
   });
+  await chooseAllListed(renderer!);
   await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
@@ -1115,6 +1163,7 @@ test("advanced custom fields: protocol and variant drive creation, and the listi
   const variantSelect = renderer!.root.findByProps({ id: "wizard-api-variant" });
   assert.equal(variantSelect.props.value, "anthropic-adaptive");
 
+  await chooseAllListed(renderer!);
   await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
@@ -1212,6 +1261,7 @@ test("same preset can be added again with its own name and key; the existing row
   await act(async () => {
     keyInput.props.onChange({ target: { value: "sk-second-key" } });
   });
+  await chooseAllListed(renderer!);
   await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
@@ -1227,9 +1277,9 @@ test("same preset can be added again with its own name and key; the existing row
   assert.ok(providersAfter?.some((provider) => provider.id === "existing-provider-deepseek-1"));
   assert.ok(providersAfter?.some((provider) => provider.id === "created-provider-work-deepseek"));
 
-  // Success alert shows for the new connection.
-  const successAlert = renderer!.root.findByProps({ className: "wizard-alert wizard-alert-success" });
-  assert.match(extractText(successAlert), /基础连接检查通过/);
+  // Success state shows for the new provider.
+  const successAlert = successNode(renderer!);
+  assert.match(extractText(successAlert), /服务商已添加/);
 });
 
 /** Mount the wizard in zh-CN, enter a key, and expand the advanced area. */
@@ -1253,7 +1303,7 @@ async function mountAdvanced(client: SettingsApiClient, props: Record<string, un
   return renderer!;
 }
 
-test("advanced manual selection: the fetched list starts fully ticked, unticking a row registers only the rest, and the saved listing is never consulted", async () => {
+test("the fetched listing is visible before submit, starts unselected, and select-all is explicit", async () => {
   let previewBody: any;
   const registered: any[] = [];
   const client = createMockClient({
@@ -1275,30 +1325,35 @@ test("advanced manual selection: the fetched list starts fully ticked, unticking
   });
   const renderer = await mountAdvanced(client);
 
-  // Before any fetch the plan is "everything the provider lists".
-  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记服务商返回的全部模型/);
+  // Nothing is chosen yet: no silent "register everything".
+  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /尚未选择模型/);
   const fetchButton = renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
-  assert.equal(extractText(fetchButton), "获取模型列表");
+  assert.match(extractText(fetchButton), /获取模型列表|正在获取模型列表/);
   await act(async () => {
     await fetchButton.props.onClick();
   });
 
-  // The preview used the draft's own key and preset; every row starts ticked.
+  // The preview used the draft's own key and preset; the rows are visible but unticked.
   assert.equal(previewBody?.apiToken, "sk-advanced");
   assert.equal(previewBody?.presetId, "deepseek");
   const first = renderer.root.findByProps({ "aria-label": "listed-model-first" });
   const second = renderer.root.findByProps({ "aria-label": "listed-model-second" });
-  assert.equal(first.props.checked, true);
-  assert.equal(second.props.checked, true);
-  assert.equal(renderer.root.findByProps({ "aria-label": "全选" }).props.checked, true);
-  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 2 个模型/);
-  assert.equal(extractText(renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" })), "刷新列表");
+  assert.equal(first.props.checked, false);
+  assert.equal(second.props.checked, false);
+  assert.equal(renderer.root.findByProps({ "aria-label": "登记全部列出的模型" }).props.checked, false);
+  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /尚未选择模型/);
+  assert.equal(extractText(renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" })), "刷新模型列表");
 
-  // Untick one row: the plan shrinks and select-all is no longer whole.
+  // Register all is an explicit tick; unticking one row shrinks the plan.
+  await act(async () => {
+    renderer.root.findByProps({ "aria-label": "登记全部列出的模型" }).props.onChange({ target: { checked: true } });
+  });
+  assert.equal(renderer.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, true);
+  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 2 个模型/);
   await act(async () => {
     second.props.onChange({ target: { checked: false } });
   });
-  assert.equal(renderer.root.findByProps({ "aria-label": "全选" }).props.checked, false);
+  assert.equal(renderer.root.findByProps({ "aria-label": "登记全部列出的模型" }).props.checked, false);
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 1 个模型/);
 
   await acceptProbeCost(renderer!);
@@ -1306,11 +1361,16 @@ test("advanced manual selection: the fetched list starts fully ticked, unticking
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
   assert.deepEqual(registered, [{ model: "listed-model-first" }]);
-  assert.match(extractText(renderer.root.findByProps({ className: "wizard-alert wizard-alert-success" })), /登记 1 个模型/);
-  // The plan belonged to the provider that now exists: the table is gone and
-  // the next connect starts from "all listed models" again.
+  const success = successNode(renderer);
+  assert.match(extractText(success), /登记 1 个模型/);
+  // The flow is over: the form and submit are gone, and Done can start fresh.
+  assert.equal(renderer.root.findAllByProps({ className: "primary-button wizard-submit-button" }).length, 0);
   assert.equal(renderer.root.findAllByProps({ className: "wizard-model-table" }).length, 0);
-  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记服务商返回的全部模型/);
+  const again = success.findByType("button");
+  assert.equal(extractText(again), "再添加一个服务商");
+  await act(async () => { again.props.onClick(); });
+  assert.equal(renderer.root.findByProps({ id: "wizard-api-key" }).props.value, "");
+  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /尚未选择模型/);
 });
 
 test("advanced: unticking every listed row is an explicit none — readable error and nothing is created", async () => {
@@ -1331,20 +1391,23 @@ test("advanced: unticking every listed row is an explicit none — readable erro
     await renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.onClick();
   });
   await act(async () => {
-    renderer.root.findByProps({ "aria-label": "全选" }).props.onChange({ target: { checked: false } });
+    renderer.root.findByProps({ "aria-label": "登记全部列出的模型" }).props.onChange({ target: { checked: true } });
+  });
+  await act(async () => {
+    renderer.root.findByProps({ "aria-label": "登记全部列出的模型" }).props.onChange({ target: { checked: false } });
   });
   assert.equal(renderer.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, false);
-  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 0 个模型/);
+  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /尚未选择模型/);
 
   await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
-  assert.match(extractText(renderer.root.findByProps({ className: "wizard-alert wizard-alert-error" })), /请至少勾选一个列表模型，或手动添加模型/);
+  assert.match(extractText(renderer.root.findByProps({ className: "wizard-alert wizard-alert-error" })), /请至少勾选一个列出的模型，或填写模型 ID/);
   assert.equal(createCalled, false);
 });
 
-test("advanced manual entry: a model described by hand is registered with its facts, and the listing is not consulted", async () => {
+test("a typed model ID is the explicit fallback for a listing that cannot return it", async () => {
   const registered: any[] = [];
   let listingCalled = false;
   const client = createMockClient({
@@ -1354,39 +1417,22 @@ test("advanced manual entry: a model described by hand is registered with its fa
     },
     listProviderModels: async () => {
       listingCalled = true;
-      throw new Error("a manual plan must not read the listing");
+      throw new Error("a typed plan must not read the listing");
     },
+    previewProviderModels: async () => ({
+      fetchedAt: "2026-09-20T00:00:00.000Z",
+      models: [],
+      source: "remote" as const,
+    }),
   });
   const renderer = await mountAdvanced(client);
-
   await act(async () => {
-    renderer.root.findByProps({ className: "provider-add-model-toggle" }).props.onClick();
-  });
-  const manualForm = renderer.root.findByProps({ className: "provider-manual-form" });
-  const inputs = manualForm.findAllByType("input");
-  const byPlaceholder = (placeholder: string) => inputs.find((input) => input.props.placeholder === placeholder)!;
-  await act(async () => {
-    byPlaceholder("服务商文档中的精确 ID").props.onChange({ target: { value: "gateway-model-x" } });
-  });
-  await act(async () => {
-    byPlaceholder("缺省使用模型 ID").props.onChange({ target: { value: "网关模型" } });
-  });
-  await act(async () => {
-    byPlaceholder("1000000").props.onChange({ target: { value: "32000" } });
-  });
-  await act(async () => {
-    byPlaceholder("low,high,max").props.onChange({ target: { value: "high, max" } });
-  });
-  await act(async () => {
-    renderer.root.findByProps({ className: "secondary-button provider-manual-submit" }).props.onClick();
+    await renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.onClick();
   });
 
-  // The entry waits in the card, marked as manual, until Save & connect.
-  const manualList = renderer.root.findByProps({ className: "wizard-manual-list" });
-  assert.match(extractText(manualList), /网关模型/);
-  assert.match(extractText(manualList), /gateway-model-x/);
-  assert.match(extractText(manualList), /手动/);
-  assert.equal(renderer.root.findAllByProps({ className: "provider-manual-form" }).length, 0, "the form folds away after adding");
+  await act(async () => {
+    renderer.root.findByProps({ id: "wizard-manual-model" }).props.onChange({ target: { value: "gateway-model-x" } });
+  });
   assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记 1 个模型/);
   assert.deepEqual(registered, []);
 
@@ -1394,34 +1440,38 @@ test("advanced manual entry: a model described by hand is registered with its fa
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
-  assert.deepEqual(registered, [{
-    facts: { contextWindow: 32000, thinkingEfforts: ["high", "max"] },
-    label: "网关模型",
-    model: "gateway-model-x",
-  }]);
+  assert.deepEqual(registered, [{ model: "gateway-model-x" }]);
   assert.equal(listingCalled, false);
-  assert.match(extractText(renderer.root.findByProps({ className: "wizard-alert wizard-alert-success" })), /登记 1 个模型/);
+  assert.match(extractText(successNode(renderer)), /登记 1 个模型/);
 });
 
-test("advanced: a manual entry can be removed again before connecting", async () => {
-  const renderer = await mountAdvanced(createMockClient());
-  await act(async () => {
-    renderer.root.findByProps({ className: "provider-add-model-toggle" }).props.onClick();
+test("success clears the form and Done offers Add another provider instead of a second submit", async () => {
+  let creates = 0;
+  const client = createMockClient({
+    createProvider: async (body: any) => {
+      creates += 1;
+      return { ...existingDeepSeekProvider, id: `created-${creates}`, name: body.name } as ModelProvider;
+    },
   });
-  const manualId = renderer.root.findByProps({ className: "provider-manual-form" }).findAllByType("input")
-    .find((input) => input.props.placeholder === "服务商文档中的精确 ID")!;
+  const renderer = await mountAdvanced(client);
   await act(async () => {
-    manualId.props.onChange({ target: { value: "to-be-removed" } });
+    await renderer.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.onClick();
   });
   await act(async () => {
-    renderer.root.findByProps({ className: "secondary-button provider-manual-submit" }).props.onClick();
+    renderer.root.findByProps({ id: "wizard-manual-model" }).props.onChange({ target: { value: "one-model" } });
   });
-  assert.equal(renderer.root.findAllByProps({ className: "wizard-manual-item" }).length, 1);
+  await acceptProbeCost(renderer!);
   await act(async () => {
-    renderer.root.findByProps({ className: "danger-button compact-button wizard-manual-remove" }).props.onClick();
+    await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
   });
-  assert.equal(renderer.root.findAllByProps({ className: "wizard-manual-item" }).length, 0);
-  assert.match(extractText(renderer.root.findByProps({ className: "wizard-plan-summary" })), /登记服务商返回的全部模型/);
+
+  const done = successNode(renderer);
+  assert.match(extractText(done), /服务商已添加/);
+  assert.equal(renderer.root.findAllByProps({ className: "primary-button wizard-submit-button" }).length, 0);
+  assert.equal(renderer.root.findAllByProps({ id: "wizard-api-key" }).length, 0);
+  await act(async () => { done.findByType("button").props.onClick(); });
+  assert.equal(renderer.root.findByProps({ id: "wizard-api-key" }).props.value, "");
+  assert.equal(creates, 1);
 });
 
 test("advanced: a failed preview is readable, keeps the card usable, and writes nothing", async () => {
@@ -1484,6 +1534,7 @@ test("advanced preset fields: protocol and variant overrides drive creation just
   });
   assert.equal(renderer.root.findByProps({ id: "wizard-api-variant" }).props.value, "responses");
 
+  await chooseAllListed(renderer);
   await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
@@ -1494,6 +1545,9 @@ test("advanced preset fields: protocol and variant overrides drive creation just
   assert.equal(createdProviderInput?.modelDiscovery, "openai-models");
 
   // Choosing another provider resets the overrides to that provider's facts.
+  await act(async () => {
+    successNode(renderer).findByType("button").props.onClick();
+  });
   await act(async () => {
     renderer.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: "anthropic" } });
   });
@@ -1537,8 +1591,12 @@ test("fetch model list lives in the card's main area, reachable without opening 
     await fetchButton.props.onClick();
   });
   assert.equal(previewCalled, true);
-  // The fetched table renders in the main area with every row ticked.
+  // The fetched table renders in the main area; selecting is an explicit tick.
   assert.ok(renderer!.root.findByProps({ className: "wizard-model-table" }));
+  assert.equal(renderer!.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, false);
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "登记全部列出的模型" }).props.onChange({ target: { checked: true } });
+  });
   assert.equal(renderer!.root.findByProps({ "aria-label": "listed-model-first" }).props.checked, true);
   assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
 });
@@ -1733,6 +1791,7 @@ test("a failed settings read after the probe rolls back the created provider and
   await act(async () => {
     renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-invalid-key" } });
   });
+  await chooseAllListed(renderer!);
   await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
@@ -1779,6 +1838,7 @@ test("the first model merges into the settings read at save time when no callbac
   await act(async () => {
     renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-deepseek-test-123" } });
   });
+  await chooseAllListed(renderer!);
   await acceptProbeCost(renderer!);
   await act(async () => {
     await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
@@ -1800,7 +1860,7 @@ for (const locale of ['en', 'zh-CN'] as const) for (const kind of ['valid', 'aut
   await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: locale }, createElement(ModelConnectWizard, { client, presets: MODEL_PROVIDER_PRESETS, onSuccess: () => { saved = true; } }))); });
   try {
     await act(async () => { renderer!.root.findByProps({ id: 'wizard-api-key' }).props.onChange({ target: { value: 'synthetic' } }); });
-    assert.equal(probes, 0); await acceptProbeCost(renderer!);
+    assert.equal(probes, 0); await chooseAllListed(renderer!, locale); await acceptProbeCost(renderer!);
     await act(async () => { renderer!.root.findByProps({ className: 'primary-button wizard-submit-button' }).props.onClick(); const end = Date.now()+2000; while (!saved && deleted.length < 2 && Date.now()<end) await new Promise(r => setTimeout(r,10)); });
     assert.equal(probes, 1);
     if (kind === 'auth' || kind === 'empty') { assert.equal(saved, false); assert.deepEqual(deleted, ['model','provider']); }
@@ -1809,9 +1869,399 @@ for (const locale of ['en', 'zh-CN'] as const) for (const kind of ['valid', 'aut
       const rendered = extractText(renderer!.toJSON());
       // A pass is announced as the qualified basic check it is, not as proof
       // the model can run tasks (issue #824).
-      assert.match(rendered, locale === 'en' ? /Basic connection check passed/ : /基础连接检查通过/);
+      assert.match(rendered, locale === 'en' ? /Provider added/ : /服务商已添加/);
       assert.match(rendered, locale === 'en' ? /does not verify the full session run path/ : /不验证完整会话执行路径/);
       assert.doesNotMatch(rendered, /Connected —|已成功连接/);
     }
   } finally { await act(async () => renderer!.unmount()); }
+});
+
+test("the wizard states before submit that the first model becomes the global default when none exists", async () => {
+  let enRenderer: ReactTestRenderer;
+  await act(async () => {
+    enRenderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client: createMockClient(),
+      presets: MODEL_PROVIDER_PRESETS,
+    })));
+  });
+  assert.match(extractText(enRenderer!.root), /first one becomes the global default task model/);
+
+  let zhRenderer: ReactTestRenderer;
+  await act(async () => {
+    zhRenderer = create(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ModelConnectWizard, {
+      client: createMockClient(),
+      presets: MODEL_PROVIDER_PRESETS,
+    })));
+  });
+  assert.match(extractText(zhRenderer!.root), /第一个登记的模型会成为全局默认任务模型/);
+});
+
+test("a pending preview disables fetch and submit but still offers the manual model ID fallback", async () => {
+  let resolvePreview!: (value: { fetchedAt: string; models: { id: string }[]; source: "remote" }) => void;
+  const pending = new Promise<{ fetchedAt: string; models: { id: string }[]; source: "remote" }>((resolve) => {
+    resolvePreview = resolve;
+  });
+  const client = createMockClient({ previewProviderModels: async () => pending });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      presets: MODEL_PROVIDER_PRESETS,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-pending" } });
+  });
+  await acceptProbeCost(renderer!);
+  // Wait past the debounce so the preview is genuinely in flight.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+
+  const fetchButton = renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
+  const submit = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  assert.equal(fetchButton.props.disabled, true);
+  assert.equal(submit.props.disabled, true);
+  assert.ok(renderer!.root.findByProps({ id: "wizard-manual-model" }), "the typed-ID fallback is visible before the listing arrives");
+
+  // Editing must not freeze while the debounced listing is in flight.
+  const keyInput = renderer!.root.findByProps({ id: "wizard-api-key" });
+  assert.equal(keyInput.props.disabled, false);
+  await act(async () => { keyInput.props.onChange({ target: { value: "sk-pending-more" } }); });
+  assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "sk-pending-more");
+
+  // The older request belongs to the older key; landing it must neither apply
+  // its listing nor clear the gate for the newer inputs.
+  await act(async () => {
+    resolvePreview({ fetchedAt: "2026-09-20T00:00:00.000Z", models: [{ id: "stale-listing" }], source: "remote" });
+    await pending;
+  });
+  assert.equal(extractText(renderer!.root).includes("stale-listing"), false);
+  assert.equal(renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.disabled, true);
+
+  // The request scheduled for the new key now runs (same resolved fixture).
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (!renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.disabled) break;
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+  }
+  const settledFetch = renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
+  assert.equal(settledFetch.props.disabled, false);
+  await acceptProbeCost(renderer!);
+  const settledSubmit = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  assert.equal(settledSubmit.props.disabled, false);
+  assert.match(extractText(renderer!.root), /stale-listing/);
+});
+
+test("same-name provider confirmation declines without writing and accepts exactly one create", async () => {
+  const previousWindow = globalThis.window;
+  const confirmations: string[] = [];
+  let answer = false;
+  globalThis.window = {
+    confirm: (message: string) => { confirmations.push(message); return answer; },
+  } as unknown as Window & typeof globalThis;
+  try {
+    let creates = 0;
+    const client = createMockClient({
+      createProvider: async (body: any) => {
+        creates += 1;
+        return { ...existingDeepSeekProvider, id: "created-duplicate-check", name: body.name } as ModelProvider;
+      },
+    });
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+        client,
+        presets: MODEL_PROVIDER_PRESETS,
+        providers: [existingDeepSeekProvider],
+      })));
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: "custom" } });
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "DeepSeek" } });
+      renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://127.0.0.1:1/v1" } });
+      renderer!.root.findByProps({ id: "wizard-custom-model" }).props.onChange({ target: { value: "dup-model" } });
+      renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-duplicate" } });
+    });
+    // Let the scheduled preview settle; the typed ID is the plan.
+    await act(async () => {
+      await renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.onClick();
+    });
+    await acceptProbeCost(renderer!);
+
+    await act(async () => {
+      await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+    });
+    assert.equal(confirmations.length, 1);
+    assert.match(confirmations[0]!, /DeepSeek/);
+    assert.equal(creates, 0, "declining the same-name warning writes nothing");
+
+    answer = true;
+    await act(async () => {
+      await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+    });
+    assert.equal(confirmations.length, 2);
+    assert.equal(creates, 1, "accepting the warning creates exactly one provider");
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
+test("a complete typed plan submits through a hanging preview and Done does not schedule another fetch", async () => {
+  let previewCalls = 0;
+  let creates = 0;
+  const hanging = new Promise<never>(() => undefined);
+  const client = createMockClient({
+    addProviderModel: async (providerId: string, body: any) => ({
+      apiProtocol: "openai-chat-completions",
+      apiVariant: "openai",
+      baseUrl: "http://127.0.0.1:1/v1",
+      id: `profile-${body.model}`,
+      model: body.model,
+      name: body.model,
+      providerId,
+      updatedAt: "revision-typed",
+    } as ModelProfile),
+    createProvider: async (body: any) => {
+      creates += 1;
+      return { ...existingDeepSeekProvider, id: "typed-provider", name: body.name } as ModelProvider;
+    },
+    previewProviderModels: async () => { previewCalls += 1; return hanging; },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      presets: MODEL_PROVIDER_PRESETS,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: "custom" } });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "Typed provider" } });
+    renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://127.0.0.1:1/v1" } });
+    renderer!.root.findByProps({ id: "wizard-custom-model" }).props.onChange({ target: { value: "typed-model" } });
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-typed" } });
+  });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+
+  // The hanging preview gates the fetch action but not the editable fields or
+  // the complete typed plan.
+  assert.equal(renderer!.root.findByProps({ id: "wizard-provider-select" }).props.disabled, false);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-custom-name" }).props.disabled, false);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-custom-url" }).props.disabled, false);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-custom-model" }).props.disabled, false);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.disabled, false);
+  assert.equal(renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.disabled, true);
+  await acceptProbeCost(renderer!);
+  const submit = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  assert.equal(submit.props.disabled, false);
+  await act(async () => { await submit.props.onClick(); });
+
+  assert.equal(creates, 1);
+  assert.equal(previewCalls, 1);
+  assert.match(extractText(successNode(renderer!)), /Provider added/);
+
+  // Done must not schedule a preview behind Add another provider.
+  await act(async () => { successNode(renderer!).findByType("button").props.onClick(); });
+  assert.equal(renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" }).props.disabled, false);
+  assert.equal(previewCalls, 1);
+});
+
+test("an endpoint change clears old ticks and a failed new preview cannot register them", async () => {
+  let previewCalls = 0;
+  let creates = 0;
+  const client = createMockClient({
+    createProvider: async (body: any) => {
+      creates += 1;
+      return { ...existingDeepSeekProvider, id: "endpoint-provider", name: body.name } as ModelProvider;
+    },
+    previewProviderModels: async () => {
+      previewCalls += 1;
+      if (previewCalls === 1) {
+        return { fetchedAt: "2026-09-20T00:00:00.000Z", models: [{ id: "old-endpoint-model" }], source: "remote" as const };
+      }
+      throw new Error("new endpoint listing failed");
+    },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      presets: MODEL_PROVIDER_PRESETS,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-endpoint" } });
+  });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+  const oldModel = renderer!.root.findByProps({ "aria-label": "old-endpoint-model" });
+  await act(async () => { oldModel.props.onChange({ target: { checked: true } }); });
+  assert.match(extractText(renderer!.root.findByProps({ className: "wizard-plan-summary" })), /1 model/);
+
+  await act(async () => {
+    renderer!.root.findAllByType("button").find((button) => extractText(button) === "Advanced provider settings")!.props.onClick();
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-base-url-override" }).props.onChange({ target: { value: "https://new.example.test/v1" } });
+  });
+  assert.equal(renderer!.root.findAllByProps({ "aria-label": "old-endpoint-model" }).length, 0, "old ticks disappear with the endpoint");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+  assert.match(extractText(renderer!.root), /new endpoint listing failed/);
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+  assert.equal(creates, 0, "the failed new endpoint cannot submit the old listing");
+  assert.equal(previewCalls, 2);
+});
+
+test("API-key edits keep the same-endpoint listing and ticks while the refresh is pending", async () => {
+  let previewCalls = 0;
+  const client = createMockClient({
+    previewProviderModels: async () => {
+      previewCalls += 1;
+      return { fetchedAt: "2026-09-20T00:00:00.000Z", models: [{ id: "same-endpoint-model" }], source: "remote" as const };
+    },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      presets: MODEL_PROVIDER_PRESETS,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-same" } });
+  });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "same-endpoint-model" }).props.onChange({ target: { checked: true } });
+  });
+
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-same-updated" } });
+  });
+  // The refresh is now pending, but the same endpoint's listing and tick stay.
+  assert.equal(renderer!.root.findByProps({ "aria-label": "same-endpoint-model" }).props.checked, true);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+  assert.equal(renderer!.root.findByProps({ "aria-label": "same-endpoint-model" }).props.checked, true);
+  assert.equal(previewCalls, 2);
+});
+
+test("editing a custom provider name keeps the settled listing and tick", async () => {
+  let previewCalls = 0;
+  let creates = 0;
+  const registered: string[] = [];
+  const client = createMockClient({
+    addProviderModel: async (providerId: string, body: any) => {
+      registered.push(body.model);
+      return {
+        apiProtocol: "openai-chat-completions",
+        apiVariant: "openai",
+        baseUrl: "http://127.0.0.1:1/v1",
+        id: "profile-custom-listed",
+        model: body.model,
+        name: body.model,
+        providerId,
+        updatedAt: "revision-custom-name",
+      } as ModelProfile;
+    },
+    createProvider: async (body: any) => {
+      creates += 1;
+      return { ...existingDeepSeekProvider, id: "renamed-provider", name: body.name } as ModelProvider;
+    },
+    previewProviderModels: async () => {
+      previewCalls += 1;
+      return { fetchedAt: "2026-09-20T00:00:00.000Z", models: [{ id: "custom-listed" }], source: "remote" as const };
+    },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      presets: MODEL_PROVIDER_PRESETS,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: "custom" } });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "Custom before rename" } });
+    renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://127.0.0.1:1/v1" } });
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-custom-name" } });
+  });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "custom-listed" }).props.onChange({ target: { checked: true } });
+  });
+  assert.equal(previewCalls, 1);
+
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "Renamed provider" } });
+  });
+  // The name is not an endpoint attribute: the old listing and tick survive
+  // and no refetch is scheduled.
+  assert.equal(renderer!.root.findByProps({ "aria-label": "custom-listed" }).props.checked, true);
+  assert.equal(previewCalls, 1);
+  assert.match(extractText(renderer!.root.findByProps({ className: "wizard-plan-summary" })), /1 model/);
+
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+  assert.equal(creates, 1);
+  assert.deepEqual(registered, ["custom-listed"]);
+  assert.match(extractText(successNode(renderer!)), /Provider added/);
+});
+
+test("after a preview failure a typed model ID creates one provider with that model", async () => {
+  let creates = 0;
+  const registered: string[] = [];
+  const client = createMockClient({
+    addProviderModel: async (providerId: string, body: any) => {
+      registered.push(body.model);
+      return {
+        apiProtocol: "openai-chat-completions",
+        apiVariant: "openai",
+        baseUrl: "http://127.0.0.1:1/v1",
+        id: "profile-typed-fallback",
+        model: body.model,
+        name: body.model,
+        providerId,
+        updatedAt: "revision-typed-fallback",
+      } as ModelProfile;
+    },
+    createProvider: async (body: any) => {
+      creates += 1;
+      return { ...existingDeepSeekProvider, id: "fallback-provider", name: body.name } as ModelProvider;
+    },
+    previewProviderModels: async () => { throw new Error("listing unavailable"); },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      presets: MODEL_PROVIDER_PRESETS,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-provider-select" }).props.onChange({ target: { value: "custom" } });
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-name" }).props.onChange({ target: { value: "Fallback provider" } });
+    renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://127.0.0.1:1/v1" } });
+    renderer!.root.findByProps({ id: "wizard-custom-model" }).props.onChange({ target: { value: "typed-after-failure" } });
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "sk-fallback" } });
+  });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+  assert.match(extractText(renderer!.root), /listing unavailable/);
+
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+  assert.equal(creates, 1);
+  assert.deepEqual(registered, ["typed-after-failure"]);
+  assert.match(extractText(successNode(renderer!)), /Registered 1 model/);
 });

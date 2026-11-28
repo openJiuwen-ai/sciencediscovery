@@ -14,7 +14,7 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { expect, type Route } from "@playwright/test";
+import { expect, type Locator, type Route } from "@playwright/test";
 
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import { test } from "./helpers/e2e.ts";
@@ -30,26 +30,26 @@ test.use({ locale: "zh-CN", viewport: { width: 1280, height: 720 } });
 /**
  * E2E-META
  * Purpose: 模型连接（GitCode #92 / GitHub #39）：用户视角全流程覆盖
- *   - 连接模型是唯一新建入口：注册表不再有独立的「添加 Provider」面板，空态下连接卡片默认展开；
- *   - 成功路径：通过向导配置模型并测通，自动登记该服务商模型列表的全部模型；系统里还没有模型时第一个设为全局默认任务模型；
+ *   - 添加服务商是唯一新建入口：注册表没有独立的「添加 Provider」面板，空态下向导默认展开；
+ *   - 成功路径：列表可见后显式勾选模型并测通，只登记所选；系统里还没有模型时第一个设为全局默认任务模型；
  *   - 失败路径：坏 Key 鉴权失败可读报错、输入保留、临时对象回滚、不污染全局默认值；
  *   - 保护既有配置：已有 Provider 在向导中遇到坏 Key 时不被覆盖；
- *   - 主区手选：不开高级配置即可获取模型列表（预览接口，不落库），默认全勾即一键全加，去勾后只登记所选；
- *   - 高级配置手填：卡片内用与注册表行相同的手动表单添加模型（含上下文等事实）再连接；
- *   - 注册表内有全局默认任务模型选择器，与「全局默认值 → 任务模型」读写同一设置项、显示同步；
- *   - 高级配置：在连接卡片内展开精细字段，不收起向导、不关系统设置，与「收起」/底栏关闭互不串；
- *   - 界面自检：「高级配置」单行完整显示，label 紧贴对应输入框。
+ *   - 主区手选：列表自动出现，未勾选即不登记；点「登记全部列出的模型」才全加，去勾后只登记所选；
+ *   - 手动回退：列表取不到时在卡片内填写精确模型 ID，不另开第二套手填表单；
+ *   - 注册表默认任务模型为只读值并提供「编辑」链接，真正可编辑的控件只在「全局默认值 → 任务模型」；
+ *   - 高级服务商设置：在向导内展开精细字段，不收起向导、不关系统设置，与「收起」/底栏关闭互不串；
+ *   - 界面自检：「高级服务商设置」单行完整显示，label 紧贴对应输入框。
  * Steps:
- *   1. 打开模型注册表：空态下连接模型默认展开，是唯一新建入口，无独立添加面板与常驻编辑器。
+ *   1. 打开模型注册表：空态下添加服务商默认展开，是唯一新建入口，无独立添加面板与常驻编辑器。
  *   2. 检查预置服务商联动、官方 Key 申请链接、计费提示，以及无推荐模型展示、按钮单行、label 贴近控件。
  *   3. 窄屏重新排版：在 390px 下滚动阅读费用同意说明与完整操作按钮，再返回笔记本视口继续配置。
  *   4. 失败路径：测试坏 Key，验证 401 鉴权失败可读提示、输入保留、临时对象回滚、默认模型未被修改。
- *   5. 成功路径与重复添加：模型标识留空测通后全量登记该服务商模型；系统首个模型才设全局默认；同一服务商改名换 Key 再连一次得到第二行且默认不变。
- *   6. 保护已有配置：对已有服务商填入坏 Key，本次新建整体回滚，两行已有 Provider 与 Token 未被破坏、默认模型未变。
- *   7. 主区手选：不开高级配置即可获取模型列表（预览不创建服务商）、两项默认全勾、去掉一个后「保存并连接」只登记所选，行显示已添加 1/2。
- *   8. 高级配置手填：「添加模型」展开手动表单，填 ID/名称/上下文后加入列表，「保存并连接」只登记该手填模型，事实随之保存。
- *   9. 注册表内改全局默认任务模型，与全局默认值页读写同一项、显示同步。
- *   10. 高级配置在卡片内展开精细字段：向导与系统设置都保持打开，服务商列表仍在；「收起」与底栏取消对照验证。
+ *   5. 成功路径与再次添加：列表可见后勾选全部并测通；系统首个模型才设全局默认；同一服务商改名换 Key 再连一次得到第二行且默认不变。
+ *   6. 保护已有配置：用不同名字与坏 Key 提交，本次新建整体回滚，已有 Provider 与 Token 未被破坏、默认模型未变。
+ *   7. 主区手选：列表默认未勾选，点「登记全部列出的模型」后去掉一个，「添加服务商」只登记所选，行显示已添加 1/2。
+ *   8. 手动回退：在列表下方填写精确模型 ID，「添加服务商」只登记该模型，行显示已添加 1/3。
+ *   9. 默认模型只有一个可编辑控件：注册表显示只读值，点「编辑」到全局默认值页修改并保存。
+ *   10. 高级服务商设置在向导内展开精细字段：向导与系统设置都保持打开，服务商列表仍在；「收起」与底栏取消对照验证。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir.
  * Type: mocked
  * LLM: none — 使用旅程自带的本地 HTTP stub，无外部调用。
@@ -63,7 +63,7 @@ test.use({ locale: "zh-CN", viewport: { width: 1280, height: 720 } });
 test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, async ({ journey, page }, testInfo) => {
   test.setTimeout(180_000);
   journey.scenario({
-    goal: "用户通过模型连接向导配置模型：验证直达链接、计费提示、坏 Key 友好报错与回滚、有效 Key 一键登记全部模型并在系统首个模型时设为全局默认、已有 Provider 凭据防覆盖保护，以及高级配置里获取列表手选模型、手填模型与卡内展开不串关闭路径。",
+    goal: "用户通过添加服务商向导配置模型：验证直达链接、计费提示、坏 Key 友好报错与回滚、列表出现后显式勾选并只登记所选、系统首个模型设为全局默认、已有 Provider 凭据防覆盖保护，以及高级服务商设置里手动模型 ID 回退与卡内展开不串关闭路径。",
     preconditions: [
       "隔离栈已启动，浏览器已持有访问令牌",
       "实例内没有任何模型：这条旅程断言「系统首个模型设为全局默认」，"
@@ -189,10 +189,23 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     return dialog;
   };
 
+  /** Fetch the listing and tick the explicit "register all listed models"
+   *  option. The listing now starts unselected; nothing is registered by
+   *  default. */
+  const registerAllListed = async (wizardSection: Locator) => {
+    const fetchButton = wizardSection.getByRole("button", { name: /获取模型列表|刷新模型列表/ });
+    await expect(fetchButton).toBeEnabled({ timeout: 10_000 });
+    await fetchButton.click();
+    const table = wizardSection.getByRole("table", { name: "服务商返回的模型" });
+    await expect(table).toBeVisible();
+    const selectAll = table.getByRole("checkbox", { name: "登记全部列出的模型" });
+    if (!await selectAll.isChecked()) await selectAll.check();
+  };
+
   try {
     await journey.step(
-      "打开模型注册表：空态下连接模型是唯一新建入口，无独立添加面板",
-      "系统设置中点击模型注册表；没有已配置服务商时连接模型卡片默认展开，作为唯一新建入口；注册表不再有独立的「添加 Provider」按钮、预置下拉或自定义表单，编辑器默认隐藏。",
+      "打开模型注册表：空态下添加服务商是唯一新建入口，无独立添加面板",
+      "系统设置中点击模型注册表；没有已配置服务商时添加服务商向导默认展开，作为唯一新建入口；注册表不再有独立的「添加 Provider」按钮、预置下拉或自定义表单，编辑器默认隐藏。",
       async () => {
         // 这条旅程从"空态"读起：连接卡片默认展开是首启路径，而后面那步断言
         // 「已设为全局默认任务模型」——产品只在 listModels() 为空时才这么做
@@ -208,20 +221,20 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         // 空态下向导默认展开（首启路径）；若已收起则点标题行开关展开
         let wizardSection = dialog.locator(".model-connect-wizard");
         if (!await wizardSection.count()) {
-          await dialog.getByRole("button", { name: /连接模型/ }).click();
+          await dialog.getByRole("button", { name: /添加服务商/ }).click();
         }
         wizardSection = dialog.locator(".model-connect-wizard");
         await expect(wizardSection).toBeVisible();
-        await expect(wizardSection.getByRole("heading", { name: "连接模型" })).toBeVisible();
+        await expect(wizardSection.getByRole("heading", { name: "添加服务商" })).toBeVisible();
 
-        // 新建入口已并入连接模型：不再有独立的添加 Provider 按钮、面板或常驻编辑器
+        // 新建入口已并入添加服务商向导：不再有独立的添加 Provider 按钮、面板或常驻编辑器
         await expect(dialog.getByRole("button", { name: /添加 Provider/ })).toHaveCount(0);
         await expect(dialog.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
 
         // 密度与非遮挡自检：默认打开无需滚动，服务商、Key、申请链接及主按钮完全在对话框可见区域内，不被底栏遮挡
         const keyInput = wizardSection.locator("#wizard-api-key");
         const submitBtn = wizardSection.locator(".wizard-submit-button");
-        const manualBtn = wizardSection.getByRole("button", { name: "高级配置" });
+        const manualBtn = wizardSection.getByRole("button", { name: "高级服务商设置" });
         await expect(keyInput).toBeVisible();
         await expect(submitBtn).toBeVisible();
         await expect(manualBtn).toBeVisible();
@@ -240,7 +253,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
 
     await journey.step(
       "检查预置服务商联动、官方 Key 申请链接、计费提示与面板排版",
-      "默认选中 DeepSeek，展示官方注册链接与计费说明；面板没有推荐模型展示，「高级配置」单行完整显示，每个 label 紧贴自己的输入框；切换至智谱后链接同步更新。",
+      "默认选中 DeepSeek，展示官方注册链接与计费说明；面板没有推荐模型展示，「高级服务商设置」单行完整显示，每个 label 紧贴自己的输入框；切换至智谱后链接同步更新。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
@@ -256,8 +269,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(wizardSection).not.toContainText("推荐模型");
         await expect(wizardSection.locator(".wizard-model-preview")).toHaveCount(0);
 
-        // 「高级配置」单行完整显示：高度保持单行，且内容没有被控件宽度裁切。
-        const manualBtn = wizardSection.getByRole("button", { name: "高级配置" });
+        // 「高级服务商设置」单行完整显示：高度保持单行，且内容没有被控件宽度裁切。
+        const manualBtn = wizardSection.getByRole("button", { name: "高级服务商设置" });
         const manualBox = await manualBtn.boundingBox();
         expect(manualBox).not.toBeNull();
         expect(manualBox!.height).toBeLessThanOrEqual(32);
@@ -282,7 +295,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
 
     await journey.step(
       "窄屏保留完整费用说明与可达操作",
-      "390px 下说明与按钮正常换行，可滚动阅读完整费用同意说明并访问保存与高级配置，页面不横向溢出。",
+      "390px 下说明与按钮正常换行，可滚动阅读完整费用同意说明并访问添加与高级服务商设置，页面不横向溢出。",
       async () => {
         await page.setViewportSize({ width: 390, height: 844 });
         await page.evaluate(() => document.fonts.ready);
@@ -308,8 +321,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await consent.locator("input").click({ trial: true });
         await revealForReading(".wizard-actions");
         await expect(wizardSection.locator(".wizard-submit-button")).toBeInViewport({ ratio: 1 });
-        await expect(wizardSection.getByRole("button", { name: "高级配置" })).toBeInViewport({ ratio: 1 });
-        await wizardSection.getByRole("button", { name: "高级配置" }).click({ trial: true });
+        await expect(wizardSection.getByRole("button", { name: "高级服务商设置" })).toBeInViewport({ ratio: 1 });
+        await wizardSection.getByRole("button", { name: "高级服务商设置" }).click({ trial: true });
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
       },
     );
@@ -341,7 +354,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await wizardSection.locator(".wizard-submit-button").click();
 
         // 验证可读错误提示
-        const errorAlert = wizardSection.locator(".wizard-alert-error");
+        const errorAlert = wizardSection.locator(".wizard-alert-error").filter({ hasText: "鉴权失败" });
         await expect(errorAlert).toBeVisible();
         await expect(errorAlert).toContainText("鉴权失败 (401)");
         await expect(errorAlert).toContainText("API key is invalid or is not authorized");
@@ -368,8 +381,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     );
 
     await journey.step(
-      "成功路径与重复添加：全量登记模型，改名再连一次得到第二行且默认模型不变",
-      "清空模型标识、换填有效 Key 后提交，向导自动把该服务商模型列表的全部模型登记进来，列表第一项测通并（在系统首个模型时）写入全局默认任务模型；同一服务商换个名字再连一次，列表出现第二行且同样全量登记，但全局默认保持不变。",
+      "成功路径与再次添加：勾选全部模型，改名再连一次得到第二行且默认模型不变",
+      "清空模型标识、换填有效 Key，等列表出现后显式勾选全部并提交；列表第一项测通并（在系统首个模型时）写入全局默认任务模型；同一服务商换个名字再连一次，列表出现第二行且同样只登记勾选项，但全局默认保持不变。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
@@ -378,20 +391,21 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         // 模型标识留空：向导应登记该服务商模型列表的全部模型（stub 返回 alpha 与 omega 两项）
         await wizardSection.locator("#wizard-custom-model").fill("");
         await wizardSection.locator("#wizard-api-key").fill("valid-key-pass");
+        await registerAllListed(wizardSection);
         await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizardSection.locator(".wizard-submit-button").click();
 
-        // 验证成功提示：全量登记数量 + 设为默认（系统首个模型）
+        // 验证成功提示：勾选登记数量 + 设为默认（系统首个模型）
         const successAlert = wizardSection.locator(".wizard-alert-success");
         await expect(successAlert).toBeVisible();
-        await expect(successAlert).toContainText("基础连接检查通过");
+        await expect(successAlert).toContainText("服务商已添加");
         // issue #824: a pass is the basic check only, so the unqualified
         // "模型已连接" claim must not return.
         await expect(successAlert).not.toContainText("模型已连接");
         await expect(successAlert).toContainText("登记 2 个模型");
         await expect(successAlert).toContainText("已设为全局默认任务模型");
 
-        // 全量登记：该服务商行显示已添加 2/2
+        // 勾选全部：该服务商行显示已添加 2/2
         const firstRow = dialog.locator(".provider-row").filter({ hasText: "E2E 向导测试服务商" }).first();
         await expect(firstRow).toContainText("已添加 2/2");
 
@@ -412,17 +426,18 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         // 回到模型注册表；分组切换会重挂注册表视图，向导随之收起，需重新展开
         await navigation.getByRole("button", { name: /^模型注册表/ }).click();
 
-        // 同一服务商允许再加一次：改名字、换 Key，再「保存并连接」
+        // 同一服务商允许再加一次：改名字、换 Key，再「添加服务商」
         let wizardAgain = dialog.locator(".model-connect-wizard");
         if (!await wizardAgain.count()) {
-          await dialog.getByRole("button", { name: /连接模型/ }).click();
+          await dialog.getByRole("button", { name: /添加服务商/ }).click();
           wizardAgain = dialog.locator(".model-connect-wizard");
         }
         await wizardAgain.locator("#wizard-provider-select").selectOption("custom");
         await wizardAgain.locator("#wizard-custom-name").fill("E2E 向导测试服务商二号");
         await wizardAgain.locator("#wizard-custom-url").fill(stubBaseUrl);
-        // 模型标识留空：同样全量登记
+        // 模型标识留空：列表可见后显式勾选全部
         await wizardAgain.locator("#wizard-api-key").fill("valid-key-pass-2");
+        await registerAllListed(wizardAgain);
         await wizardAgain.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizardAgain.locator(".wizard-submit-button").click();
         const secondSuccess = wizardAgain.locator(".wizard-alert-success");
@@ -456,6 +471,9 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
+        // 上一步成功后流程已结束；显式开始下一个服务商。
+        const again = wizardSection.getByRole("button", { name: "再添加一个服务商" });
+        if (await again.isVisible()) await again.click();
 
         // 预设填进创建请求的原始值。这些断言原先只存在于 J7 的两步创建流程里，
         // 而创建已经并入连接卡片——路径换了，要守的性质没换：选了哪个厂商，
@@ -475,7 +493,18 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
           },
         ];
 
-        for (const preset of presets) {
+        // The preset endpoints are real vendor hosts. Keep the auto-fetch
+        // preview on this machine too; the typed model ID is the plan here.
+        const previewRoute = async (route: Route) => {
+          await route.fulfill({
+            body: JSON.stringify({ fetchedAt: new Date().toISOString(), models: [], source: "remote" }),
+            contentType: "application/json",
+            status: 200,
+          });
+        };
+        await page.route("**/api/providers/preview-models", previewRoute);
+        try {
+          for (const preset of presets) {
           let sentBody: Record<string, unknown> | undefined;
           // 捕获浏览器真正发出的 body，再把 baseUrl 改写到本地 stub 转发给 API：
           // 断言看到的是厂商原值，而服务端只会连 127.0.0.1。
@@ -503,9 +532,11 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
           try {
             await wizardSection.locator("#wizard-provider-select").selectOption(preset.id);
             await wizardSection.locator("#wizard-api-key").fill(preset.key);
+            await wizardSection.locator("#wizard-manual-model").fill(`preset-${preset.id}-model`);
             await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
             await wizardSection.locator(".wizard-submit-button").click();
             await expect(wizardSection.locator(".wizard-alert-success")).toBeVisible();
+            await wizardSection.getByRole("button", { name: "再添加一个服务商" }).click();
           } finally {
             await page.unroute("**/api/providers", presetRoute);
           }
@@ -520,6 +551,9 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
           });
           // 令牌只进请求，不回显到响应里。
           expect(sentBody).toMatchObject({ apiToken: preset.key });
+          }
+        } finally {
+          await page.unroute("**/api/providers/preview-models", previewRoute);
         }
       },
     );
@@ -533,13 +567,13 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
 
         // 向导若已收起则展开
         if (!await wizardSection.isVisible()) {
-          await dialog.getByRole("button", { name: /(连接模型|快速连接)/ }).click();
+          await dialog.getByRole("button", { name: /(添加服务商|连接模型|快速连接)/ }).click();
         }
 
         // 再次选择自定义服务商，输入相同的名称与端点，但填入坏 Key
         const select = wizardSection.locator("#wizard-provider-select");
         await select.selectOption("custom");
-        await wizardSection.locator("#wizard-custom-name").fill("E2E 向导测试服务商");
+        await wizardSection.locator("#wizard-custom-name").fill("E2E 向导测试服务商保护检查");
         await wizardSection.locator("#wizard-custom-url").fill(stubBaseUrl);
         await wizardSection.locator("#wizard-custom-model").fill("stub-model-1");
         await wizardSection.locator("#wizard-api-key").fill("bad-key-cannot-overwrite");
@@ -549,7 +583,7 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await wizardSection.locator(".wizard-submit-button").click();
 
         // 验证失败提示
-        await expect(wizardSection.locator(".wizard-alert-error")).toContainText("鉴权失败 (401)");
+        await expect(wizardSection.locator(".wizard-alert-error").filter({ hasText: "鉴权失败" })).toContainText("鉴权失败 (401)");
 
         // 验证两行已有服务商依然健康存在，失败的新建已整体回滚（不会多出一行）
         const res = await page.request.fetch(`${apiBaseUrl()}/api/providers`, {
@@ -570,8 +604,8 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
     );
 
     await journey.step(
-      "主区手选：不展开高级配置就能获取模型列表，只勾选其中一个再连接",
-      "连接卡片主区直接点「获取模型列表」（不必先点「高级配置」）：服务商返回的两个模型以复选框列出且默认全选（一键全加就是默认），此时后端没有新建任何服务商；去掉一个勾选后摘要变为只登记 1 个；「保存并连接」只登记所选那一个，服务商行显示已添加 1/2，全局默认不变，连接后计划清空。高级配置区仍承载服务商设置与手填模型。",
+      "主区手选：列表直接出现，未勾选不登记，只勾选其中一个再添加",
+      "连接卡片主区直接显示「获取模型列表」的结果：服务商返回的两个模型以复选框列出且默认未勾选，此时后端没有新建任何服务商；点「登记全部列出的模型」后摘要变为 2 个，去掉一个勾选后只登记 1 个；「添加服务商」只登记所选那一个，服务商行显示已添加 1/2，全局默认不变，成功后流程以 Done 结束。高级服务商设置区仍承载服务商精细字段。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
@@ -583,44 +617,48 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await wizardSection.locator("#wizard-custom-model").fill("");
         await wizardSection.locator("#wizard-api-key").fill("valid-key-pass-3");
 
-        // 主区即可获取：不点「高级配置」，高级区保持关闭
+        // 主区即可获取：不点「高级服务商设置」，高级区保持关闭
         await expect(wizardSection.locator(".wizard-advanced")).toHaveCount(0);
         const fetchRow = wizardSection.locator(".wizard-fetch-side");
         await expect(fetchRow).toBeVisible();
-        await expect(fetchRow.locator(".wizard-plan-summary")).toContainText("登记服务商返回的全部模型");
+        await expect(fetchRow.locator(".wizard-plan-summary")).toContainText("尚未选择模型");
 
         // 获取列表走预览接口：用卡片里未保存的端点与 Key，不创建服务商。
         const previewResponse = page.waitForResponse((response) =>
           response.request().method() === "POST" && new URL(response.url()).pathname === "/api/providers/preview-models");
-        await fetchRow.getByRole("button", { name: "获取模型列表" }).click();
+        await fetchRow.getByRole("button", { name: /获取模型列表|刷新模型列表/ }).click();
         expect((await previewResponse).status()).toBe(200);
         const table = wizardSection.getByRole("table", { name: "服务商返回的模型" });
         await expect(table).toBeVisible();
         const alpha = table.getByRole("checkbox", { name: "stub-model-alpha" });
         const omega = table.getByRole("checkbox", { name: "stub-model-omega" });
+        await expect(alpha).not.toBeChecked();
+        await expect(omega).not.toBeChecked();
+        const selectAll = table.getByRole("checkbox", { name: "登记全部列出的模型" });
+        await expect(selectAll).not.toBeChecked();
+        await selectAll.check();
         await expect(alpha).toBeChecked();
         await expect(omega).toBeChecked();
-        await expect(table.getByRole("checkbox", { name: "全选" })).toBeChecked();
+        await expect(selectAll).toBeChecked();
         await expect(table).toContainText("已选 2/2");
         await expect(fetchRow.locator(".wizard-plan-summary")).toContainText("登记 2 个模型");
-        await expect(fetchRow.getByRole("button", { name: "刷新列表" })).toBeVisible();
+        await expect(fetchRow.getByRole("button", { name: "刷新模型列表" })).toBeVisible();
         const beforeRes = await page.request.fetch(`${apiBaseUrl()}/api/providers`, { headers: authorizationHeader() });
         const before = (await beforeRes.json() as { providers: Array<{ name: string }> }).providers;
         expect(before.some((p) => p.name === "E2E 向导测试服务商三号")).toBe(false);
 
-        // 高级配置区仍在，承载服务商精细字段与手填模型
-        const advancedBtn = wizardSection.getByRole("button", { name: "高级配置" });
+        // 高级服务商设置区仍在，承载服务商精细字段
+        const advancedBtn = wizardSection.getByRole("button", { name: "高级服务商设置" });
         await advancedBtn.click();
         const advanced = wizardSection.locator(".wizard-advanced");
         await expect(advanced).toBeVisible();
         await expect(advanced.getByRole("heading", { name: "服务商设置" })).toBeVisible();
-        await expect(advanced.getByRole("heading", { name: "手动登记模型" })).toBeVisible();
         await advancedBtn.click();
         await expect(wizardSection.locator(".wizard-advanced")).toHaveCount(0);
 
         // 手选：去掉 omega，只留 alpha。
         await omega.uncheck();
-        await expect(table.getByRole("checkbox", { name: "全选" })).not.toBeChecked();
+        await expect(selectAll).not.toBeChecked();
         await expect(table).toContainText("已选 1/2");
         await expect(fetchRow.locator(".wizard-plan-summary")).toContainText("登记 1 个模型");
 
@@ -643,41 +681,31 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         const models = await modelsRes.json() as Array<{ model: string; providerId: string }>;
         expect(models.filter((m) => m.providerId === third!.id).map((m) => m.model)).toEqual(["stub-model-alpha"]);
 
-        // 连接后计划清空：列表表格消失，摘要回到「全部」。
+        // 成功后流程结束：表单与列表消失，只保留 Done 与「再添加一个服务商」。
         await expect(wizardSection.locator(".wizard-model-table")).toHaveCount(0);
-        await expect(fetchRow.locator(".wizard-plan-summary")).toContainText("登记服务商返回的全部模型");
+        await expect(wizardSection.getByRole("button", { name: "再添加一个服务商" })).toBeVisible();
       },
     );
 
     await journey.step(
-      "高级配置手填：手动添加一个模型再连接",
-      "同一卡片里点「添加模型」展开与注册表行相同的手动表单，填模型 ID、名称与上下文后「加入列表」；条目带「手动」标记等待登记；「保存并连接」只登记这一个手填模型，服务商行显示已添加 1/3（列表两项加手填一项），手填的上下文随模型保存。",
+      "手动回退：列表取不到时填写模型 ID 再连接",
+      "同一卡片里在模型列表下方填写精确模型 ID（列表不可用时的回退），「添加服务商」只登记这一个模型，服务商行显示已添加 1/3（列表两项加手填一项）。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
-        const advancedBtn = wizardSection.getByRole("button", { name: "高级配置" });
+        authValid = true;
+        // 上一步成功后流程已结束；显式开始下一个服务商。
+        const again = wizardSection.getByRole("button", { name: "再添加一个服务商" });
+        if (await again.isVisible()) await again.click();
+        const advancedBtn = wizardSection.getByRole("button", { name: "高级服务商设置" });
         if (await advancedBtn.getAttribute("aria-expanded") !== "true") await advancedBtn.click();
-        const advanced = wizardSection.locator(".wizard-advanced");
-        await expect(advanced).toBeVisible();
         await wizardSection.locator("#wizard-custom-name").fill("E2E 向导测试服务商四号");
+        await wizardSection.locator("#wizard-custom-url").fill(stubBaseUrl);
         await wizardSection.locator("#wizard-api-key").fill("valid-key-pass-4");
-
-        await advanced.locator(".provider-add-model-toggle").click();
-        const manualForm = advanced.locator(".provider-manual-form");
-        await expect(manualForm).toBeVisible();
-        await manualForm.getByLabel("手动模型 ID").fill("stub-model-manual");
-        await manualForm.getByLabel("模型名称（可选）").fill("手填模型");
-        await manualForm.getByLabel("上下文（可选）").fill("32000");
-        await manualForm.getByRole("button", { name: "加入列表" }).click();
-        const manualList = advanced.getByRole("list", { name: "手动添加的模型" });
-        await expect(manualList).toContainText("手填模型");
-        await expect(manualList).toContainText("stub-model-manual");
-        await expect(manualList).toContainText("手动");
-        await expect(advanced.locator(".provider-manual-form")).toHaveCount(0);
+        await wizardSection.locator("#wizard-custom-model").fill("stub-model-manual");
         await expect(wizardSection.locator(".wizard-fetch-side .wizard-plan-summary")).toContainText("登记 1 个模型");
 
         await wizardSection.getByRole("checkbox", { name: /我同意发送一次/ }).check();
-
         await wizardSection.locator(".wizard-submit-button").click();
         const success = wizardSection.locator(".wizard-alert-success");
         await expect(success).toBeVisible();
@@ -685,73 +713,72 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         const row = dialog.locator(".provider-row").filter({ hasText: "E2E 向导测试服务商四号" });
         await expect(row).toContainText("已添加 1/3");
 
-        // 手填的名称与上下文随模型登记。
+        // 手填的模型 ID 被登记。
         const modelsRes = await page.request.fetch(`${apiBaseUrl()}/api/models`, { headers: authorizationHeader() });
-        const models = await modelsRes.json() as Array<{ facts?: { contextWindow?: number }; model: string; name: string }>;
-        const manual = models.find((m) => m.model === "stub-model-manual");
-        expect(manual).toBeDefined();
-        expect(manual!.name).toContain("手填模型");
-        expect(manual!.facts?.contextWindow).toBe(32000);
+        const models = await modelsRes.json() as Array<{ model: string; name: string }>;
+        expect(models.some((m) => m.model === "stub-model-manual")).toBe(true);
       },
     );
 
     await journey.step(
-      "注册表内的全局默认任务模型选择器与全局默认值页读写同一设置项",
-      "模型注册表顶部出现「全局默认任务模型」选择器：显示当前默认（第一次连接的模型）；改成三号服务商的模型后，「全局默认值」页的任务模型显示同一个新值，两边背后是同一个设置项。",
+      "默认模型只有一个可编辑控件：注册表只读并链接到全局默认值",
+      "模型注册表顶部显示只读的当前默认模型，不再有第二个会立即写入的同字段选择器；点只读值旁的「编辑」切到全局默认值页，在那里修改任务模型并保存，返回注册表后只读值与 API 同步。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
 
-        // 注册表顶部就有全局默认任务模型选择器，显示当前默认
-        const registrySelect = dialog.locator("#registry-default-model");
-        await expect(registrySelect).toBeVisible();
-        const beforeValue = await registrySelect.inputValue();
-        expect(beforeValue).not.toBe("");
+        // The registry holds a read-only output, not an editable select.
+        const registryValue = dialog.locator("#registry-default-model");
+        await expect(registryValue).toBeVisible();
+        expect(await registryValue.evaluate((element) => element.tagName)).toBe("OUTPUT");
+        const beforeText = (await registryValue.textContent())?.trim();
+        expect(beforeText).toBeTruthy();
 
-        // 换一个：选择三号服务商登记的模型
+        // Its button moves to the one editable control.
         const modelsRes = await page.request.fetch(`${apiBaseUrl()}/api/models`, { headers: authorizationHeader() });
-        const allModels = await modelsRes.json() as Array<{ id: string; model: string; providerId: string }>;
+        const allModels = await modelsRes.json() as Array<{ id: string; model: string; name: string; providerId: string }>;
         const providersRes = await page.request.fetch(`${apiBaseUrl()}/api/providers`, { headers: authorizationHeader() });
         const third = (await providersRes.json() as { providers: Array<{ id: string; name: string }> }).providers
           .find((p) => p.name === "E2E 向导测试服务商三号");
         const target = allModels.find((m) => m.providerId === third!.id);
         expect(target).toBeDefined();
-        await registrySelect.selectOption(target!.id);
 
-        // API 层立即生效
-        const settingsRes = await page.request.fetch(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader() });
-        expect((await settingsRes.json() as { effective: { modelId?: string } }).effective.modelId).toBe(target!.id);
-
-        // 全局默认值页的任务模型显示同一个新值——同一个设置项
-        const navigation = dialog.getByRole("navigation", { name: "设置分组" });
-        await navigation.getByRole("button", { name: /^全局默认值/ }).click();
+        await dialog.locator(".registry-default-inline").getByRole("button", { name: "编辑", exact: true }).click();
         const taskModelSelect = dialog.getByLabel("任务模型", { exact: false });
         await expect(taskModelSelect).toBeVisible();
-        const globalPageValue = await taskModelSelect.inputValue();
-        expect(globalPageValue).toBe(target!.id);
+        await taskModelSelect.selectOption(target!.id);
+        // Global defaults is the one staged editor: Save commits its draft.
+        await dialog.locator(".system-config-footer").getByRole("button", { name: "保存", exact: true }).click();
 
-        // 回到注册表，选择器仍显示该值（两边显示同步）
+        // The write reached the same global setting.
+        await expect.poll(async () => {
+          const settingsRes = await page.request.fetch(`${apiBaseUrl()}/api/settings`, { headers: authorizationHeader() });
+          return (await settingsRes.json() as { effective: { modelId?: string } }).effective.modelId;
+        }).toBe(target!.id);
+
+        // Back in the registry, the read-only value shows the new model name.
+        const navigation = dialog.getByRole("navigation", { name: "设置分组" });
         await navigation.getByRole("button", { name: /^模型注册表/ }).click();
-        await expect(dialog.locator("#registry-default-model")).toHaveValue(target!.id);
+        await expect(dialog.locator("#registry-default-model")).toHaveText(target!.name);
       },
     );
 
     await journey.step(
-      "高级配置在卡片内展开精细设置：向导与系统设置都保持打开，服务商列表仍在",
-      "连接模型卡片上点「高级配置」不会收起或关闭任何东西：卡片仍在，并在卡片内展开基础 URL 等精细字段；系统设置对话框仍在「模型注册表」，已配置服务商列表可见。标题行「收起」才负责收起向导，底栏「取消并关闭」才关闭对话框，三者互不串。",
+      "高级服务商设置在向导内展开精细设置：向导与系统设置都保持打开，服务商列表仍在",
+      "添加服务商卡片上点「高级服务商设置」不会收起或关闭任何东西：卡片仍在，并在卡片内展开基础 URL 等精细字段；系统设置对话框仍在「模型注册表」，已配置服务商列表可见。标题行「收起添加服务商」才负责收起向导，底栏「取消并关闭」才关闭对话框，三者互不串。",
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         const wizardSection = dialog.locator(".model-connect-wizard");
 
         // 若向导已收起则先展开
         if (!await wizardSection.count()) {
-          await dialog.getByRole("button", { name: /连接模型/ }).click();
+          await dialog.getByRole("button", { name: /添加服务商/ }).click();
         }
 
-        // 自定义路径填一个新名称（无既有服务商匹配），确保「高级配置」处于展开
+        // 自定义路径填一个新名称（无既有服务商匹配），确保「高级服务商设置」处于展开
         await wizardSection.locator("#wizard-provider-select").selectOption("custom");
         await wizardSection.locator("#wizard-custom-name").fill(`高级配置展开检查 ${Date.now()}`);
         await wizardSection.locator("#wizard-custom-url").fill("");
-        const advancedBtn = wizardSection.getByRole("button", { name: "高级配置" });
+        const advancedBtn = wizardSection.getByRole("button", { name: "高级服务商设置" });
         if (await advancedBtn.getAttribute("aria-expanded") !== "true") await advancedBtn.click();
 
         // 关键回归：向导卡片仍在，高级字段在卡片内展开（自定义路径的协议/变种选择器）
@@ -781,12 +808,12 @@ test("模型连接成功、失败与配置保护全流程", { tag: "@mocked" }, 
         await expect(dialog.getByRole("button", { name: /添加 Provider/ })).toHaveCount(0);
 
         // 对照：标题行「收起」才负责收起向导
-        await dialog.getByRole("button", { name: "收起" }).click();
+        await dialog.getByRole("button", { name: "收起添加服务商" }).click();
         await expect(dialog.locator(".model-connect-wizard")).toHaveCount(0);
         await expect(dialog).toBeVisible();
 
         // 再展开后，底栏「取消并关闭」才关闭对话框
-        await dialog.getByRole("button", { name: /连接模型/ }).click();
+        await dialog.getByRole("button", { name: "添加服务商", exact: true }).click();
         await expect(dialog.locator(".model-connect-wizard")).toBeVisible();
         await dialog.locator(".system-config-footer").getByRole("button", { name: "取消并关闭" }).click();
         await expect(dialog).toBeHidden();

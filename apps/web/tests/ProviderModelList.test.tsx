@@ -288,12 +288,12 @@ test("the registry opens as a read-only list: no add-provider entry, no resident
   assert.match(html, /aria-expanded="false"/);
   assert.match(html, /1 added/);
   assert.match(html, /Data source: models\.dev/);
-  // The wizard toggle is the only creation entry.
-  assert.match(html, /Connect model/);
+  // The wizard toggle is the only provider-creation entry.
+  assert.match(html, /Add provider/);
 
   const chinese = renderSettings("zh-CN");
   assert.doesNotMatch(chinese, /添加 Provider/);
-  assert.match(chinese, /连接模型/);
+  assert.match(chinese, /添加服务商/);
   assert.match(chinese, /已添加 1/);
   assert.match(chinese, /数据来源：models\.dev/);
   assert.doesNotMatch(chinese, /provider-editor/);
@@ -308,7 +308,7 @@ test("the same model follows the current provider preset's price", () => {
       addedProfiles: [glmProfile(`m-${presetId}`, presetId)],
       busy: false,
       expanded: true,
-      onAddModel: () => Promise.resolve(true),
+      onAddModels: async () => ({ added: [], failed: 0 }),
       onDeleteModel: () => Promise.resolve(true),
       onEdit: () => undefined,
       onRefresh: () => undefined,
@@ -342,7 +342,7 @@ test("manual provider with an empty listing still shows the added model row, nev
         list: { fetchedAt: "2026-08-27T00:00:00.000Z", models: [], providerId: "p1", source: "catalog" },
         loading: false,
       },
-      onAddModel: () => Promise.resolve(true),
+      onAddModels: async () => ({ added: [], failed: 0 }),
       onDeleteModel: () => Promise.resolve(true),
       onEdit: () => undefined,
       onRefresh: () => undefined,
@@ -375,7 +375,7 @@ test("manual provider with an empty listing still shows the added model row, nev
         list: { fetchedAt: "2026-08-27T00:00:00.000Z", models: [], providerId: "p1", source: "catalog" },
         loading: false,
       },
-      onAddModel: () => Promise.resolve(true),
+      onAddModels: async () => ({ added: [], failed: 0 }),
       onDeleteModel: () => Promise.resolve(true),
       onEdit: () => undefined,
       onRefresh: () => undefined,
@@ -384,10 +384,10 @@ test("manual provider with an empty listing still shows the added model row, nev
       testModel: () => Promise.reject(new Error("not under test")),
     }),
   ));
-  assert.match(chinese, /服务商未返回模型。请手动添加精确模型 ID。/);
+  assert.match(chinese, /服务商未返回模型。请手动填写精确模型 ID。/);
 });
 
-test("provider table actions are add for discovered models and delete for added profiles", () => {
+test("each provider has one Add model entry, and added profiles still offer Delete", () => {
   const p = provider("p1", "DeepSeek（测试中转）");
   const render = (addedProfiles: ModelProfile[], listing: ProviderModelEntry[]) => renderToStaticMarkup(createElement(
     LocaleProvider,
@@ -400,7 +400,7 @@ test("provider table actions are add for discovered models and delete for added 
         list: { fetchedAt: "2026-08-27T00:00:00.000Z", models: listing, providerId: "p1", source: "catalog" },
         loading: false,
       },
-      onAddModel: () => Promise.resolve(true),
+      onAddModels: async () => ({ added: [], failed: 0 }),
       onDeleteModel: () => Promise.resolve(true),
       onEdit: () => undefined,
       onRefresh: () => undefined,
@@ -411,7 +411,8 @@ test("provider table actions are add for discovered models and delete for added 
   ));
 
   const unadded = render([], [{ displayName: "DeepSeek V4 Flash", id: "deepseek-v4-flash" }]);
-  assert.match(unadded, />Add model<\/button>/);
+  // The listing row itself has no per-row Add; registration has one entry.
+  assert.equal((unadded.match(/>Add model<\/button>/g) ?? []).length, 1);
   assert.doesNotMatch(unadded, />Delete<\/button>/);
 
   const added = render([
@@ -466,7 +467,7 @@ test("wizard 高级配置在卡片内展开精细字段：向导与服务商列�
   assert.equal(renderer!.root.findAllByProps({ className: "wizard-advanced" }).length, 0);
 
   const manualButton = renderer!.root.findAllByType("button")
-    .find((button) => extractText(button).includes("高级配置"));
+    .find((button) => extractText(button).includes("高级服务商设置"));
   assert.ok(manualButton, "advanced configuration button is rendered");
   await act(async () => {
     manualButton!.props.onClick();
@@ -483,9 +484,9 @@ test("wizard 高级配置在卡片内展开精细字段：向导与服务商列�
   assert.ok(!buttonTexts.some((text) => text.includes("添加 Provider")), "no add-provider entry");
 });
 
-test("注册表内的全局默认任务模型选择器与全局默认值页写同一设置项", async () => {
+test("the registry shows the default model read-only and links to the single editable control", async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-  let setTo: string | undefined | null = null;
+  let edits = 0;
   const client = {
     listProviderModels: async (providerId: string) => ({
       fetchedAt: "2026-09-20T00:00:00.000Z",
@@ -505,9 +506,7 @@ test("注册表内的全局默认任务模型选择器与全局默认值页写�
           client,
           defaultModelId: "m1",
           models: [profile("m1", "p1"), { ...profile("m2", "p1"), model: "deepseek-v4-pro", name: "工作 DeepSeek · DeepSeek V4 Pro" }],
-          onDefaultModelSet: async (modelId) => {
-            setTo = modelId;
-          },
+          onEditDefaultModel: () => { edits += 1; },
           onError: () => undefined,
           onModelsChange: () => undefined,
           onNotice: () => undefined,
@@ -519,32 +518,376 @@ test("注册表内的全局默认任务模型选择器与全局默认值页写�
     );
   });
 
-  // The selector mirrors the current global default and offers every profile.
-  const select = renderer!.root.findByProps({ id: "registry-default-model" });
-  assert.equal(select.props.value, "m1");
-  const optionValues = select.findAllByType("option").map((option) => option.props.value);
-  assert.deepEqual(optionValues, ["", "m1", "m2"]);
+  // The registry holds no second editable control for the same field.
+  const output = renderer!.root.findByProps({ id: "registry-default-model" });
+  assert.equal(output.type, "output");
+  assert.equal(extractText(output), "Model m1");
+  assert.equal(output.props.onChange, undefined);
+  assert.equal(renderer!.root.findAllByType("select").length, 0, "no registry select writes the global default");
 
-  // Changing it writes the same globalSettings.modelId the global page edits.
-  await act(async () => {
-    select.props.onChange({ target: { value: "m2" } });
-  });
-  assert.equal(setTo, "m2");
-
-  // Choosing 未配置 clears the same key (undefined), not a session-level pick.
-  await act(async () => {
-    select.props.onChange({ target: { value: "" } });
-  });
-  assert.equal(setTo, undefined);
+  // It sends the user to Global defaults → Task model instead.
+  const edit = renderer!.root.findAllByType("button")
+    .find((button) => extractText(button) === "编辑");
+  assert.ok(edit, "link to the canonical control is rendered");
+  await act(async () => { edit!.props.onClick(); });
+  assert.equal(edits, 1);
 });
 
-test("默认模型保存失败时把错误交给 onError，选中项保持不变", async () => {
+test("one Add model dialog stages a multi-model selection and submits it in one action", async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const calls: Array<{ providerId: string; models: string[] }> = [];
+  const p = provider("p1", "DeepSeek");
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(
+      createElement(
+        LocaleProvider,
+        { initialLocale: "en" },
+        createElement(ProviderRow, {
+          addedProfiles: [],
+          busy: false,
+          expanded: true,
+          listing: {
+            list: {
+              fetchedAt: "2026-08-27T00:00:00.000Z",
+              models: [{ id: "listed-a" }, { id: "listed-b" }],
+              providerId: "p1",
+              source: "catalog",
+            },
+            loading: false,
+          },
+          onAddModels: async (providerId, requests) => {
+            calls.push({ providerId, models: requests.map((request) => request.model) });
+            return {
+              added: requests.map((request) => ({ id: `profile-${request.model}`, model: request.model }) as ModelProfile),
+              failed: 0,
+            };
+          },
+          onDeleteModel: async () => true,
+          onEdit: () => undefined,
+          onRefresh: () => undefined,
+          onToggle: () => undefined,
+          provider: p,
+          testModel: () => Promise.reject(new Error("not under test")),
+        }),
+      ),
+    );
+  });
+
+  const addButton = renderer!.root.findAllByType("button")
+    .find((button) => extractText(button) === "Add model");
+  assert.ok(addButton, "the row exposes the single Add model entry");
+  await act(async () => { addButton!.props.onClick(); });
+
+  const dialog = renderer!.root.findByType("dialog");
+  assert.match(extractText(dialog), /Add models to DeepSeek/);
+  assert.equal(renderer!.root.findByProps({ "aria-label": "listed-a" }).props.checked, false);
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "Register all listed models" }).props.onChange({ target: { checked: true } });
+  });
+  const submit = dialog.findAllByType("button").find((button) => extractText(button) === "Add selected models");
+  assert.ok(submit);
+  assert.deepEqual(calls, [], "staging writes nothing before the dialog's submit");
+  await act(async () => { await submit!.props.onClick(); });
+
+  assert.deepEqual(calls, [{ providerId: "p1", models: ["listed-a", "listed-b"] }]);
+  assert.equal(renderer!.root.findAllByType("dialog").length, 0, "the dialog closes after the single submit");
+});
+
+test("collapsing a provider row with a dirty draft asks immediately and only then discards it", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const previousWindow = globalThis.window;
+  const confirmations: string[] = [];
+  let answer = false;
+  globalThis.window = {
+    confirm: (message: string) => { confirmations.push(message); return answer; },
+  } as unknown as Window & typeof globalThis;
+  try {
+    const client = {
+      listProviderModels: async (providerId: string) => ({
+        fetchedAt: "2026-09-20T00:00:00.000Z",
+        models: [],
+        providerId,
+        source: "remote" as const,
+      }),
+    } as unknown as SettingsApiClient;
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        createElement(
+          LocaleProvider,
+          { initialLocale: "en" },
+          createElement(ProviderModelSettings, {
+            client,
+            models: [],
+            onError: () => undefined,
+            onModelsChange: () => undefined,
+            onNotice: () => undefined,
+            onProvidersChange: () => undefined,
+            presets: PRESETS,
+            providers: [provider("p1", "DeepSeek")],
+          }),
+        ),
+      );
+    });
+
+    const row = renderer!.root.findByProps({ className: "provider-row" });
+    await act(async () => { row.findByProps({ className: "provider-row-summary" }).props.onClick(); });
+    await act(async () => {
+      renderer!.root.findAllByType("button").find((button) => extractText(button) === "Edit")!.props.onClick();
+    });
+    assert.equal(renderer!.root.findAllByProps({ className: "provider-editor" }).length, 1);
+    const nameInput = renderer!.root.findAllByType("label")
+      .find((label) => extractText(label).includes("Provider name"))!.findByType("input");
+    await act(async () => { nameInput.props.onChange({ target: { value: "DeepSeek edited" } }); });
+
+    // The prompt appears while the editor is still visible, not later at close.
+    await act(async () => { row.findByProps({ className: "provider-row-summary" }).props.onClick(); });
+    assert.equal(confirmations.length, 1);
+    assert.equal(renderer!.root.findAllByProps({ className: "provider-editor" }).length, 1, "cancel keeps the draft open");
+
+    answer = true;
+    await act(async () => { row.findByProps({ className: "provider-row-summary" }).props.onClick(); });
+    assert.equal(confirmations.length, 2);
+    assert.equal(renderer!.root.findAllByProps({ className: "provider-row-detail" }).length, 0);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
+function listing(models: ProviderModelEntry[]): {
+  list: { fetchedAt: string; models: ProviderModelEntry[]; providerId: string; source: "catalog" };
+  loading: boolean;
+} {
+  return {
+    list: { fetchedAt: "2026-08-27T00:00:00.000Z", models, providerId: "p1", source: "catalog" },
+    loading: false,
+  };
+}
+
+function rowElement(
+  models: ProviderModelEntry[],
+  onAddModels: (providerId: string, requests: import("@sciencediscovery/schema").CreateProviderModelRequest[]) => Promise<{ added: ModelProfile[]; failed: number }>,
+  providerValue = provider("p1", "DeepSeek"),
+  onRefresh: (providerId: string) => void = () => undefined,
+) {
+  return createElement(
+    LocaleProvider,
+    { initialLocale: "en" },
+    createElement(ProviderRow, {
+      addedProfiles: [],
+      busy: false,
+      expanded: true,
+      listing: listing(models),
+      onAddModels,
+      onDeleteModel: async () => true,
+      onEdit: () => undefined,
+      onRefresh,
+      onToggle: () => undefined,
+      provider: providerValue,
+      testModel: () => Promise.reject(new Error("not under test")),
+    }),
+  );
+}
+
+test("Add model dialog counts only visible ticks and never submits a zero-write selection", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const calls: string[][] = [];
+  const add = async (_providerId: string, requests: import("@sciencediscovery/schema").CreateProviderModelRequest[]) => {
+    calls.push(requests.map((request) => request.model));
+    return { added: requests.map((request) => ({ id: `profile-${request.model}`, model: request.model }) as ModelProfile), failed: 0 };
+  };
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(rowElement([{ id: "listed-a" }], add)); });
+  await act(async () => {
+    renderer!.root.findAllByType("button").find((button) => extractText(button) === "Add model")!.props.onClick();
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "listed-a" }).props.onChange({ target: { checked: true } });
+  });
+
+  // The listing now says the ticked model is registered by another client.
+  await act(async () => {
+    renderer!.update(rowElement([{ id: "listed-a", profileId: "profile-a" }], add));
+  });
+
+  assert.equal(renderer!.root.findAllByProps({ "aria-label": "listed-a" }).length, 0);
+  assert.match(extractText(renderer!.root.findByType("dialog")), /All listed models are already added/);
+  const submit = renderer!.root.findByType("dialog").findAllByType("button")
+    .find((button) => extractText(button) === "Add selected models")!;
+  assert.equal(submit.props.disabled, true);
+  await act(async () => { await submit.props.onClick(); });
+  assert.deepEqual(calls, [], "no request may be issued when no visible tick survives");
+});
+
+test("Add model dialog reports a partial result and keeps only the failed rows selected", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  let calls = 0;
+  const add = async (_providerId: string, requests: import("@sciencediscovery/schema").CreateProviderModelRequest[]) => {
+    calls += 1;
+    const first = requests[0]!;
+    return { added: [{ id: "profile-a", model: first.model } as ModelProfile], failed: requests.length - 1 };
+  };
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(rowElement([{ id: "listed-a" }, { id: "listed-b" }], add)); });
+  await act(async () => {
+    renderer!.root.findAllByType("button").find((button) => extractText(button) === "Add model")!.props.onClick();
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "Register all listed models" }).props.onChange({ target: { checked: true } });
+  });
+  await act(async () => {
+    await renderer!.root.findByType("dialog").findAllByType("button")
+      .find((button) => extractText(button) === "Add selected models")!.props.onClick();
+  });
+
+  // The parent marks the succeeded row with its profile id; the dialog keeps
+  // the failed tick and reports the partial outcome.
+  await act(async () => {
+    renderer!.update(rowElement([{ id: "listed-a", profileId: "profile-a" }, { id: "listed-b" }], add));
+  });
+  const dialog = renderer!.root.findByType("dialog");
+  assert.equal(calls, 1);
+  assert.match(extractText(dialog), /Added 1 of 2 selected models/);
+  assert.equal(renderer!.root.findAllByProps({ "aria-label": "listed-a" }).length, 0, "the succeeded row is gone");
+  assert.equal(renderer!.root.findByProps({ "aria-label": "listed-b" }).props.checked, true, "only the failed row stays selected");
+  const submit = dialog.findAllByType("button").find((button) => extractText(button) === "Add selected models")!;
+  assert.equal(submit.props.disabled, false);
+
+  // Editing the remaining plan clears the stale "Added N of M" outcome.
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "listed-b" }).props.onChange({ target: { checked: false } });
+  });
+  assert.doesNotMatch(extractText(renderer!.root.findByType("dialog")), /Added 1 of 2/);
+});
+
+test("a dirty Add model dialog asks before discarding ticks or staged manual entries", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const previousWindow = globalThis.window;
+  const confirmations: string[] = [];
+  let answer = false;
+  globalThis.window = {
+    confirm: (message: string) => { confirmations.push(message); return answer; },
+  } as unknown as Window & typeof globalThis;
+  try {
+    let renderer: ReactTestRenderer;
+    const add = async () => ({ added: [], failed: 0 });
+    // Start with an empty listing so the manual fallback is open, stage one
+    // manual model, then add a listed tick as well.
+    await act(async () => { renderer = create(rowElement([], add)); });
+    await act(async () => {
+      renderer!.root.findAllByType("button").find((button) => extractText(button) === "Add model")!.props.onClick();
+    });
+    let dialog = renderer!.root.findByType("dialog");
+    const manualId = dialog.findAllByType("input").find((input) => input.props.placeholder === "Exact ID from provider documentation")!;
+    await act(async () => { manualId.props.onChange({ target: { value: "staged-model" } }); });
+    await act(async () => {
+      dialog.findAllByType("button").find((button) => extractText(button) === "Add to selection")!.props.onClick();
+    });
+    await act(async () => { renderer!.update(rowElement([{ id: "listed-a" }], add)); });
+    dialog = renderer!.root.findByType("dialog");
+    await act(async () => {
+      renderer!.root.findByProps({ "aria-label": "listed-a" }).props.onChange({ target: { checked: true } });
+    });
+
+    const cancel = dialog.findAllByType("button").find((button) => extractText(button) === "Cancel")!;
+    await act(async () => { cancel.props.onClick(); });
+    assert.equal(confirmations.length, 1);
+    assert.equal(renderer!.root.findAllByType("dialog").length, 1, "declining keeps the dialog and its draft");
+
+    answer = true;
+    await act(async () => { cancel.props.onClick(); });
+    assert.equal(confirmations.length, 2);
+    assert.equal(renderer!.root.findAllByType("dialog").length, 0);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
+function partialAdd(calls: string[]) {
+  return async (_providerId: string, requests: import("@sciencediscovery/schema").CreateProviderModelRequest[]) => {
+    calls.push(...requests.map((request) => request.model));
+    return {
+      added: [{ id: "profile-a", model: requests[0]!.model } as ModelProfile],
+      failed: requests.length - 1,
+    };
+  };
+}
+
+test("Add model partial result clears on refresh", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const calls: string[] = [];
+  const refreshes: string[] = [];
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(rowElement([{ id: "listed-a" }, { id: "listed-b" }], partialAdd(calls), provider("p1", "DeepSeek"), (id) => refreshes.push(id)));
+  });
+  await act(async () => {
+    renderer!.root.findAllByType("button").find((button) => extractText(button) === "Add model")!.props.onClick();
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "Register all listed models" }).props.onChange({ target: { checked: true } });
+  });
+  await act(async () => {
+    await renderer!.root.findByType("dialog").findAllByType("button")
+      .find((button) => extractText(button) === "Add selected models")!.props.onClick();
+  });
+  assert.match(extractText(renderer!.root.findByType("dialog")), /Added 1 of 2/);
+
+  await act(async () => {
+    renderer!.root.findByType("dialog").findAllByType("button")
+      .find((button) => extractText(button) === "Refresh model list")!.props.onClick();
+  });
+  assert.deepEqual(refreshes, ["p1"]);
+  assert.doesNotMatch(extractText(renderer!.root.findByType("dialog")), /Added 1 of 2/);
+});
+
+test("Add model partial result clears when the listing changes beyond the just-added row", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const calls: string[] = [];
+  const add = partialAdd(calls);
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(rowElement([{ id: "listed-a" }, { id: "listed-b" }], add)); });
+  await act(async () => {
+    renderer!.root.findAllByType("button").find((button) => extractText(button) === "Add model")!.props.onClick();
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "Register all listed models" }).props.onChange({ target: { checked: true } });
+  });
+  await act(async () => {
+    await renderer!.root.findByType("dialog").findAllByType("button")
+      .find((button) => extractText(button) === "Add selected models")!.props.onClick();
+  });
+  assert.match(extractText(renderer!.root.findByType("dialog")), /Added 1 of 2/);
+
+  // Removing only the just-added row keeps the outcome; adding another row
+  // means the listing no longer describes the plan the banner reported.
+  await act(async () => {
+    renderer!.update(rowElement([
+      { id: "listed-a", profileId: "profile-a" },
+      { id: "listed-b" },
+      { id: "listed-c" },
+    ], add));
+  });
+  assert.doesNotMatch(extractText(renderer!.root.findByType("dialog")), /Added 1 of 2/);
+});
+
+test("ProviderModelSettings reconciles a mixed add success and failure", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  const requests: string[] = [];
   const errors: unknown[] = [];
+  const modelChanges: ModelProfile[][] = [];
   const client = {
+    addProviderModel: async (providerId: string, body: import("@sciencediscovery/schema").CreateProviderModelRequest) => {
+      requests.push(body.model);
+      if (body.model === "listed-a") {
+        return { ...profile("m1", providerId), model: "listed-a", name: "Model A" };
+      }
+      throw new Error("second add failed");
+    },
     listProviderModels: async (providerId: string) => ({
       fetchedAt: "2026-09-20T00:00:00.000Z",
-      models: [],
+      models: [{ id: "listed-a" }, { id: "listed-b" }],
       providerId,
       source: "remote" as const,
     }),
@@ -555,14 +898,12 @@ test("默认模型保存失败时把错误交给 onError，选中项保持不变
     renderer = create(
       createElement(
         LocaleProvider,
-        { initialLocale: "zh-CN" },
+        { initialLocale: "en" },
         createElement(ProviderModelSettings, {
           client,
-          defaultModelId: "m1",
-          models: [profile("m1", "p1")],
-          onDefaultModelSet: async () => { throw new Error("settings 500"); },
+          models: [],
           onError: (reason) => { errors.push(reason); },
-          onModelsChange: () => undefined,
+          onModelsChange: (models) => { modelChanges.push(models); },
           onNotice: () => undefined,
           onProvidersChange: () => undefined,
           presets: PRESETS,
@@ -571,13 +912,26 @@ test("默认模型保存失败时把错误交给 onError，选中项保持不变
       ),
     );
   });
-
-  const select = renderer!.root.findByProps({ id: "registry-default-model" });
   await act(async () => {
-    select.props.onChange({ target: { value: "" } });
+    renderer!.root.findByProps({ className: "provider-row" }).findByProps({ className: "provider-row-summary" }).props.onClick();
+  });
+  await act(async () => {
+    renderer!.root.findAllByType("button").find((button) => extractText(button) === "Add model")!.props.onClick();
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "Register all listed models" }).props.onChange({ target: { checked: true } });
+  });
+  await act(async () => {
+    await renderer!.root.findByType("dialog").findAllByType("button")
+      .find((button) => extractText(button) === "Add selected models")!.props.onClick();
   });
 
+  assert.deepEqual(requests, ["listed-a", "listed-b"]);
   assert.equal(errors.length, 1);
-  assert.equal(errors[0] instanceof Error ? errors[0].message : errors[0], "settings 500");
-  assert.equal(renderer!.root.findByProps({ id: "registry-default-model" }).props.value, "m1");
+  assert.match(String(errors[0]), /second add failed/);
+  assert.equal(modelChanges.at(-1)?.length, 1);
+  assert.equal(modelChanges.at(-1)?.[0]?.model, "listed-a");
+  assert.match(extractText(renderer!.root.findByType("dialog")), /Added 1 of 2/);
+  assert.equal(renderer!.root.findAllByProps({ "aria-label": "listed-a" }).length, 0, "the succeeded listing row now carries its profile id");
+  assert.equal(renderer!.root.findByProps({ "aria-label": "listed-b" }).props.checked, true);
 });
