@@ -302,6 +302,13 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
   font-size: 11.5px;
 }
 .row-note.is-error { color: var(--danger); }
+/* A refused number keeps its text; the border says which field the note belongs
+   to, so the reason is not read as a comment about the row above. */
+.settings-row .field-input[aria-invalid="true"] { border-color: var(--danger); }
+/* The note is a second line of the field, not a second column beside it: let a
+   row that has one wrap its full-width input and its note. */
+.settings-section .settings-row .row-control:has(> .row-note) { flex-wrap: wrap; }
+.settings-section .settings-row .row-control > .row-note { flex: 0 0 100%; }
 .row-note.is-warn { color: var(--warning-strong, #745612); margin: 0 0 12px; }
 
 /* The mode pills and, when they cannot be pressed, the line that says why.
