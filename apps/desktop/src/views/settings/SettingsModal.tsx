@@ -67,8 +67,17 @@ export function SettingsModal({ children, closeDisabled = false, hint, label, on
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
-    document.addEventListener("keydown", trap);
-    return () => { document.removeEventListener("keydown", trap); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+    // Listening on `document` put this trap behind the settings panel's own
+    // trap, which listens on the panel element: the panel saw Tab first and its
+    // wrap won, so from the drawer's 确定 — also the panel's last control — Tab
+    // landed on the form behind the drawer instead of coming back to the drawer's
+    // first one. On the drawer itself this trap runs first, and the
+    // `preventDefault()` below is what the panel reads through
+    // `event.defaultPrevented` before it decides anything.
+    const node = surface.current;
+    if (!node) return;
+    node.addEventListener("keydown", trap);
+    return () => { node.removeEventListener("keydown", trap); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, [side]);
   // Re-registering on every new callback would move this dialog back on top of
   // a picker that opened after it, so the listener reads the current callback

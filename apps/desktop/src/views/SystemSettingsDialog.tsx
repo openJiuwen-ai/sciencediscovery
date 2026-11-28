@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { createSession, ensureInbox } from "../api/sessions.js";
 import type { ApiClient } from "../api/client.js";
@@ -121,6 +121,8 @@ export function SystemSettingsDialog({
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
   const [specialistSubpage, setSpecialistSubpage] = useState(false);
+  /** The panel the keyboard is kept inside; see the effect below. */
+  const panel = useRef<HTMLElement>(null);
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -145,6 +147,48 @@ export function SystemSettingsDialog({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
+
+  // The backdrop makes this surface modal for the pointer; until #1485 it was
+  // modal for the pointer only. The focus stayed on the rail's 设置, #1485
+  // measured 23 Tabs through the page the scrim was hiding and the 47th to
+  // `BODY` and round again. This is the rule 导入会话 and 我要反馈 already use:
+  // the panel takes the focus on open, Tab wraps at its two ends, and closing
+  // gives the focus back to the control that opened it — so a reader who opens
+  // 设置 with the keyboard stays inside it until Escape.
+  useEffect(() => {
+    const node = panel.current;
+    if (!node) return;
+    const previous = document.activeElement as HTMLElement | null;
+    node.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.defaultPrevented) return;
+      // 添加模型 and the two skill dialogs draw inside this panel and trap nothing;
+      // 新增专家 and 编辑专家 are pages of it (`specialist-subpage`), not dialogs.
+      // So this trap stays the one holding the boundary while any of them is open.
+      // The surfaces that do trap Tab — `McpModal`, and the capability drawer in
+      // the specialist form, whose listener sits on its own surface — handle the
+      // key before it reaches this listener and call `preventDefault()`, which the
+      // check above honours.
+      const items = Array.from(node.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]):not([hidden]), textarea:not([disabled]), select:not([disabled]), a[href], summary, [tabindex="0"]'))
+        .filter((item) => !item.matches(":disabled") && item.getClientRects().length > 0);
+      const first = items[0], last = items.at(-1);
+      if (!first || !last) { event.preventDefault(); node.focus(); return; }
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === node)) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === node)) {
+        event.preventDefault(); first.focus();
+      }
+    };
+    node.addEventListener("keydown", trap);
+    return () => {
+      node.removeEventListener("keydown", trap);
+      // The opener is the rail's 设置 button. 技能's 导入 and MCP's 试用 navigate
+      // away while this surface closes, and the rail stays mounted for both, so
+      // the focus does come back there — to a control that is still on screen,
+      // which is what this guard tests.
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
 
   const meta = TEXT.settings.system.groups[group];
 
@@ -247,7 +291,9 @@ export function SystemSettingsDialog({
         aria-label={TEXT.settings.system.title}
         aria-modal="true"
         className={`config-panel${navOpen ? "" : " is-nav-collapsed"}${group === "specialists" && specialistSubpage ? " is-specialist-subpage" : ""}`}
+        ref={panel}
         role="dialog"
+        tabIndex={-1}
       >
         <nav aria-label={TEXT.settings.system.navLabel} className="settings-group-nav">
           <div className="settings-nav-head">

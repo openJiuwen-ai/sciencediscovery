@@ -399,6 +399,11 @@
           "source": "apps/desktop/e2e/settings.spec.ts",
           "layer": "e2e",
           "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/e2e/settings-keyboard.spec.ts",
+          "layer": "e2e",
+          "complexity": "C3"
         }
       ]
     },
