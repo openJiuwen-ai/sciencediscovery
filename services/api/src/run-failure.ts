@@ -38,9 +38,10 @@ export function classifyRunFailure(error: unknown): RunFailureCode {
   // The provider answered; the model's own tool call could not be read. Checked first: the tool
   // names this message lists are arbitrary and may contain words the classes below look for.
   if (message.includes("model returned invalid tool arguments")) return "invalid-tool-call";
-  // The provider completed a turn with neither text nor a tool call. The gateway retries that
-  // transient shape within the turn; reaching the user means those retries were exhausted, so it
-  // is a model-service failure rather than the generic semantic-error catch-all.
+  // The provider completed a turn with neither text nor a tool call. Both executors replay that
+  // transient shape within the turn (the shared replay in `packages/model`); reaching the user
+  // means those retries were exhausted, so it is a model-service failure rather than the generic
+  // semantic-error catch-all.
   if (message.includes("empty terminal turn")) return "server-error";
   if (error instanceof Error && error.name === "TimeoutError") return "timeout";
   // The idle-stall wording ("Agent run stalled: no ... progress for N ms")

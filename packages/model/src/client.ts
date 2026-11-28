@@ -169,6 +169,10 @@ export class EmptyModelTurnError extends Error {
   constructor(readonly diagnostics?: ModelWireDiagnostics) {
     super(`Model returned an empty terminal turn (no text and no tool call)${wireSummary(diagnostics)}`);
     this.name = "EmptyModelTurnError";
+    // A caller that reports this failure (or a subclass such as the exhausted
+    // replay failure) must still be able to read the wire record it came with,
+    // including when the error was built from a turn instead of the transport.
+    if (diagnostics) wireDiagnosticsByError.set(this, diagnostics);
   }
 }
 
