@@ -39,6 +39,7 @@ import { resolve } from "node:path";
 import type { EvolveEvent, EvolveEventRecord, EvolveGoal, EvolveRun } from "@sciencediscovery/schema";
 
 import { EvolveUnavailableError } from "./availability.js";
+import { configureApiLogging } from "../logging.js";
 import { RunTokenRegistry } from "./llm-proxy.js";
 import { EvolveOrchestrator } from "./orchestrator.js";
 import { EvolveSidecarClient } from "./sidecar.js";
@@ -994,4 +995,56 @@ test("an interrupted PUCT run is not told it can resume", async () => {
   assert.equal(adopted?.failure?.code, "service_restart");
   assert.match(adopted!.error!, /PUCT cannot be resumed/);
   assert.doesNotMatch(adopted!.error!, /it can be resumed/);
+});
+
+// Publication skips used to be silent: a search that finished with nothing to
+// deliver looked exactly like a delivery bug, and the only symptom was a test
+// predicate timing out. Each skip now names its reason in the operational log.
+test("a finished search that publishes nothing names its reason in the log", async () => {
+  const logDir = temporaryDataDir("publish-seed-won-log");
+  cleanup(() => rm(logDir, { force: true, recursive: true }));
+  configureApiLogging(logDir);
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
+      { baselineScore: 0.5, codeHash: "sha256:seed", nodeIndex: 0, type: "seeded" },
+      { codeHash: "sha256:worse", depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.2, type: "expanded", valid: true },
+      FINISHED("succeeded", 0),
+    ],
+  });
+  cleanup(() => sidecar.close());
+  const published: string[] = [];
+  const { orchestrator, store } = await harness(sidecar.url, "publish-seed-won-log", {
+    publishResult: async ({ winnerCodeHash }) => { published.push(winnerCodeHash); },
+  });
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to finish");
+
+  assert.deepEqual(published, []);
+  const log = await readFile(resolve(logDir, "logs", "api.log"), "utf8");
+  assert.match(log, new RegExp(`event=evolve_publish_skipped bestNodeIndex=0 reason=seed_won runId=${run.id}`));
+});
+
+test("a budget stop logs that nothing was published", async () => {
+  const logDir = temporaryDataDir("publish-budget-log");
+  cleanup(() => rm(logDir, { force: true, recursive: true }));
+  configureApiLogging(logDir);
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
+      { cents: 1, tokens: 5_000, type: "cost" },
+    ],
+    holdUntilStop: true,
+  });
+  cleanup(() => sidecar.close());
+  const { orchestrator, store } = await harness(sidecar.url, "publish-budget-log", {
+    publishResult: async () => { throw new Error("a budget stop must not publish"); },
+  });
+
+  const run = await orchestrator.start({ goal: goal(6, { maxTokens: 4_000 }), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "budget_exhausted", "the token gate");
+
+  const log = await readFile(resolve(logDir, "logs", "api.log"), "utf8");
+  assert.match(log, new RegExp(`event=evolve_publish_skipped bestNodeIndex=1 reason=budget_exhausted runId=${run.id}`));
 });

@@ -897,6 +897,15 @@ export class EvolveOrchestrator {
     await this.store.finishRun(runId, status, failure);
     if (status === "succeeded" && bestNodeIndex !== undefined) {
       await this.publishWinner(runId, bestNodeIndex);
+    } else {
+      // A finished search that publishes nothing is ordinary for a budget stop
+      // or a search that named no result node. Name the reason here so a missing
+      // artifact is not later diagnosed from a bare, silent predicate timeout.
+      apiLog.info("evolve_publish_skipped", {
+        bestNodeIndex: bestNodeIndex ?? null,
+        reason: status === "succeeded" ? "no_result_node" : status,
+        runId,
+      });
     }
   }
 
@@ -911,7 +920,10 @@ export class EvolveOrchestrator {
     if (!this.options.publishResult) return;
     try {
       const run = await this.store.readRun(runId);
-      if (!run) return;
+      if (!run) {
+        apiLog.info("evolve_publish_skipped", { bestNodeIndex, reason: "run_read_miss", runId });
+        return;
+      }
       const records = await this.store.readEvents(runId);
       // The winning node's own source. `seeded` carries one too, and node 0
       // winning means nothing beat the seed — there is no result to save.
@@ -921,7 +933,18 @@ export class EvolveOrchestrator {
         if (candidate.type !== "expanded" || candidate.nodeIndex !== bestNodeIndex) continue;
         winnerCodeHash = candidate.codeHash;
       }
-      if (!winnerCodeHash) return;
+      if (!winnerCodeHash) {
+        // Node 0 winning is the seed winning: no candidate improved on it, so
+        // there is no result to save and publishing the seed as its own
+        // improvement would be a lie. A non-zero winner without its `expanded`
+        // record is a different, real miss.
+        apiLog.info("evolve_publish_skipped", {
+          bestNodeIndex,
+          reason: bestNodeIndex === 0 ? "seed_won" : "winner_source_missing",
+          runId,
+        });
+        return;
+      }
       await this.options.publishResult({ run, winnerCodeHash });
     } catch (error) {
       apiLog.warn("evolve_publish_result_failed", { reason: String(error), runId });

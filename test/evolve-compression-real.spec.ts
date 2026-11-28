@@ -11,7 +11,7 @@ import { measureSession } from "./helpers/case-measurements.ts";
 import { cleanupJourney, createProjectAndSession, openProjectSession } from "./helpers/journeys.ts";
 import { runTestCleanup } from "./helpers/test-failure.ts";
 import { drbApi, positiveNumber } from "./helpers/deepresearchbench.ts";
-import { evolutionScorecard } from "./helpers/evolve-result.mjs";
+import { deliveryOutcome, evolutionScorecard } from "./helpers/evolve-result.mjs";
 import { apiBaseUrl, authorizationHeader } from "./e2e-auth.js";
 import type { ModelApiVariant } from "@sciencediscovery/schema";
 import { THINKING_CONTROL_VARIANTS, THINKING_EFFORT_VARIANTS } from "../packages/schema/src/model-usage.ts";
@@ -24,11 +24,11 @@ function optionalModelSetting<T extends string>(value: string | undefined, name:
 
 /**
  * E2E-META
- * Purpose: Guard the documented PUCT text compression tutorial through real design, search and persisted delivery.
+ * Purpose: Guard the documented PUCT text compression tutorial through real design and search, recording whether the search published its result.
  * Steps:
  *   1. Read the tutorial prompt, create a session and choose PUCT in the browser.
  *   2. Confirm the evolution settings and submit the task; acknowledge any design checkpoints.
- *   3. Wait for the main Agent and actual background search to finish; read its persisted result.
+ *   3. Wait for the main Agent and actual background search to finish; read its terminal state and record the delivery outcome.
  *   4. Record the search's held-out score independently, without improvement or minimum-score assertions.
  * Environment: Linux Swarm stack with platform task delegation, bubblewrap, scientific Python and evolve sidecar.
  * Type: real
@@ -150,32 +150,42 @@ test("PUCT-COMPRESS documented text compression search", {
       || (search.status === "budget_exhausted" && eventStatus === "stopped");
     expect(completionMatchesPersistedState, "Completion event must agree with persisted search state").toBe(true);
 
-    // Match the actual selected code, not a fixed filename or an intermediate seed upload.
+    // Publication follows the product rule, not the case: finish() hands a winner
+    // over only for a succeeded search that names a result node, publishWinner()
+    // saves nothing when the seed staying best means there is no improvement, and
+    // a budget stop publishes nothing. Require the artifact only when the search
+    // actually had something to deliver, and record why delivery was skipped so
+    // the results artifact can tell "nothing to deliver" from "delivery missing".
     const bestIndex = finished?.event.bestNodeIndex;
-    const expectedHash = (bestIndex === 0 ? search.goal.baselineProgramCas
-      : events.findLast(record => record.event.type === "expanded" && record.event.nodeIndex === bestIndex)?.event.codeHash)?.replace(/^sha256:/, "");
-    expect(expectedHash, "Completed search identifies its result code").toBeTruthy();
-    let artifact: any;
-    let versions: any[] = [];
-    let latest: any;
-    await expect.poll(async () => {
-      const catalog = await api<any[]>(`${prefix}/artifacts`);
-      // Prefer the search's publication. If the seed stayed best, its original artifact is also valid delivery.
-      const candidates = catalog.filter(item => item.originMeta?.evolveRunId === search.id || bestIndex === 0)
-        .sort((a, b) => Number(b.originMeta?.evolveRunId === search.id) - Number(a.originMeta?.evolveRunId === search.id));
-      for (const item of candidates) {
-        const rows = await api<any[]>(`${prefix}/artifacts/${item.id}/versions`);
-        const version = rows.find(v => v.content?.hash === expectedHash);
-        if (version) { artifact = item; versions = rows; latest = version; return version.id; }
-      }
-      return undefined;
-    }, { timeout: 30_000, message: "Search result code must be persisted as an artifact" }).toBeTruthy();
-    const response = await page.request.get(`${apiBaseUrl()}${prefix}/artifact-versions/${latest.id}/content`, { headers });
-    expect(response.ok()).toBe(true);
-    const code = await response.text();
-    expect(code.trim().length).toBeGreaterThan(0);
-    await writeFile(info.outputPath("result.py"), code);
-    metrics.delivery = { artifact_id: artifact.id, version_id: latest.id, logical_name: artifact.logicalName, versions };
+    const delivery = deliveryOutcome(search, bestIndex);
+    metrics.search_status = search.status;
+    metrics.best_node_index = bestIndex ?? null;
+    if (!delivery.skipped) {
+      // Match the actual selected code, not a fixed filename or an intermediate seed upload.
+      const expectedHash = events.findLast(record => record.event.type === "expanded" && record.event.nodeIndex === bestIndex)
+        ?.event.codeHash?.replace(/^sha256:/, "");
+      expect(expectedHash, "Improving search identifies its result code").toBeTruthy();
+      let artifact: any;
+      let versions: any[] = [];
+      let latest: any;
+      await expect.poll(async () => {
+        const catalog = await api<any[]>(`${prefix}/artifacts`);
+        for (const item of catalog.filter(item => item.originMeta?.evolveRunId === search.id)) {
+          const rows = await api<any[]>(`${prefix}/artifacts/${item.id}/versions`);
+          const version = rows.find(v => v.content?.hash === expectedHash);
+          if (version) { artifact = item; versions = rows; latest = version; return version.id; }
+        }
+        return undefined;
+      }, { timeout: 30_000, message: "Search result code must be persisted as an artifact" }).toBeTruthy();
+      const response = await page.request.get(`${apiBaseUrl()}${prefix}/artifact-versions/${latest.id}/content`, { headers });
+      expect(response.ok()).toBe(true);
+      const code = await response.text();
+      expect(code.trim().length).toBeGreaterThan(0);
+      await writeFile(info.outputPath("result.py"), code);
+      metrics.delivery = { ...delivery, artifact_id: artifact.id, version_id: latest.id, logical_name: artifact.logicalName, versions };
+    } else {
+      metrics.delivery = delivery;
+    }
     metrics.integration_status = "passed";
     if (llmAudit) {
       await save("evolve-metrics.json", metrics);

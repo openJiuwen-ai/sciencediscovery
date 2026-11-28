@@ -521,6 +521,8 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     ["real-team/e2e/.hidden-case/team-metrics.json", {...metadata, case: "TC-E2E-01", integration: "timed_out",
       budget_ms: 55 * 60_000, budget_exceeded: true, cancel_requested: true, cancel_http_status: 202, evaluation: {status: "completed", total_score: 92, gating: false}}],
     ["evolve/e2e/test-results/evolve-case/evolve-metrics.json", {...metadata, case: "PUCT-COMPRESS",
+      search_status: "succeeded", best_node_index: 0,
+      delivery: {skipped: true, reason: "seed_won"},
       evaluation: {status: "completed", score: 0.61, baseline_gate_score: 0.55, best_gate_score: 0.63},
       llm_evaluation: {status: "error", total_score: null, gating: false}}],
     // Shared counts of a real case without its own metrics: plan identity and numbers only.
@@ -541,6 +543,10 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
       Object.assign(raw, privateFields, {measurements: {generation_output_tokens: 70006, total_tokens: 90006, tool_calls: 3}});
     } else if (path.endsWith("metrics.json")) {
       Object.assign(raw, privateFields);
+      // The delivery outcome survives the projection; the identifiers and proof
+      // text beside it stay in the evidence bundle.
+      raw.delivery = {...publicData.delivery, ...privateFields.delivery, detail: "PRIVATE_FIXTURE delivery detail",
+        artifact_id: "PRIVATE_FIXTURE artifact id", versions: [{content: "PRIVATE_FIXTURE result"}]};
       raw.evaluation.reason = "PRIVATE_FIXTURE judge output";
       raw.evaluation.judge_calls = [{response: "PRIVATE_FIXTURE response"}];
       if (raw.evaluation.race) raw.evaluation.race.report = "PRIVATE_FIXTURE article";
@@ -576,6 +582,12 @@ test("the real E2E packaging fixture excludes diagnostics from scores without re
     assert.deepEqual(JSON.parse(text), projected.get(path));
     assert.doesNotMatch(text, /PRIVATE_FIXTURE/);
   }
+  // The delivery outcome is what makes a missing artifact diagnosable without
+  // the evidence bundle; the identifiers and proof text next to it are not.
+  const evolveScore = JSON.parse(await readFile(join(scoreDirectory, "evolve/e2e/test-results/evolve-case/evolve-metrics.json"), "utf8"));
+  assert.equal(evolveScore.search_status, "succeeded");
+  assert.equal(evolveScore.best_node_index, 0);
+  assert.deepEqual(evolveScore.delivery, {skipped: true, reason: "seed_won"});
   for (const [path, bytes] of contents) assert.deepEqual(await readFile(join(evidenceDirectory, path)), bytes);
 });
 
@@ -617,6 +629,9 @@ for (const [name, review, expected] of [
       request: { token: "PRIVATE_FIXTURE credential" }, response: "PRIVATE_FIXTURE model response" };
     const scorecard = review ? { ...privateFields, evaluator: "PRIVATE_FIXTURE evaluator", ...review } : undefined;
     const metrics = { case: "PUCT-COMPRESS", integration_status: "passed", ...privateFields,
+      // Malformed outcome fields cannot reach the score artifact either.
+      search_status: "PRIVATE_FIXTURE status", best_node_index: -1,
+      delivery: {skipped: "PRIVATE_FIXTURE flag", reason: "PRIVATE_FIXTURE reason"},
       ...(scorecard ? { llm_evaluation: scorecard } : {}) };
     await mkdir(dirname(source), { recursive: true });
     await writeFile(source, JSON.stringify(metrics));
@@ -636,6 +651,10 @@ for (const [name, review, expected] of [
     assert.ok(!summary.includes(root), "do not expose local evidence paths");
     const staged = JSON.parse(await readFile(join(root, scoreUploadPath, relative), "utf8"));
     assert.equal(staged.integration_status, "passed", "judge outcome does not change delivery outcome");
+    assert.equal(staged.search_status, undefined);
+    assert.equal(staged.best_node_index, undefined);
+    assert.equal(staged.delivery, undefined);
+    assert.doesNotMatch(JSON.stringify(staged), /PRIVATE_FIXTURE/);
     if (review && typeof review.total_score !== "string") {
       assert.equal(staged.llm_evaluation.total_score, review.total_score);
       assert.equal(staged.llm_evaluation.gating, false);

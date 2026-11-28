@@ -21,3 +21,20 @@ export function evolutionScorecard(run, records) {
       ...(score === null ? ["No finite held-out test score was returned; gate score is shown separately and is not substituted."] : [])],
   };
 }
+
+/**
+ * What the product actually delivers for a finished search.
+ *
+ * Publication is the orchestrator's rule, not an expectation a case may add:
+ * `finish` hands a winner over only for `succeeded` with a result node, and
+ * node 0 winning means the seed stayed best and there is no improvement to
+ * save. A budget stop publishes nothing, and a succeeded run without a result
+ * node has nothing to name. Each skip carries the reason the results artifact
+ * needs to tell "nothing to deliver" from "delivery is missing".
+ */
+export function deliveryOutcome(run, bestNodeIndex) {
+  if (run?.status !== "succeeded") return { skipped: true, reason: run?.status ?? "unknown" };
+  if (!Number.isInteger(bestNodeIndex)) return { skipped: true, reason: "no_result_node" };
+  if (bestNodeIndex === 0) return { skipped: true, reason: "seed_won" };
+  return { skipped: false };
+}

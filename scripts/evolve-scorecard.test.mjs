@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import { createTest } from "../test/support/tagged/compat.mjs";
-import { evolutionScorecard } from "../test/helpers/evolve-result.mjs";
+import { deliveryOutcome, evolutionScorecard } from "../test/helpers/evolve-result.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:macos", "arch:amd64", "arch:arm64"] });
 const run = { id: "run", status: "succeeded", goal: { scorecard: { hash: "frozen-evaluator" } } };
 const record = event => ({ event });
@@ -33,5 +33,21 @@ test("missing or invalid held-out values stay unavailable, never replaced by gat
     assert.equal(result.score, null);
     assert.equal(result.best_gate_score, 1);
     assert.match(result.notes.join(" "), /not substituted/);
+  }
+});
+
+test("delivery follows the product rule instead of requiring an artifact for every finish", () => {
+  // An improving search must still require its artifact; the case checks the
+  // version hash and the content after this decision.
+  assert.deepEqual(deliveryOutcome({ status: "succeeded" }, 14), { skipped: false });
+  // Node 0 winning is the seed winning: no candidate beat it, so nothing is published.
+  assert.deepEqual(deliveryOutcome({ status: "succeeded" }, 0), { skipped: true, reason: "seed_won" });
+  // A budget stop publishes nothing, and a succeeded run without a result node has no code to save.
+  assert.deepEqual(deliveryOutcome({ status: "budget_exhausted" }, 14),
+    { skipped: true, reason: "budget_exhausted" });
+  assert.deepEqual(deliveryOutcome({ status: "succeeded" }, undefined),
+    { skipped: true, reason: "no_result_node" });
+  for (const outcome of [deliveryOutcome({ status: "budget_exhausted" }, 14), deliveryOutcome({ status: "succeeded" }, 0)]) {
+    assert.match(outcome.reason, /^[a-z][a-z0-9_]{0,39}$/, "reasons stay storable in the results artifact");
   }
 });
