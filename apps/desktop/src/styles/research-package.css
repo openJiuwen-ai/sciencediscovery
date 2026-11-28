@@ -197,6 +197,13 @@
 .research-package-upload.is-dragging { border-color: #1677ff; background: #eff6ff; }
 .research-package-resume { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 28px 12px; padding: 18px 20px; border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-1); }
 .research-package-resume strong { font-size: 15px; }
+/* The degraded block names immutable evidence by its own identifier, which has no
+   spaces to break on: wrap anywhere and keep the action button at its own width. */
+.research-package-resume > div { min-width: 0; }
+.research-package-resume > button { flex: 0 0 auto; }
+.research-package-degraded { margin-top: 8px; }
+.research-package-degraded ul { margin: 4px 0 0; padding-left: 18px; }
+.research-package-degraded li { overflow-wrap: anywhere; }
 .research-package-dialog.is-import { width: min(700px, calc(100vw - 32px)); }
 .research-package-dialog.is-import .modal-body { padding-bottom: 24px; }
 .research-package-dialog.is-import .research-dialog-lede { font-size: 13px; margin-bottom: 20px; }

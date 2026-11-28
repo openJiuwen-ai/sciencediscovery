@@ -74,6 +74,14 @@ export interface ResearchSnapshot {
   storagePath?: string;
   snapshotChecksum?: string;
   continuationAvailable?: boolean;
+  /** The copy may be continued, but it is not a complete one: `omissions` names
+   *  immutable evidence it does not carry. Read this beside
+   *  `continuationAvailable` — the pair means "allowed, but degraded" — and never
+   *  present such a copy as complete. */
+  continuationDowngraded?: boolean;
+  /** The omissions that make the copy degraded, named one by one so a surface can
+   *  say what is missing instead of only how many. Absent on a whole copy. */
+  missingImmutableEvidence?: string[];
   /** Original package scope; copying does not recover omitted history. */
   exportLevel?: "necessary" | "complete";
   historyLimited?: boolean;

@@ -966,8 +966,11 @@ test("an over-cap export is refused before it starts, and accepted once acknowle
     revision: "sized", estimatedBytes: archiveBytes, estimateKind: "uncompressed" as const,
     files: [], omissions: [], maxBytes: RESEARCH_PACKAGE_MAX_BYTES, archiveBytes,
   });
-  context.mock.method(ResearchExportPreviews.prototype, "get",
-    async () => sized(RESEARCH_PACKAGE_MAX_BYTES + 1));
+  // One mock whose value moves, not two mocks of the same method: restoring two
+  // wrappers of one method leaves the first installed, and every later test in this
+  // file then previews at the earlier ceiling (observed as a 413 on a fresh project).
+  let sizedBytes = RESEARCH_PACKAGE_MAX_BYTES + 1;
+  context.mock.method(ResearchExportPreviews.prototype, "get", async () => sized(sizedBytes));
 
   const body = { level: "complete", sessionId, revision: "sized" };
   const refusedTask = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify(body) });
@@ -985,8 +988,7 @@ test("an over-cap export is refused before it starts, and accepted once acknowle
   assert.equal(acknowledged.status, 200);
 
   // Nothing may cross the hard ceiling, acknowledgement or not.
-  context.mock.method(ResearchExportPreviews.prototype, "get",
-    async () => sized(RESEARCH_PACKAGE_MAX_MAX_BYTES + 1));
+  sizedBytes = RESEARCH_PACKAGE_MAX_MAX_BYTES + 1;
   const beyond = await rawRequest(`${base}/exports`, { method: "POST", body: JSON.stringify({ ...body, allowOverCap: true }) });
   assert.equal(beyond.status, 413);
   assert.equal((await beyond.json() as { code: string }).code, "RESEARCH_PACKAGE_TOO_LARGE");
@@ -1120,4 +1122,76 @@ test("a version object the package already declared unreadable is not reported t
   })).json() as { omissions: string[] };
   assert.equal(receipt.omissions.filter((item) => item.includes(absentDigest)).length, 1,
     `one line per version, not two: ${JSON.stringify(receipt.omissions)}`);
+});
+
+test("a copy that declares lost immutable evidence is continuable but never complete", async (context) => {
+  // #1532: the package declares the loss itself, so the import's fatal filter let it
+  // through and `continuationAvailable` stayed true with nothing said. The copy may now
+  // be continued, but it is marked degraded and the missing evidence is named, so no
+  // surface can present it as complete.
+  const { request, project, root } = await fixture(context, true);
+  const source = await project();
+  await request(`/api/projects/${source.id}/research-package/import?sessionId=${source.firstSession.id}`, {
+    method: "POST", body: Buffer.from(researchTrajectoryFixture().bytes),
+  });
+  const diag = await (await request(`/api/projects/${source.id}/research-package/preview?sessionId=${source.firstSession.id}&level=complete`)).json() as { maxBytes?: number; archiveBytes?: number; estimatedBytes?: number; omissions?: string[] };
+  const base = `/api/projects/${source.id}/research-package?sessionId=${source.firstSession.id}&level=complete`;
+  const baseline = importResearchPackage(new Uint8Array(await (await request(base)).arrayBuffer()));
+  const records = baseline.records as { artifacts?: Array<{ versions?: Array<{ objectPath?: string }> }> };
+  const candidates = (records.artifacts ?? []).flatMap((artifact) => (artifact.versions ?? [])
+    .map((version) => version.objectPath)).filter((path): path is string => Boolean(path));
+  const stored = async (hash: string) => (await readdir(root, { recursive: true }))
+    .filter((entry): entry is string => typeof entry === "string" && entry.includes(hash))
+    .map((entry) => resolve(root, entry));
+  let removed: string[] = [];
+  for (const hash of candidates) {
+    const layouts = await stored(hash);
+    if (!layouts.length) continue;
+    // Every layout has to go: read() falls through to the next copy of the same object.
+    for (const layout of layouts) await rm(layout, { force: true });
+    removed = layouts;
+    break;
+  }
+  assert.ok(removed.length, "the fixture has an artifact payload in the CAS to lose");
+  const lostBytes = new Uint8Array(await (await request(base)).arrayBuffer());
+  const lost = importResearchPackage(lostBytes);
+  const declared = lost.manifest.omissions.filter((item) => /^cas:.*:unavailable/u.test(item));
+  assert.ok(declared.length, `the export declares the loss: ${JSON.stringify(lost.manifest.omissions)}`);
+
+  const target = await project();
+  const imported = await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(lostBytes),
+  });
+  const receipt = await imported.json() as {
+    continuationAvailable: boolean; continuationDowngraded?: boolean; missingImmutableEvidence?: string[]; omissions: string[];
+  };
+  assert.equal(receipt.continuationAvailable, true, "the owner's decision: a degraded copy may still be continued");
+  assert.equal(receipt.continuationDowngraded, true, "but it is not a complete copy");
+  assert.deepEqual(receipt.missingImmutableEvidence, declared, "the missing evidence is named, not counted");
+
+  const detail = await (await request(`/api/sessions/${target.firstSession.id}`)).json() as {
+    researchSnapshot?: { continuationAvailable?: boolean; continuationDowngraded?: boolean; missingImmutableEvidence?: string[] };
+  };
+  assert.equal(detail.researchSnapshot?.continuationAvailable, true);
+  assert.equal(detail.researchSnapshot?.continuationDowngraded, true, "the Session carries the same degraded state the receipt does");
+  assert.deepEqual(detail.researchSnapshot?.missingImmutableEvidence, declared);
+
+  // Round trip: the receipt names the loss, and the copy's own preview is the same
+  // builder the export uses. What the second pass must not do is let a declared loss
+  // fall silent again: every omission the first package declared is still visible,
+  // either in the receipt or in what the copy says it would export. (The copy itself
+  // no longer references the lost object, so the second pass is allowed to be smaller
+  // — the point is that nothing disappears unannounced.)
+  assert.deepEqual(receipt.missingImmutableEvidence, declared);
+  for (const item of lost.manifest.omissions) {
+    assert.ok(receipt.omissions.includes(item) || declared.includes(item),
+      `the receipt still carries ${item}: ${JSON.stringify(receipt.omissions)}`);
+  }
+  const again = await (await request(
+    `/api/projects/${target.id}/research-package/preview?sessionId=${target.firstSession.id}&level=complete`)).json() as { omissions: string[] };
+  for (const item of again.omissions) {
+    assert.ok(!item.startsWith("cas:") || declared.length > 0, "a CAS loss in the copy is one the receipt already names");
+    assert.ok(receipt.omissions.includes(item) || declared.includes(item),
+      `the second pass may not report a loss the receipt hid: ${item}`);
+  }
 });

@@ -134,6 +134,7 @@ export const EN: Text = {
   },
   researchPackage: {
     continueUnavailable: "This imported record is not fully restored and cannot be continued. Restore the missing services and import again.", sourceUnavailable: "The conversation or its project no longer exists. Refresh the session list and try again.",
+    degradedCopy: "Some evidence is missing, so results from this copy are not reproducible. It can still be continued, but it is not a complete copy.", degradedMissing: "Immutable evidence this copy does not carry:",
     projectDestination: "Project", noProject: "No project", projectDestinationHint: "Added to Sessions by default. You may choose an existing project.",
     projectImport: (name: string) => `Import conversation into ${name}`, messageMenu: "Reply menu", packageContents: "Conversation, workspace files, artifacts and related research evidence.",
     title: "Research package", import: "Import conversation", export: "Export conversation", continue: "Continue chatting", branch: "Create branch chat", source: "Return to source",
