@@ -161,11 +161,18 @@ export function searchResultDetail(result: WorkbenchSearchResult, t: Translate):
   return `${result.projectName} / ${session}${result.origin ? ` · ${artifactOriginLabel(result.origin, t)}` : ""}`;
 }
 
+/** The matching message line of a Session found by what was said in it. It is
+ *  drawn on its own row, so a long Project name cannot ellipsize the reason the
+ *  row is there. Non-Session hits never carry one. */
+export function searchResultSnippet(result: WorkbenchSearchResult): string | undefined {
+  return result.kind === "session" && result.snippet ? result.snippet : undefined;
+}
+
 export function filterSearchResults(results: WorkbenchSearchResult[], query: string): WorkbenchSearchResult[] {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return results.slice(0, 80);
   return results.filter((result) =>
-    `${result.label}\n${result.detail}\n${result.kind}`.toLocaleLowerCase().includes(needle)).slice(0, 80);
+    `${result.label}\n${result.detail}\n${result.snippet ?? ""}\n${result.kind}`.toLocaleLowerCase().includes(needle)).slice(0, 80);
 }
 
 export function ComposerReferenceMenu({
@@ -281,7 +288,11 @@ export function GlobalSearchDialog({
           {visible.map((result) => (
             <button key={result.id} type="button" onClick={() => onSelect(result)} title={`${searchResultLabel(result, t)} · ${searchResultDetail(result, t)}`}>
               <i>{result.kind === "project" ? <ProjectIcon size={16} /> : result.kind === "session" ? <SessionIcon size={16} /> : <FileIcon size={16} />}</i>
-              <span><strong>{searchResultLabel(result, t)}</strong><small>{searchResultDetail(result, t)}</small></span>
+              <span>
+                <strong>{searchResultLabel(result, t)}</strong>
+                <small>{searchResultDetail(result, t)}</small>
+                {searchResultSnippet(result) === undefined ? null : <small className="global-search-snippet">{searchResultSnippet(result)}</small>}
+              </span>
               <em>{t(`search.kind.${result.kind}`)}</em>
             </button>
           ))}

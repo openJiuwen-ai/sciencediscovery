@@ -827,15 +827,17 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       }
 
       if (path === "/api/search" && method === "GET") {
-        // The route matches names and titles, never message text. It does answer
-        // hits for an archived Session and for its artifacts — the `archived`
-        // flag exists for a client that marks them — so a fixture proving the
-        // page's own rule seeds one and watches it disappear.
+        // The route matches names, titles and message bodies; a content hit is
+        // still a Session hit and carries the matching line in `snippet`. The
+        // fixture filters on what the row would show, including that snippet.
+        // It does answer hits for an archived Session and for its artifacts —
+        // the `archived` flag exists for a client that marks them — so a
+        // fixture proving the page's own rule seeds one and watches it disappear.
         const term = (url.searchParams.get("q") ?? "").trim().toLowerCase();
         const hits = options.search?.results ?? [];
         const results = term === ""
           ? hits
-          : hits.filter((hit) => String(hit.label ?? "").toLowerCase().includes(term));
+          : hits.filter((hit) => `${String(hit.label ?? "")}\n${String(hit.snippet ?? "")}`.toLowerCase().includes(term));
         const limit = Number(url.searchParams.get("limit") ?? 20);
         const offset = Number(url.searchParams.get("offset") ?? 0);
         return json(route, 200, {

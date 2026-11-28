@@ -58,6 +58,13 @@ export function searchDetail(result: WorkbenchSearchResult): string {
   return parts.join(" · ");
 }
 
+/** The matching message line of a Session found by what was said in it. It is
+ *  drawn on its own row, so a long Project name cannot ellipsize the reason the
+ *  row is there. Non-Session hits never carry one. */
+export function searchSnippet(result: WorkbenchSearchResult): string | undefined {
+  return result.kind === "session" && result.snippet ? result.snippet : undefined;
+}
+
 /** Whether a query is worth sending: the route searches on a term, and an
  *  empty one would return the whole workspace. */
 export function isSearchable(query: string): boolean {
