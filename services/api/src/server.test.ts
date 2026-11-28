@@ -125,6 +125,7 @@ import {
   waitForPermissionDecision,
   type ServerConfig,
 } from "./server.js";
+import { waitUntil } from "../../../test/helpers/wait-until.js";
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { createJiuwenSwarmAgentFactory } from "./agent-run/jiuwenswarm-agent.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
@@ -508,13 +509,11 @@ async function removeTestRoot(root: string): Promise<void> {
         await jsonRequest(`${origin}/api/sessions/${session.id}/run/cancel`, { headers: authorization, method: "POST" });
       }
     }
-    const deadline = Date.now() + 10000;
-    let status = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
-    while (status.body.sessions.length && Date.now() < deadline) {
-      await new Promise((done) => setTimeout(done, 25));
-      status = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
-    }
-    assert.deepEqual(status.body.sessions, [], "Fixture teardown must drain Agent turns before deleting data");
+    await waitUntil(
+      async () => (await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization })).body.sessions,
+      (sessions) => sessions.length === 0,
+      { description: "Fixture teardown draining Agent turns before deleting data", describe: (sessions) => JSON.stringify(sessions) },
+    );
     await api.close();
     testApiOrigins.delete(root);
   }
@@ -563,6 +562,17 @@ async function startTestApi(
     server.close(() => done());
     server.closeAllConnections();
   }) });
+  // `/health` answers 503 `liveness: "starting"` until startup has finished (after waiting up to
+  // 3 s for it), and startup can take longer than that on a loaded host. Every other route waits
+  // for startup itself, so only a case asserting on `/health` would see it; return once startup
+  // is over either way, and let a failed startup surface in the case that caused it.
+  await waitUntil(async () => {
+    const response = await fetch(`${origin}/health`);
+    return { status: response.status, body: await response.json() as { liveness?: string } };
+  }, ({ body }) => body.liveness !== "starting", {
+    description: "API startup",
+    describe: ({ status, body }) => `${status} ${JSON.stringify(body)}`,
+  });
   return { origin };
 }
 
@@ -3201,16 +3211,16 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   assert.equal(runnerNotice, undefined);
   const activityUrl = `${origin}/api/sessions/${toolTimeoutSession.body.id}/agent-activity`;
   type Activity = { executions: Array<{ id: string; state: string }> };
-  let activity = await jsonRequest<Activity>(activityUrl, { headers: authorization });
-  assert.equal(activity.body.executions.length, 1);
-  const executionId = activity.body.executions[0]!.id;
-  assert.ok(["queued", "running"].includes(activity.body.executions[0]!.state));
+  const started = await jsonRequest<Activity>(activityUrl, { headers: authorization });
+  assert.equal(started.body.executions.length, 1);
+  const executionId = started.body.executions[0]!.id;
+  assert.ok(["queued", "running"].includes(started.body.executions[0]!.state));
   await writeFile(detachedReleasePath, "release");
-  const deadline = Date.now() + 10000;
-  while (activity.body.executions[0]?.state !== "completed" && Date.now() < deadline) {
-    await new Promise((done) => setTimeout(done, 25));
-    activity = await jsonRequest<Activity>(activityUrl, { headers: authorization });
-  }
+  const activity = await waitUntil(
+    () => jsonRequest<Activity>(activityUrl, { headers: authorization }),
+    ({ body }) => body.executions.length !== 1 || !["queued", "running"].includes(body.executions[0]!.state),
+    { description: "the released detached Shell finishing", describe: ({ body }) => JSON.stringify(body.executions) },
+  );
   assert.equal(activity.body.executions.length, 1);
   assert.equal(activity.body.executions[0]?.id, executionId);
   assert.equal(activity.body.executions[0]?.state, "completed");
@@ -3226,12 +3236,14 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   // and its notice was marked read. Drain the one bounded notification turn
   // before switching the shared fixture to a silent user request; otherwise
   // the cancellation assertion observes unrelated work.
-  const notificationDeadline = Date.now() + 10000;
-  let settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
-  while ((completionNotifications !== 1 || settled.body.sessions.length !== 0) && Date.now() < notificationDeadline) {
-    await new Promise((done) => setTimeout(done, 25));
-    settled = await jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization });
-  }
+  const settled = await waitUntil(
+    () => jsonRequest<RuntimeStatus>(`${origin}/api/runtime-status`, { headers: authorization }),
+    ({ body }) => completionNotifications === 1 && body.sessions.length === 0,
+    {
+      description: "the one completion notification turn draining",
+      describe: ({ body }) => `${completionNotifications} completion notification(s), live sessions ${JSON.stringify(body.sessions)}`,
+    },
+  );
   assert.equal(completionNotifications, 1);
   assert.deepEqual(settled.body.sessions, []);
   const successfulToolRuns = await jsonRequest<Array<{ automaticWake?: boolean }>>(

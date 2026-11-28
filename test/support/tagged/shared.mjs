@@ -274,6 +274,9 @@ export async function main(args=process.argv.slice(2)) {
     // Into the project's own environment, after the locked sync, so the tests
     // run on exactly the interpreter and packages they run on without it.
     if(needUT&&coverage)for(const project of pythonProjects)steps.push(['uv',['pip','install','--python',python(project),coverageRequirement]]);
+    // The research checks' evaluator checkout, interpreter and wheels, downloaded
+    // here rather than on a cold cache inside a UT case's own time budget.
+    if(needUT)steps.push(['bash',['.ci/run-research-python.sh','prepare']]);
     // The same compiler over the same sources, with maps beside the output, so
     // code a test reaches through `dist/` is credited to the file it came from.
     if(coverage){const sourceMaps=coverageSourceMapStep();if(sourceMaps)steps.push(sourceMaps);}

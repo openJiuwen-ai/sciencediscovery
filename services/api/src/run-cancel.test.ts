@@ -25,6 +25,7 @@ import type { TestContext } from "node:test";
 
 import type { CancelRunResult, ModelProfile, Project, RunnerHealth, Session, SessionDetail, SessionRun, SessionRunEvent, SessionUsageSummary } from "@sciencediscovery/schema";
 
+import { DEFAULT_WAIT_TIMEOUT_MS, waitUntil } from "../../../test/helpers/wait-until.js";
 import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
 import { closeApiServer, createApiServer, type ServerConfig } from "./server.js";
 
@@ -525,49 +526,47 @@ async function readUntilTerminal(response: Response): Promise<string[]> {
 /**
  * Give the hung gateway turn time to actually be in flight before stopping it.
  *
- * The built-in loop's in-process model call is what the 400-attempt (10s) default budget was sized
- * for. Under a real JiuwenSwarm + adapter (a test declaring `swarm:required`, which alone gets
+ * Under a real JiuwenSwarm + adapter (a test declaring `swarm:required`, which alone gets
  * SCIENCE_AGENT_EXECUTOR=jiuwenswarm) a single turn's round trip was measured at 5.0-5.4s in isolation, and
  * a 10s-bound wait was observed to miss by ~460ms when the whole workspace once shared that instance. The
- * declaring tests now take it one at a time, but the host is still busy with every other test file;
- * 2400 attempts (60s) gives real headroom without weakening what the assertion checks.
+ * declaring tests now take it one at a time, but the host is still busy with every other test file, so the
+ * wait is the shared wall-clock deadline for either executor; it does not weaken what the assertion checks.
  */
 async function waitForGatewayTurn(api: TestApi, expected: number): Promise<void> {
-  const attempts = onJiuwenSwarm ? 2_400 : 400;
-  for (let attempt = 0; attempt < attempts && api.gatewayRunCount() < expected; attempt += 1) {
-    await new Promise((wait) => setTimeout(wait, 25));
-  }
+  await waitUntil(() => api.gatewayRunCount(), (count) => count >= expected, {
+    description: `agent turn ${expected} reaching the gateway`,
+    describe: (count) => `${count} turn(s) at the gateway`,
+  });
   assert.equal(api.gatewayRunCount(), expected, "the agent turn reached the gateway and hung there");
 }
 
 /**
- * Poll until the run reports `status`, at most `attempts` times 25ms.
+ * Wait until the run reports `status` and, with `requireReplay`, until its replay records it too.
  *
- * The 200-attempt default is 5s, sized for the built-in loop's in-process model call. A run that
- * delegates to a `task` child under the real JiuwenSwarm adapter pays for the child's own model turn
- * on top of the parent's, so the delegated case below passes a swarm-sized budget.
+ * The wait is a wall-clock deadline, not a count of polls: each poll is two HTTP round trips whose
+ * cost grows with the host's load. A run that delegates to a `task` child under the real JiuwenSwarm
+ * adapter pays for the child's own model turn on top of the parent's, so the delegated case below
+ * passes a longer deadline.
  */
 async function waitForRunStatus(
   api: TestApi, sessionId: string, runId: string, status: SessionRun["status"], requireReplay = false,
-  attempts = 200,
+  timeoutMs = DEFAULT_WAIT_TIMEOUT_MS,
 ): Promise<SessionRun> {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  const observed = await waitUntil(async () => {
     const run = (await listRuns(api, sessionId)).find((candidate) => candidate.id === runId);
-    if (run?.status === status) {
-      if (!requireReplay) return run;
-      // The scheduler persists the run status before appending the status event.
-      // Tests that tear down the store must wait for that final write as well.
-      const response = await fetch(`${api.origin}/api/sessions/${sessionId}/runs/${runId}/events`, { headers: authorization });
-      assert.equal(response.status, 200);
-      const events = await response.json() as SessionRunEvent[];
-      if (events.some(({ event }) => event.type === "run.status" && event.status === status)) return run;
-    }
-    await new Promise((wait) => setTimeout(wait, 25));
-  }
-  const current = (await listRuns(api, sessionId)).find((candidate) => candidate.id === runId);
-  assert.equal(current?.status, status, `expected run ${runId} to become ${status}`);
-  if (requireReplay) assert.fail(`expected run ${runId} to record ${status} in replay`);
-  return current!;
+    if (run?.status !== status || !requireReplay) return { run, replayed: false };
+    // The scheduler persists the run status before appending the status event.
+    // Tests that tear down the store must wait for that final write as well.
+    const response = await fetch(`${api.origin}/api/sessions/${sessionId}/runs/${runId}/events`, { headers: authorization });
+    assert.equal(response.status, 200);
+    const events = await response.json() as SessionRunEvent[];
+    return { run, replayed: events.some(({ event }) => event.type === "run.status" && event.status === status) };
+  }, ({ run, replayed }) => run?.status === status && (replayed || !requireReplay), {
+    timeoutMs,
+    description: `run ${runId} becoming ${status}${requireReplay ? " in its replay" : ""}`,
+    describe: ({ run, replayed }) => `status ${run?.status ?? "(run not listed)"}${requireReplay ? `, ${replayed ? "" : "not "}in replay` : ""}`,
+  });
+  return observed.run!;
 }
 
 test("cancelling a queued run does not start it or append it to Session context", { tags: ["swarm:required"] }, async (context) => {
@@ -673,26 +672,26 @@ test("a multi-turn run's usage row is the sum of its turns", { tags: ["swarm:req
 });
 
 // A delegated run is the only one here that pays for a whole extra agent turn, and under the real
-// JiuwenSwarm adapter the shared 200-attempt (5 s) status poll is not enough: in the merge queue (run
+// JiuwenSwarm adapter the shared status poll's old 5 s budget was not enough: in the merge queue (run
 // 43170129650, group-551, backend jiuwenswarm) the parent was still `running` when those 5 s expired,
 // the file's suite failed on that assertion, and the worker never exited, so the group was killed at
 // its 600 s WORKER_TIMEOUT. The case does pass tagged when it has the time: PR #1119's UT job (run
 // 43162635488, group-549, backend jiuwenswarm) ran this file 11/11 in 48.7 s. So the fix is a budget
 // sized for a delegated turn, not a weaker gate: the case keeps `swarm:required` and takes the 90 s
-// poll below. JiuwenSwarm 0.2.6's documented nested-`task` stall (gap 10,
+// deadline below. JiuwenSwarm 0.2.6's documented nested-`task` stall (gap 10,
 // `docs/en/reference/jiuwenswarm-migration-status.md`; `services/api/src/server.test.ts:192`) can still
-// exceed that, so the poll can still fail; the `finally` cancel below then stops the run instead of
-// leaving it `running` (it keeps its old 5 s wait, so a failure path adds no budget here).
+// exceed that, so the wait can still fail; the `finally` cancel below then stops the run instead of
+// leaving it `running` (with the default deadline, which a cancellation meets in moments).
 test("a delegated child writes exactly one delegation-track usage row", { tags: ["swarm:required"] }, async (context) => {
   const api = await startApi(context, "usage-delegated", startDelegatedUsageGateway);
   const sessionId = await createSession(api, "Usage delegated");
 
-  // Swarm-sized only for this case: the delegated child's extra turn is what the 5 s default misses.
-  const statusAttempts = onJiuwenSwarm ? 3_600 : 200;
+  // Swarm-sized only for this case: the delegated child's extra turn needs more than the default.
+  const statusTimeoutMs = onJiuwenSwarm ? 90_000 : DEFAULT_WAIT_TIMEOUT_MS;
 
   const run = await createRun(api, sessionId, "Delegate one task");
   try {
-    await waitForRunStatus(api, sessionId, run.id, "completed", true, statusAttempts);
+    await waitForRunStatus(api, sessionId, run.id, "completed", true, statusTimeoutMs);
 
     // Delegated spend belongs to the same run but a different invocation, so the
     // child's 5/2/7 is one `delegation-track` row of its own (#1109). The parent

@@ -22,6 +22,10 @@ from jiuwenswarm.server.runtime.mcp.call_timeout_patch import apply_mcp_call_tim
 from sciencediscovery_adapter.mcp_server import RUN_ARG, Toolset, ToolsetRegistry, mcp_router
 from sciencediscovery_adapter.agent_runs import Bridge, bridge_caller
 
+# A wall-clock deadline for waits whose length depends on how busy the host is,
+# not on the behaviour under test.
+LOADED_HOST_DEADLINE_S = 60
+
 
 class BoundaryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -60,9 +64,9 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.url = f"http://127.0.0.1:{sock.getsockname()[1]}/mcp/{self.registry.token}"
         self.server = uvicorn.Server(uvicorn.Config(app, log_level="critical", access_log=False))
         self.serving = asyncio.create_task(self.server.serve(sockets=[sock]))
-        for _ in range(200):
-            if self.server.started:
-                break
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + LOADED_HOST_DEADLINE_S
+        while not self.server.started and loop.time() < deadline:
             await asyncio.sleep(.01)
         self.assertTrue(self.server.started)
         self.config = McpServerConfig(server_name="sci", server_id="boundary",
@@ -87,10 +91,16 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.tasks.append(task)
         return task
 
-    async def invoke(self, label, tag=None, **arguments):
-        return await asyncio.wait_for(self.client.call_tool("probe", {
+    async def invoke(self, label, tag=None, timeout=None, **arguments):
+        """Call the probe tool within the 3 s case budget and the client's 5 s call limit.
+
+        A `timeout` replaces both: it is passed to the call itself as well, which
+        the Swarm timeout patch prefers over the configured limit.
+        """
+        call = self.client.call_tool("probe", {
             "label": label, RUN_ARG: tag or self.tag, **arguments,
-        }), 3)
+        }, **({} if timeout is None else {"timeout": timeout}))
+        return await asyncio.wait_for(call, timeout or 3)
 
     async def wait_entered(self, label):
         await asyncio.wait_for(self.entered.setdefault(label, asyncio.Event()).wait(), 2)
@@ -128,7 +138,11 @@ class BoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(count == 1 for count in self.counts.values()))
 
     async def test_100_concurrent_calls_keep_identity_and_execute_once(self):
-        result = await asyncio.gather(*(self.invoke(f"call-{i}") for i in range(100)))
+        # The contract is identity and single execution, not latency. The 100
+        # calls start together on one connection, so on a busy host the last of
+        # them finishes well after a 3 s per-call budget; they share one
+        # wall-clock deadline instead.
+        result = await asyncio.gather(*(self.invoke(f"call-{i}", timeout=LOADED_HOST_DEADLINE_S) for i in range(100)))
         self.assertEqual(result, [f"call-{i}" for i in range(100)])
         self.assertTrue(all(count == 1 for count in self.counts.values()))
 
