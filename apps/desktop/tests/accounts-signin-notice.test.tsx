@@ -46,7 +46,16 @@ test("the token gate shows the same notice where no custom-model route exists", 
 });
 
 test("the account panel shows the notice where its sign-in button would be", () => {
-  const markup = renderToStaticMarkup(<SignedOutAccount />);
+  // The account service is absent in this build, so neither callback can run;
+  // they are passed only because the panel now requires them.
+  const markup = renderToStaticMarkup(
+    <SignedOutAccount
+      onBrowserSignIn={async () => {
+        throw new Error("no account service");
+      }}
+      onSignedIn={() => {}}
+    />,
+  );
 
   assert.ok(markup.includes(TEXT.login.accountServiceMissing));
   assert.ok(!markup.includes(TEXT.login.huaweiButton));

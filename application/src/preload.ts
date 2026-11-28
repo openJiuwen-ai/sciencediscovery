@@ -138,6 +138,22 @@ const accountSessionStorage = {
   },
 };
 
+/** HUAWEI sign-in through the system browser. The main process starts a
+ *  one-shot loopback server and returns its callback URL; the renderer builds
+ *  the account-service sign-in URL with it as `returnUrl` and asks the shell to
+ *  open it in the default browser. The ticket comes back as an IPC event.
+ *  A plain browser has no bridge: the SPA keeps its in-page navigation. */
+const accountSignIn = {
+  begin: (): Promise<{ callbackUrl: string }> => ipcRenderer.invoke("sd-shell:account-signin-begin"),
+  open: (url: string): Promise<void> => ipcRenderer.invoke("sd-shell:account-signin-open", url),
+  cancel: (): Promise<void> => ipcRenderer.invoke("sd-shell:account-signin-cancel"),
+  onResult: (callback: (result: { ticket?: string; error?: string }) => void): (() => void) => {
+    const listener = (_event: unknown, value: { ticket?: string; error?: string }) => callback(value);
+    ipcRenderer.on("sd-shell:account-signin-result", listener);
+    return () => ipcRenderer.removeListener("sd-shell:account-signin-result", listener);
+  },
+};
+
 /** The durable list of finished exports (#1154). Rows carry no filesystem path
  *  the renderer could use for a write: the folder is for display, the token is
  *  the only handle it may hand back. */
@@ -228,6 +244,8 @@ contextBridge.exposeInMainWorld("sdShell", {
   } | null> => ipcRenderer.invoke("sd-shell:jiuwenswarm-get-state"),
   /** Account session storage, encrypted by the main process (safeStorage). */
   accountSessionStorage,
+  /** HUAWEI sign-in through the system browser (one-shot loopback callback). */
+  accountSignIn,
   /** First-run wizard. */
   wizard,
   /** Study-package export helpers (undefined outside the shell). */

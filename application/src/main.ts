@@ -41,6 +41,7 @@ import {
 } from "./wizard-api.ts";
 import { runSeatbeltProbe, type SeatbeltVerdict } from "./sandbox-probe.ts";
 import { readDirectExecution, writeDirectExecution } from "./direct-execution.ts";
+import { startSignInCallbackServer, type SignInCallbackServer } from "./signin-callback.ts";
 import { setupAutoUpdate, updateEnabled } from "./updater.ts";
 import { type AgentInfo } from "./agent-ready.ts";
 // electron-updater exports a PLATFORM SINGLETON (NsisUpdater on win /
@@ -1750,6 +1751,48 @@ ipcMain.on("sd-shell:account-session-remove", (event, key: unknown) => {
   }
 });
 
+// --- HUAWEI sign-in in the system browser ------------------------------------
+// The renderer asks for a callback URL, builds the account-service sign-in URL
+// with it as `returnUrl`, and has the shell open that URL in the system
+// browser. The account service only redirects to an allowed http(s) origin; the
+// deployed service allows `http://127.0.0.1:*`, so the shell receives the
+// single-use ticket on its own one-shot server and forwards it to the renderer.
+let signInCallback: SignInCallbackServer | null = null;
+
+function stopSignInCallback(): void {
+  signInCallback?.stop();
+  signInCallback = null;
+}
+
+async function beginSignInCallback(): Promise<{ callbackUrl: string }> {
+  stopSignInCallback();
+  const server = await startSignInCallbackServer({
+    log,
+    onResult: (result) => {
+      signInCallback = null;
+      try {
+        mainWindow?.webContents.send("sd-shell:account-signin-result", result);
+      } catch {
+        // The window closed while the browser was still signing in; the next
+        // launch reads the stored session instead.
+      }
+    },
+  });
+  signInCallback = server;
+  return { callbackUrl: server.callbackUrl };
+}
+
+ipcMain.handle("sd-shell:account-signin-begin", () => beginSignInCallback());
+ipcMain.handle("sd-shell:account-signin-open", async (_event, url: unknown) => {
+  if (typeof url !== "string") throw new Error("account sign-in URL must be a string");
+  const target = new URL(url);
+  if (target.protocol !== "https:" && target.protocol !== "http:") {
+    throw new Error("account sign-in URL must be http or https");
+  }
+  await electronShell.openExternal(target.toString());
+});
+ipcMain.handle("sd-shell:account-signin-cancel", () => { stopSignInCallback(); });
+
 // --- [mac-direct] installation-level opt-in for direct execution ---------------
 // The 设置 › 连接 › 沙箱网络 switch on darwin. Windows never reads or writes it (its
 // shell always sets the env flag — see packagedEnv), so the IPC pair stays
@@ -2384,6 +2427,7 @@ app.on("will-quit", event => {
   stopConsoleSweep();
   clearAgentWatch();
   stackDeathWatchSeq += 1; // quitting stops the owned stack on purpose, not a crash
+  stopSignInCallback();
   clearStackStableTimer();
   if (stack && stackOwnedByShell) {
     event.preventDefault();

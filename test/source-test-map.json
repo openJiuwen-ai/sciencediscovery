@@ -4123,6 +4123,18 @@
           "source": "apps/desktop/tests/search-hit-icons.test.tsx"
         }
       ]
+    },
+    {
+      "owner": "desktop",
+      "risk": "P1",
+      "source": "apps/desktop/src/auth/browser-signin.ts",
+      "tests": [
+        {
+          "complexity": "C2",
+          "layer": "ut",
+          "source": "apps/desktop/tests/browser-signin.test.ts"
+        }
+      ]
     }
   ]
 }
