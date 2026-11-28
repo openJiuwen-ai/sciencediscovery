@@ -668,14 +668,20 @@ class ChunkQueue {
 }
 
 class DirectoryObjects implements PackageObjectDirectory {
-  constructor(private readonly directory: string, private readonly paths: readonly string[]) {}
+  /** Membership is a set lookup, not a scan of `paths`: `restorePackage` asks about
+   *  every object it restores and every workspace file it resolves, so a linear `has`
+   *  made a whole import quadratic in the number of objects (#1521 review). */
+  private readonly available: Set<string>;
+  constructor(private readonly directory: string, private readonly paths: readonly string[]) {
+    this.available = new Set(paths);
+  }
   get size(): number { return this.paths.length; }
-  has(path: string): boolean { return this.paths.includes(path); }
+  has(path: string): boolean { return this.available.has(path); }
   /** A path the archive does not carry answers `undefined`, exactly as the in-memory
    *  map does: this class is only the same `Map` over files on disk. `readFileSync`
    *  used to throw `ENOENT` here, so an object the exporter had already declared
    *  missing turned into a 404 on import instead of the omission it is (#1520). */
-  get(path: string): Uint8Array | undefined { return this.has(path) ? this.read(path) : undefined; }
+  get(path: string): Uint8Array | undefined { return this.available.has(path) ? this.read(path) : undefined; }
   /** Only for paths this class has listed; `generate*` iterate `paths`. */
   private read(path: string): Uint8Array { return readFileSync(join(this.directory, path)); }
   private *generate(): Generator<[string, Uint8Array]> { for (const path of this.paths) yield [path, this.read(path)]; }

@@ -63,6 +63,36 @@ test("a streamed package's object map answers undefined for an object it does no
   }
 });
 
+test("a streamed package's object map answers membership without scanning its listing", async () => {
+  const objects = Array.from({ length: 2_000 }, (_, index) => {
+    const bytes = Buffer.from(`member-${index}\n`);
+    return { path: sha256(bytes), bytes };
+  });
+  const exported = createResearchPackage({ source: { projectId: "p-listing", title: "Many objects" }, records: {}, objects });
+  const directory = await mkdtemp(join(tmpdir(), "research-package-listing-"));
+  try {
+    const imported = await importResearchPackageStreamed(pieces(exported.bytes, 8192), { objectDirectory: directory });
+    const originalIncludes = Array.prototype.includes;
+    let includesCalls = 0;
+    Array.prototype.includes = function (this: unknown[], ...args: Parameters<typeof originalIncludes>) {
+      includesCalls += 1;
+      return originalIncludes.apply(this, args);
+    } as typeof originalIncludes;
+    try {
+      for (const path of imported.objects.keys()) assert.ok(imported.objects.get(path));
+      assert.equal(imported.objects.get("0".repeat(64)), undefined);
+    } finally {
+      Array.prototype.includes = originalIncludes;
+    }
+    // `restorePackage` asks the map about every object it restores, so a lookup that
+    // scans the listing makes a whole import quadratic (#1521 review). Counting the
+    // scans keeps this check independent of how fast the machine is.
+    assert.ok(includesCalls < 10, `object map made ${includesCalls} Array#includes calls`);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a streamed import unpacks the objects to files and reads the same records as the in-memory import", async () => {
   const directory = await mkdtemp(join(tmpdir(), "streamed-import-"));
   try {
