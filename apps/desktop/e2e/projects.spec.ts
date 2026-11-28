@@ -98,13 +98,27 @@ test("a Project name too long for the column ends in … and still leaves room f
 
   const add = page.getByRole("button", { name: `在「${name}」中新建会话` });
   const menu = page.getByRole("button", { name: "项目菜单" });
-  // At rest the fold is quiet, like a Session row.
-  await expect(add).toBeHidden();
-  await expect(menu).toBeHidden();
+  const strip = row.locator(".side-actions");
+  // At rest the fold is quiet, like a Session row. The hidden thing is the strip
+  // the two controls sit in: `opacity` is a group property, so the buttons' own
+  // computed opacity stays 1 under it while the group paints nothing. Hiding is
+  // `opacity` + `pointer-events`, not `display: none`, so both controls stay in
+  // the tab order — and Playwright's visibility check does not look at opacity at
+  // all. Assert the mechanism, then, rather than the word.
+  await expect(strip).toHaveCSS("opacity", "0");
+  await expect(strip).toHaveCSS("pointer-events", "none");
+  assert.equal(await label.evaluate((node) => getComputedStyle(node).maskImage), "none");
 
   // Hovering brings both back, inside the row rather than beyond the column,
   // which clips its horizontal overflow.
   await row.hover();
+  await expect(strip).toHaveCSS("opacity", "1");
+  await expect(strip).toHaveCSS("pointer-events", "auto");
+  // The strip floats over the last 50px of the name, so on that same reveal the
+  // name is masked out under it instead of being read through two transparent
+  // buttons. It is a mask and not extra padding: no glyph moves, so the name
+  // does not re-truncate as the pointer arrives.
+  assert.match(await label.evaluate((node) => getComputedStyle(node).maskImage), /linear-gradient/u);
   const rowBox = await row.boundingBox();
   assert.ok(rowBox, "the Project row has no box");
   for (const control of [add, menu]) {

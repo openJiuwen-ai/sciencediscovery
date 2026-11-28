@@ -42,6 +42,7 @@ import {
   TOKEN_STORAGE_KEY,
   installMockApi,
   makeSession,
+  revealAndClick,
   type ReplayRecord,
 } from "./fixtures.js";
 
@@ -109,7 +110,7 @@ test("deleting the open Session asks first, then returns to a draft", async ({ p
   await page.goto("/");
   await expect(page.locator(".side-session-name", { hasText: "晶体结构分析" })).toBeVisible();
 
-  await page.getByRole("button", { name: "会话菜单" }).click();
+  await revealAndClick(page, page.getByRole("button", { name: "会话菜单" }));
   // Click the menu's left edge: the column forms a stacking context, so the
   // part of the menu that overhangs the task pane is painted under it (a
   // known defect, reported separately). The item itself is reachable.
@@ -126,7 +127,7 @@ test("deleting the open Session asks first, then returns to a draft", async ({ p
   await expect(page.locator(".side-session-name", { hasText: "晶体结构分析" })).toBeVisible();
   expect(mock.state.sessions).toHaveLength(1);
 
-  await page.getByRole("button", { name: "会话菜单" }).click();
+  await revealAndClick(page, page.getByRole("button", { name: "会话菜单" }));
   await page.getByRole("menuitem", { name: "删除" }).click({ position: { x: 10, y: 10 } });
   await page.getByRole("dialog").getByRole("button", { name: "删除" }).click();
 
@@ -278,7 +279,7 @@ test("a draft left in one Project is not carried to the next", async ({ page }) 
   await page.getByRole("button", { name: "新建会话", exact: true }).click();
   await expect.poll(() => mock.state.sessions.length).toBe(2);
 
-  await page.getByRole("button", { name: "新建项目" }).click();
+  await revealAndClick(page, page.getByRole("button", { name: "新建项目" }));
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("项目名称").fill("钙钛矿");
   await dialog.getByRole("button", { name: "确认" }).click();

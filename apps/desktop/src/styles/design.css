@@ -226,6 +226,7 @@ body.is-resizing {
 
 .side-new,
 .side-row {
+  position: relative;
   width: 100%;
   min-height: 36px;
   display: flex;
@@ -255,11 +256,51 @@ body.is-resizing {
   color: #4d4d4d;
 }
 
+/* 项目 and 会话 head the rows they name, so they take those rows' 14px — but not
+   their weight. The heading is a quiet caption over the list, not a bolder copy
+   of it: the eye should land on the Project and Session names first, which is
+   also why the colour stays the muted grey. */
 .side-label {
   padding: 24px 12px 8px;
   color: #777;
-  font-size: 12px;
+  font-size: 14px;
+  font-weight: 400;
   line-height: 1;
+}
+
+/* The 新建项目 `+` is set at the label's own size and weight, so it reads as a
+   mark on the heading rather than as a louder control beside it; and it waits
+   out of the way until the heading is pointed at. `opacity` rather than
+   `display: none` keeps the row's height steady and keeps the button in the tab
+   order: a `display: none` control cannot be focused, so the keyboard would lose
+   it entirely. `:focus-within` is what keeps it reachable without a mouse —
+   tabbing onto the row reveals the button, exactly as the pointer does. */
+.side-label-row .side-mini-button.is-add {
+  font-size: 14px;
+  font-weight: 400;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+/* 项目's 新建项目 `+` waits out of the way until the heading is pointed at, so
+   the label reads as a label and the control is not one more thing competing
+   with the Project names under it. */
+.side-label-row:hover .side-mini-button.is-add {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.side-label-row:focus-within .side-mini-button.is-add {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The button itself, when it is the focused element: keyboard focus must show
+   it even if the row's own `:focus-within` is the only other path. */
+.side-label-row .side-mini-button.is-add:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .side-label-spaced {
@@ -308,11 +349,6 @@ body.is-resizing {
   white-space: nowrap;
 }
 
-.side-project-toggle .chev {
-  color: #777;
-  transition: transform 0.15s ease;
-}
-
 /* A folded Project states its own rule — the newest six are shown — on a
    quiet line above the page, so the size of the cut is visible before the
    reader presses anything. It is a caption, not a row: it must not compete
@@ -322,10 +358,6 @@ body.is-resizing {
   color: #a6a6a6;
   font-size: 12px;
   line-height: 1.4;
-}
-
-.side-row.side-project.is-open .chev {
-  transform: rotate(180deg);
 }
 
 /* A Project row carries a `+` and a `⋯` beside its toggle. The toggle keeps
@@ -348,18 +380,68 @@ body.is-resizing {
   background: rgba(25, 25, 25, 0.05);
 }
 
-/* The `+` is a Project-level action, like the session row's `⋯`: present on
-   hover, on keyboard focus, or in the open Project, not competing with the
-   fold's own name. `:focus-within` is what keeps it reachable without a mouse:
-   focusing the fold reveals the button beside it. */
-.side-row.side-project .side-actions {
-  display: none;
+/* A row's actions — a Project's 在项目中新建会话 `+` and `⋯`, a Session's `⋯` —
+   stand beside the name only while the row is under the pointer or holds
+   keyboard focus. They float over the row's right end rather than holding width
+   in it, so a long Project or Session name keeps its full width whether or not
+   the pointer is there, and the name no longer re-truncates as the pointer
+   enters.
+
+   Hidden with `opacity` and not with `display`/`visibility`: a button that is
+   not rendered cannot be reached with Tab, so hiding that way would leave the
+   keyboard no way to start a session inside a Project or open its menu.
+   `pointer-events: none` while invisible keeps an unseen button from catching a
+   click; it does not take the button out of the tab order. */
+.side-row.side-project .side-actions,
+.side-row.side-sub .side-actions {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  border-radius: 6px;
+  background: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
 }
 
 .side-row.side-project:hover .side-actions,
 .side-row.side-project:focus-within .side-actions,
-.side-row.side-project.is-active .side-actions {
-  display: flex;
+.side-row.side-sub:hover .side-actions,
+.side-row.side-sub:focus-within .side-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The strip floats over the name's tail, so on the same reveal that band of the
+   name has to get out from under it: a Project's toggle ends 8px from the row's
+   right edge while the strip — two 26px buttons and a 2px gap, 4px in — starts
+   58px in, so the last 50px of the name lie beneath the `+` and `⋯`. Fading
+   those 50px (with a 10px lead-in) keeps the glyphs from reading through two
+   transparent buttons.
+
+   A mask and not a `padding-right`: masking paints no differently laid out
+   text, so the ellipsis the name was already showing does not jump as the
+   pointer arrives. `-webkit-mask-image` is the same declaration for the
+   WebViews this desktop build still ships in. */
+.side-row.side-project:hover .side-project-toggle .label,
+.side-row.side-project:focus-within .side-project-toggle .label {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 60px), transparent calc(100% - 50px));
+  mask-image: linear-gradient(to right, #000 calc(100% - 60px), transparent calc(100% - 50px));
+}
+
+/* A device without a hover capability has no pointer to wait for, so the
+   controls it could never summon are simply shown: the first tap then lands on
+   the control the reader can see, instead of only opening the row under it. */
+@media (hover: none) {
+  .side-label-row .side-mini-button.is-add,
+  .side-row.side-project .side-actions,
+  .side-row.side-sub .side-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .side-mini-button.is-add {
@@ -419,14 +501,9 @@ body.is-resizing {
   color: #191919;
 }
 
-.side-row.side-sub .side-actions {
-  display: none;
-}
-
-.side-row.side-sub:hover .side-actions,
-.side-row.side-sub.is-active .side-actions {
-  display: flex;
-}
+/* The session row's own `⋯` is revealed by the shared rule above, on hover or
+   keyboard focus, for the active Session as much as any other: being active
+   says which conversation the column is on, not that its menu stays out. */
 
 .side-mini-button {
   width: 26px;
@@ -446,6 +523,15 @@ body.is-resizing {
   color: #808080;
   font-size: 12px;
   white-space: nowrap;
+  transition: opacity 0.12s ease;
+}
+
+/* The `⋯` takes the time's place while the row is pointed at, rather than
+   sitting on top of it: the row has one line, and the control is what the
+   pointer came for. */
+.side-row.side-sub:hover .side-session-time,
+.side-row.side-sub:focus-within .side-session-time {
+  opacity: 0;
 }
 
 .side-spinner {
