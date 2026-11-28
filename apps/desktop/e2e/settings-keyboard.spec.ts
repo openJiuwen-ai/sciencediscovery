@@ -2,9 +2,11 @@
  * E2E-META
  * Purpose: Assert that the Desktop settings surface holds the keyboard the way its backdrop holds the pointer.
  * Steps:
- *   1. Open 设置 from the rail and read where the keyboard is.
- *   2. Walk Tab across the whole surface and check the focus never lands behind the scrim.
+ *   1. Open 设置 from the rail and read where the keyboard is: the panel itself, then its first control.
+ *   2. Walk Tab across the whole surface, sixty presses, and check the focus never leaves the panel.
  *   3. Press Escape and check the focus returns to the control that opened it.
+ *   4. Open 添加模型 over the panel and walk twenty Tabs: the focus stays inside the panel and reaches the nested dialog.
+ *   5. Check the backdrop starts at the rail, the rail stays clickable, and the page behind is covered.
  * Environment: Isolated Desktop Vite app with deterministic local API mocks.
  * Type: mocked
  * LLM: none; model behavior is deterministic fixture data.
@@ -208,8 +210,8 @@ test("背板盖住页面但留出侧栏：鼠标的出口在侧栏，键盘的�
     const hit = (x: number, y: number) => document.elementFromPoint(x, y);
     return {
       backdropStartsAtRail: Math.round(box.left) === Math.round(rail.right),
-      railStillClickable: hit(opener.x + opener.width / 2, opener.y + opener.height / 2)?.closest(".rail") !== null,
-      pageBehindCovered: hit(box.left + 4, window.innerHeight - 12)?.closest(".config-backdrop") !== null,
+      railStillClickable: Boolean(hit(opener.x + opener.width / 2, opener.y + opener.height / 2)?.closest(".rail")),
+      pageBehindCovered: Boolean(hit(box.left + 4, window.innerHeight - 12)?.closest(".config-backdrop")),
     };
   });
   expect(layout.backdropStartsAtRail, "背板应当从侧栏右缘开始").toBe(true);
