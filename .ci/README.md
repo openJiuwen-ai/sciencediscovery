@@ -1047,12 +1047,15 @@ visible in the container. A regular clone can still resolve its own SHA, but
 passing the value explicitly keeps the command identical across both layouts.
 
 The first E2E run downloads the Chromium revision pinned by
-`test/e2e.package-lock.json`. The entry never invokes managed-environment
-setup and defaults `SCIENTIFIC_ENVS=0`, so the mocked job does not access conda
-channels. J3 therefore reports its managed-Python precondition as BLOCKED,
-never as a pass. A separate, explicitly network-enabled job may set
-`E2E_SCIENTIFIC_ENVS=1` and reuse a pre-seeded `CI_RUNTIME_DIR`; that setup is
-outside the generic default command.
+`test/e2e.package-lock.json`. The raw launcher defaults `SCIENTIFIC_ENVS=0` and
+does not invoke managed-environment setup by itself. The tagged mocked runner
+sets `E2E_SCIENTIFIC_ENVS=1` only for a batch whose entries include
+`test/journey-prepare-environment.spec.ts` (J3), so that lane provisions the
+managed Python base (~330 MB on a cold cache) and J3 asserts it is ready. Every
+other mocked lane runs with `0` and never accesses conda channels. A J3 setup
+failure still reports BLOCKED, never a pass. A separate, explicitly
+network-enabled job may also set `E2E_SCIENTIFIC_ENVS=1` and reuse a pre-seeded
+`CI_RUNTIME_DIR`.
 
 ## Results
 

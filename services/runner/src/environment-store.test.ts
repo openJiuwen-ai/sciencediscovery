@@ -27,6 +27,8 @@ import {
   executeEnvironmentCommand,
   describeFetchFailure,
   installManagedMicromamba,
+  installManagedProvisioner,
+  MANAGED_MICROMAMBA_ARCHITECTURE_RELEASES,
   managedMicromambaBaseUrl,
   managedMicromambaRelease,
   ManagedProvisionerError,
@@ -691,6 +693,123 @@ test("background setup exposes progress, serializes callers, and retries after f
   assert.equal(retried.components.conda.error, null);
 });
 
+// The pinned micromamba 2.8.1 connection-refused transcript. libmamba does not
+// print an "HTTP 5xx" status for this shape, which is why the classifier has to
+// know what the binary really emits.
+const micromambaConnectionRefused = () => new Error([
+  "critical libmamba Multiple errors occurred:",
+  "  Download error (7) Could not connect to server [http://127.0.0.1:9/conda-forge/linux-64/repodata.json]",
+  "  Failed to connect to 127.0.0.1 port 9 after 0 ms: Could not connect to server",
+].join("\n"));
+
+test("the starter bootstrap retries a pinned-micromamba connection failure on a fresh attempt prefix", async (context) => {
+  let creates = 0;
+  const { commands, store, timeline } = await fixture(context, {
+    beforeCommand: async (arguments_) => {
+      if (arguments_[1] !== "create") return;
+      creates += 1;
+      if (creates === 1) {
+        const prefix = arguments_[arguments_.indexOf("--prefix") + 1]!;
+        await mkdir(prefix, { recursive: true });
+        await writeFile(resolve(prefix, "partial-create.marker"), "partial");
+        throw micromambaConnectionRefused();
+      }
+    },
+  });
+
+  await store.initialize();
+  const setup = await store.setupManagedEnvironments();
+
+  assert.equal(setup.state, "ready");
+  assert.equal(setup.components.conda.state, "ready");
+  assert.equal(creates, 2, "the transient create failure is retried once");
+  const prefixes = commands
+    .filter((command) => command[1] === "create")
+    .map((command) => command[command.indexOf("--prefix") + 1]!);
+  assert.equal(prefixes.length, 2);
+  assert.notEqual(prefixes[0], prefixes[1], "the retry does not write into the failed prefix");
+  assert.equal(existsSync(resolve(prefixes[0]!, "partial-create.marker")), false,
+    "the failed attempt prefix and its partial contents are cleaned up");
+  assert.equal(existsSync(prefixes[1]!), true, "the successful attempt prefix stays");
+  assert.deepEqual(
+    timeline.filter((job) => job.startsWith("bootstrap-python-attempt-")),
+    ["bootstrap-python-attempt-1", "bootstrap-python-attempt-2"],
+  );
+});
+
+test("the starter bootstrap retries the other network shapes emitted by pinned micromamba", async (context) => {
+  const failures = [
+    ["HTTP 503", new Error("critical libmamba Multiple errors occurred:\n"
+      + "  Transfer finalized, status: 503 [http://127.0.0.1:8765/conda-forge/noarch/repodata.json] 17 bytes")],
+    ["curl timeout", new Error("curl (28) Timeout was reached: Connection timed out after 60001 milliseconds\n"
+      + "Download error (28) Operation timed out after 60001 milliseconds")],
+    ["DNS lookup", new Error("curl (6) Could not resolve host: no-such-host.invalid\n"
+      + "Download error (6) Could not resolve host: no-such-host.invalid")],
+    ["connection reset", new Error("curl (56) Recv failure: Connection reset by peer\n"
+      + "Download error (56) Failure when receiving data from the peer")],
+  ] as const;
+  for (const [label, failure] of failures) {
+    let creates = 0;
+    const { store } = await fixture(context, {
+      beforeCommand: (arguments_) => {
+        if (arguments_[1] !== "create") return;
+        creates += 1;
+        if (creates === 1) throw failure;
+      },
+    });
+    await store.initialize();
+    const setup = await store.setupManagedEnvironments();
+    assert.equal(setup.state, "ready", label);
+    assert.equal(creates, 2, label);
+  }
+});
+
+test("the starter bootstrap retries a per-attempt timeout kill but not an output-buffer failure", async (context) => {
+  const timeoutKill = Object.assign(new Error("Command failed: micromamba create --yes --prefix /tmp/env\n"
+    + "warning libmamba Retrying in 2 seconds\n"), { code: null, killed: true, signal: "SIGTERM" });
+  let creates = 0;
+  const timedOut = await fixture(context, {
+    beforeCommand: (arguments_) => {
+      if (arguments_[1] !== "create") return;
+      creates += 1;
+      if (creates === 1) throw timeoutKill;
+    },
+  });
+  await timedOut.store.initialize();
+  assert.equal((await timedOut.store.setupManagedEnvironments()).state, "ready");
+  assert.equal(creates, 2, "the command-limit kill gets a fresh attempt");
+
+  creates = 0;
+  const bufferFailure = Object.assign(new Error("Command failed: micromamba create --yes --prefix /tmp/env"),
+    { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", killed: false, signal: null });
+  const overflowed = await fixture(context, {
+    beforeCommand: (arguments_) => {
+      if (arguments_[1] !== "create") return;
+      creates += 1;
+      throw bufferFailure;
+    },
+  });
+  await overflowed.store.initialize();
+  await assert.rejects(overflowed.store.setupManagedEnvironments(), /ERR_CHILD_PROCESS_STDIO_MAXBUFFER|Command failed/u);
+  assert.equal(creates, 1, "an oversized transcript is not retried");
+});
+
+test("the starter bootstrap fails fast on an unsolvable package spec", async (context) => {
+  const { commands, store } = await fixture(context, {
+    beforeCommand: (arguments_) => {
+      if (arguments_[1] !== "create") return;
+      throw new Error("PackagesNotFoundError: The following packages are not available from current channels: not-a-real-package");
+    },
+  });
+
+  await store.initialize();
+  await assert.rejects(store.setupManagedEnvironments(), /PackagesNotFoundError/u);
+
+  assert.equal(commands.filter((command) => command[1] === "create").length, 1, "an unsolvable spec is not retried");
+  assert.equal(store.setup.state, "failed");
+  assert.match(store.setup.components.conda.error ?? "", /PackagesNotFoundError/u);
+});
+
 test("micromamba bootstrap failure remains distinct and can be retried", async (context) => {
   const { provisionerPath, store } = await fixture(context);
   await rm(provisionerPath);
@@ -773,6 +892,150 @@ test("a managed provisioner that is not the pinned release is replaced, not refu
   assert.equal(store.setup.components.micromamba.state, "ready");
 });
 
+test("a provisioner download retries a connect timeout and still reaches micromamba ready", async (context) => {
+  const base = await fixture(context);
+  const fixtureBytes = Buffer.from("#!/bin/sh\n# retried provisioner\nexit 0\n");
+  const release = {
+    url: "https://release.example.test/micromamba-linux-64",
+    sha256: createHash("sha256").update(fixtureBytes).digest("hex"),
+    version: "test",
+  };
+  const connectTimeout = () => Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+  });
+  let attempts = 0;
+  const fetcher: typeof fetch = async () => {
+    attempts += 1;
+    if (attempts < 4) throw connectTimeout();
+    return new Response(fixtureBytes, { status: 200 });
+  };
+  const setupRoot = resolve(base.root, "retrying-envs");
+  const managedPath = resolve(setupRoot, "bin", "micromamba");
+  const store = new EnvironmentStore({
+    allowedChannels: ["conda-forge"],
+    enabled: true,
+    root: setupRoot,
+    runnerVersion: "test-runner",
+  }, (provisionerPath, arguments_, jobId, environment) => base.executor(
+    provisionerPath === managedPath ? base.provisionerPath : provisionerPath,
+    arguments_,
+    jobId,
+    environment,
+  ), (destination) => installManagedProvisioner(destination, release, fetcher, {
+    attempts: 4,
+    baseDelayMs: 0,
+  }));
+
+  await store.initialize();
+  await store.setupManagedEnvironments();
+
+  assert.equal(attempts, 4, "three transient failures are retried until the download succeeds");
+  assert.equal(store.setup.components.micromamba.state, "ready");
+  assert.equal(store.setup.state, "ready");
+  assert.equal(await readFile(managedPath, "utf8"), fixtureBytes.toString());
+});
+
+test("the production installManagedMicromamba entry point retries a transient timeout", async (context) => {
+  const { root } = await fixture(context);
+  const destination = resolve(root, "production-entry", "micromamba");
+  const fixtureBytes = Buffer.from("#!/bin/sh\n# production entry\nexit 0\n");
+  // The pinned release hash is a real file's hash, so a portable test cannot
+  // conjure bytes for it. Point the manifest at the fixture bytes for this one
+  // call, restore it afterwards, and still drive the production entry point.
+  const release = MANAGED_MICROMAMBA_ARCHITECTURE_RELEASES.x64;
+  const pinnedSha256 = release.sha256;
+  release.sha256 = createHash("sha256").update(fixtureBytes).digest("hex");
+  let attempts = 0;
+  try {
+    await installManagedMicromamba(destination, async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw Object.assign(new TypeError("fetch failed"), {
+          cause: Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+        });
+      }
+      return new Response(fixtureBytes, { status: 200 });
+    }, "x64", "linux");
+  } finally {
+    release.sha256 = pinnedSha256;
+  }
+
+  assert.equal(attempts, 2, "one transient failure costs one retry at the production entry point");
+  assert.equal(await readFile(destination, "utf8"), fixtureBytes.toString());
+});
+
+test("a permanent provisioner failure is not retried", async (context) => {
+  const { root } = await fixture(context);
+  const destination = resolve(root, "not-retried", "micromamba");
+
+  let attempts = 0;
+  await assert.rejects(
+    installManagedMicromamba(destination, async () => {
+      attempts += 1;
+      return new Response("missing", { status: 404 });
+    }, "x64", "linux"),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "download");
+      assert.match(error.message, /HTTP 404/u);
+      return true;
+    },
+  );
+  assert.equal(attempts, 1, "a 404 is a permanent answer, not a transient one");
+
+  attempts = 0;
+  await assert.rejects(
+    installManagedMicromamba(destination, async () => {
+      attempts += 1;
+      return new Response("not micromamba", { status: 200 });
+    }, "x64", "linux"),
+    /expected SHA-256 [a-f0-9]{64}, got [a-f0-9]{64}/u,
+  );
+  assert.equal(attempts, 1, "a checksum mismatch is a permanent answer, not a transient one");
+});
+
+test("a provisioner write failure is not retried", async (context) => {
+  const { root } = await fixture(context);
+  const blockedParent = resolve(root, "blocked-parent");
+  const fixtureBytes = Buffer.from("provisioner bytes");
+  await writeFile(blockedParent, "not a directory");
+  let attempts = 0;
+  await assert.rejects(
+    installManagedProvisioner(resolve(blockedParent, "micromamba"), {
+      url: "https://release.example.test/micromamba-linux-64",
+      sha256: createHash("sha256").update(fixtureBytes).digest("hex"),
+    }, async () => {
+      attempts += 1;
+      return new Response(fixtureBytes, { status: 200 });
+    }, { attempts: 4, baseDelayMs: 0 }),
+    (error: ManagedProvisionerError) => {
+      assert.equal(error.failure, "write");
+      assert.match(error.message, /could not be written/u);
+      return true;
+    },
+  );
+  assert.equal(attempts, 1, "an unwritable destination is a permanent answer, not a transient one");
+});
+
+test("Rate limits and server errors are retried with the same reported status", async (context) => {
+  const { root } = await fixture(context);
+  const release = managedMicromambaRelease("x64", "linux");
+  for (const status of [429, 503]) {
+    let attempts = 0;
+    await assert.rejects(
+      installManagedProvisioner(resolve(root, `status-${status}`, "micromamba"), release, async () => {
+        attempts += 1;
+        return new Response("busy", { status });
+      }, { attempts: 4, baseDelayMs: 0 }),
+      (error: ManagedProvisionerError) => {
+        assert.equal(error.failure, "download");
+        assert.match(error.message, new RegExp(`HTTP ${status}`, "u"));
+        return true;
+      },
+    );
+    assert.equal(attempts, 4, `HTTP ${status} consumes the bounded retry budget`);
+  }
+});
+
 test("a provisioner install says which step failed and why", async (context) => {
   const { root } = await fixture(context);
   const destination = resolve(root, "diagnosable", "micromamba");
@@ -794,14 +1057,19 @@ test("a provisioner install says which step failed and why", async (context) => 
     },
   );
 
+  let serverAttempts = 0;
   await assert.rejects(
-    installManagedMicromamba(destination, async () => new Response("nope", { status: 502 }), "x64", "linux"),
+    installManagedProvisioner(destination, managedMicromambaRelease("x64", "linux"), async () => {
+      serverAttempts += 1;
+      return new Response("nope", { status: 502 });
+    }, { attempts: 4, baseDelayMs: 0 }),
     (error: ManagedProvisionerError) => {
       assert.equal(error.failure, "download");
       assert.match(error.message, /HTTP 502/u);
       return true;
     },
   );
+  assert.equal(serverAttempts, 4, "an HTTP 5xx is retried before its reason is reported");
 
   await assert.rejects(
     installManagedMicromamba(destination, async () => new Response("not micromamba", { status: 200 }), "x64", "linux"),

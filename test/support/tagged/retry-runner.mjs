@@ -28,11 +28,24 @@ export function batchLaunchEnvironment({ fixture = 'standard', checks, scientifi
 // file in the `<batch>-retry` directory is exactly what .ci/mocked-report.mjs
 // reports as UNEXPECTED_SWARM_CHECKS. Retries therefore always switch checks
 // off, for every slice, instead of inheriting the batch's `checks: 'run'`.
+// Only a journey that asserts a ready managed base needs it: J3
+// (test/journey-prepare-environment.spec.ts) and J5
+// (test/journey-real-request.spec.ts) report BLOCKED without one. Every other
+// stack would download micromamba and roughly 330 MB of conda packages it
+// never uses. Deciding from the batch contents rather than its key matters
+// under CI_E2E_LOCAL_CONCURRENCY=2: that split can put J3 in either
+// mocked-standard-config-global or its -2 sibling.
+const MANAGED_ENVIRONMENT_SOURCES = new Set([
+  'test/journey-prepare-environment.spec.ts',
+  'test/journey-real-request.spec.ts',
+]);
+
 export function batchLaunchConfig(batch, slice, { retry = false } = {}) {
+  const needsManagedEnvironments = batch.entries?.some(entry => MANAGED_ENVIRONMENT_SOURCES.has(entry.source));
   return {
     fixture: batch.fixture,
     checks: retry ? 'off' : (slice === 'e2e' ? (batch.checks.length ? 'run' : 'off') : undefined),
-    scientificEnvs: '1',
+    scientificEnvs: needsManagedEnvironments ? '1' : '0',
   };
 }
 

@@ -65,6 +65,41 @@ const MANAGED_MICROMAMBA_WIN32_RELEASES = micromambaManifest.win32Releases;
 const MAX_PROVISIONER_BYTES = 64 * 1024 * 1024;
 /** One provisioner download; long enough for a slow mirror, short enough to fail. */
 const MANAGED_PROVISIONER_TIMEOUT_MS = 120_000;
+/** A transient release-host failure is retried this many times in total. */
+const MANAGED_PROVISIONER_ATTEMPTS = 4;
+/** First retry wait; each later wait doubles, jittered and capped below. */
+const MANAGED_PROVISIONER_RETRY_BASE_MS = 1_000;
+const MANAGED_PROVISIONER_RETRY_MAX_MS = 8_000;
+/** The starter create downloads the whole package set, so two retries are enough. */
+const STARTER_BOOTSTRAP_ATTEMPTS = 3;
+const STARTER_BOOTSTRAP_RETRY_BASE_MS = 1_000;
+const STARTER_BOOTSTRAP_RETRY_MAX_MS = 4_000;
+/**
+ * Transport failures that say "try again shortly", not "this host can never
+ * work". DNS/name errors are excluded so a wrong mirror fails after one
+ * attempt instead of hiding behind minutes of backoff.
+ */
+const RETRYABLE_NETWORK_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "EPIPE",
+  "EAI_AGAIN",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+]);
+/** Solver, permission and disk failures are never fixed by retrying. */
+const PERMANENT_PROVISIONING_FAILURE = /PackagesNotFoundError|nothing provides|UnsatisfiableError|dependency conflict|package conflict|No space left on device|ENOSPC|Permission denied|EACCES|Read-only file system|EROFS|ChecksumMismatchError|CondaVerificationError/iu;
+/** A package-channel transcript that means the network, not the request, failed. */
+// libmamba/curl phrases observed from the pinned 2.8.1 create path. The
+// `Transfer finalized, status:` shape is how libmamba reports an HTTP 5xx, and
+// curl reports transport failures through `Download error (<code>)`.
+const NETWORK_PROVISIONING_FAILURE = /HTTP\s+(?:000|408|429|5\d\d)|Transfer finalized,\s*status:\s*(?:408|429|5\d\d)|Download error \((?:6|7|28|35|56)\)|UND_ERR_[A-Z_]+|ECONNRESET|ECONNABORTED|ETIMEDOUT|EPIPE|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|SocketTimeout|ConnectTimeout|ReadTimeout|Connection (?:failed|refused|timed out|reset|aborted)|Could not connect to server|Failed to connect to|Timeout was reached|Temporary failure in name resolution|Network is unreachable|RemoteDisconnected|IncompleteRead|Max retries exceeded|Failed to establish a new connection|TLS handshake timeout|SSL connection timeout|Could not resolve host|Failed to download/iu;
 const BUILT_IN_CONDA_CHANNELS = new Set<string>(
   ENVIRONMENT_PACKAGE_SOURCE_PRESETS.flatMap((preset) => [...preset.condaChannels]),
 );
@@ -167,6 +202,22 @@ export function managedMicromambaRelease(
  */
 export type ManagedProvisionerFailure = "download" | "verify" | "write";
 
+/** The pinned facts a provisioner install needs; exported so a test can drive
+ * real retries with fixture bytes whose hash it controls. */
+export interface ManagedProvisionerRelease {
+  sha256: string;
+  url: string;
+  version?: string;
+}
+
+export interface ManagedProvisionerRetryOptions {
+  attempts?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  random?: () => number;
+  sleep?: (delayMs: number) => Promise<void>;
+}
+
 export class ManagedProvisionerError extends Error {
   readonly failure: ManagedProvisionerFailure;
   /** The release the Runner tried to install, so the message can name it. */
@@ -182,6 +233,62 @@ export class ManagedProvisionerError extends Error {
     this.failure = failure;
     this.url = url;
   }
+}
+
+/** Internal marker: only network-class download failures may be retried. */
+class RetryableManagedProvisionerError extends ManagedProvisionerError {}
+
+function isRetryableTransportFailure(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; name?: unknown; cause?: unknown };
+    if (candidate.name === "AbortError" || candidate.name === "TimeoutError") return true;
+    if (typeof candidate.code === "string" && RETRYABLE_NETWORK_CODES.has(candidate.code)) return true;
+    current = candidate.cause;
+  }
+  return false;
+}
+
+/** Bounded, jittered exponential wait: half the window is reserved so two
+ * Runners sharing an egress do not retry in lockstep. */
+function retryDelayMs(attempt: number, baseDelayMs: number, maxDelayMs: number, random: () => number): number {
+  const ceiling = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(0, attempt - 1));
+  return Math.round(ceiling / 2 + random() * ceiling / 2);
+}
+
+function sleepMs(delayMs: number): Promise<void> {
+  return delayMs <= 0 ? Promise.resolve() : new Promise((resolveSleep) => setTimeout(resolveSleep, delayMs));
+}
+
+/**
+ * A failed micromamba command is retried only when its transcript describes a
+ * network problem. "No space left on device" and an unsolvable package spec
+ * are permanent: retrying them would just delay the same error by minutes.
+ */
+function isRetryableStarterFailure(error: unknown): boolean {
+  const output = error as {
+    code?: unknown;
+    killed?: unknown;
+    message?: unknown;
+    signal?: unknown;
+    stderr?: unknown;
+    stdout?: unknown;
+  };
+  const text = [output.message, output.stdout, output.stderr]
+    .filter((part): part is string => typeof part === "string")
+    .join("\n");
+  if (PERMANENT_PROVISIONING_FAILURE.test(text)) return false;
+  // execFile raises this for a command whose output exceeded maxBuffer. The
+  // next attempt would produce the same oversized transcript.
+  if (output.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return false;
+  // executeEnvironmentCommand kills a command that reaches its 180 s limit
+  // with SIGTERM. A channel that stops delivering is the common way to get
+  // there, so a fresh prefix and a fresh 180 s budget are worth trying.
+  if (output.killed === true && output.signal === "SIGTERM") return true;
+  if (typeof output.code === "string" && RETRYABLE_NETWORK_CODES.has(output.code)) return true;
+  return NETWORK_PROVISIONING_FAILURE.test(text || String(error));
 }
 
 /**
@@ -233,6 +340,44 @@ export async function installManagedMicromamba(
 ): Promise<void> {
   if (!fetcher) return withProxyFetch({ mode: "environment" }, fetcher => installManagedMicromamba(destination, fetcher, architecture, platform));
   const release = managedMicromambaRelease(architecture, platform);
+  await installManagedProvisioner(destination, release, fetcher);
+}
+
+/**
+ * Download, verify and atomically place one provisioner release.
+ *
+ * Every attempt owns its own AbortController and 120 s timer: a timer shared
+ * by the whole operation would abort a late retry exactly when the network
+ * had recovered. Verification and the write stay single-shot — retrying a
+ * SHA-256 mismatch or an unwritable data directory cannot change the answer.
+ */
+export async function installManagedProvisioner(
+  destination: string,
+  release: ManagedProvisionerRelease,
+  fetcher: typeof fetch,
+  options: ManagedProvisionerRetryOptions = {},
+): Promise<void> {
+  const attempts = Math.max(1, options.attempts ?? MANAGED_PROVISIONER_ATTEMPTS);
+  const baseDelayMs = Math.max(0, options.baseDelayMs ?? MANAGED_PROVISIONER_RETRY_BASE_MS);
+  const maxDelayMs = Math.max(baseDelayMs, options.maxDelayMs ?? MANAGED_PROVISIONER_RETRY_MAX_MS);
+  const random = options.random ?? Math.random;
+  const sleep = options.sleep ?? sleepMs;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await installManagedProvisionerAttempt(destination, release, fetcher);
+      return;
+    } catch (error) {
+      if (!(error instanceof RetryableManagedProvisionerError) || attempt >= attempts) throw error;
+      await sleep(retryDelayMs(attempt, baseDelayMs, maxDelayMs, random));
+    }
+  }
+}
+
+async function installManagedProvisionerAttempt(
+  destination: string,
+  release: ManagedProvisionerRelease,
+  fetcher: typeof fetch,
+): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MANAGED_PROVISIONER_TIMEOUT_MS);
   const temporary = `${destination}.${process.pid}.${randomUUID()}.download`;
@@ -241,10 +386,16 @@ export async function installManagedMicromamba(
     try {
       response = await fetcher(release.url, { redirect: "follow", signal: controller.signal });
     } catch (error) {
-      throw new ManagedProvisionerError("download", release.url, describeFetchFailure(error), error);
+      const detail = describeFetchFailure(error);
+      throw isRetryableTransportFailure(error)
+        ? new RetryableManagedProvisionerError("download", release.url, detail, error)
+        : new ManagedProvisionerError("download", release.url, detail, error);
     }
     if (!response.ok) {
-      throw new ManagedProvisionerError("download", release.url, `the server answered HTTP ${response.status}`);
+      const detail = `the server answered HTTP ${response.status}`;
+      throw response.status === 429 || response.status >= 500
+        ? new RetryableManagedProvisionerError("download", release.url, detail)
+        : new ManagedProvisionerError("download", release.url, detail);
     }
     const declaredLength = Number(response.headers.get("content-length") ?? "0");
     if (declaredLength > MAX_PROVISIONER_BYTES) {
@@ -255,7 +406,10 @@ export async function installManagedMicromamba(
     try {
       bytes = Buffer.from(await response.arrayBuffer());
     } catch (error) {
-      throw new ManagedProvisionerError("download", release.url, describeFetchFailure(error), error);
+      const detail = describeFetchFailure(error);
+      throw isRetryableTransportFailure(error)
+        ? new RetryableManagedProvisionerError("download", release.url, detail, error)
+        : new ManagedProvisionerError("download", release.url, detail, error);
     }
     if (!bytes.length || bytes.length > MAX_PROVISIONER_BYTES) {
       throw new ManagedProvisionerError("verify", release.url, `the download is ${bytes.length} bytes`);
@@ -276,7 +430,9 @@ export async function installManagedMicromamba(
     }
   } finally {
     clearTimeout(timeout);
-    await rm(temporary, { force: true });
+    // Cleanup must not mask the write error it is cleaning up after: an
+    // unwritable destination can also make the temporary path unreachable.
+    await rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 
@@ -955,33 +1111,45 @@ export class EnvironmentStore {
 
   private async bootstrapStarter(language: ScientificLanguage): Promise<void> {
     const id = `starter-${language}`;
-    const revisionId = `rev-${randomUUID()}`;
-    const prefix = this.revisionPath(id, revisionId);
-    const previousCatalog = structuredClone(this.catalog);
-    await mkdir(resolve(prefix, ".."), { recursive: true });
-    try {
-      await this.runProvisioner([
-        "create", "--yes", ...this.offlineArguments(), "--strict-channel-priority", "--override-channels", "--prefix", prefix,
-        ...this.config.allowedChannels.flatMap((channel) => ["--channel", channel]),
-        ...starterPackages(language),
-      ], `bootstrap-${language}`);
-      const revision = await this.recordRevision(id, revisionId, language, prefix, this.config.allowedChannels);
-      const createdAt = new Date().toISOString();
-      this.catalog.environments.push({
-        createdAt,
-        currentRevisionId: revision.id,
-        id,
-        kind: "starter",
-        language,
-        name: language === "python" ? "Starter Python" : "Starter R",
-        updatedAt: createdAt,
-      });
-      await this.saveCatalog();
-    } catch (error) {
-      this.catalog = previousCatalog;
-      await this.removeEnvironmentPrefix(id);
-      throw await this.explainProvisioningFailure(error);
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= STARTER_BOOTSTRAP_ATTEMPTS; attempt++) {
+      // A failed create leaves a half-populated prefix behind; conda records
+      // absolute paths, so the retry starts at a fresh revision directory
+      // instead of writing into the remains of the last attempt.
+      const revisionId = `rev-${randomUUID()}`;
+      const prefix = this.revisionPath(id, revisionId);
+      const previousCatalog = structuredClone(this.catalog);
+      await mkdir(resolve(prefix, ".."), { recursive: true });
+      try {
+        await this.runProvisioner([
+          "create", "--yes", ...this.offlineArguments(), "--strict-channel-priority", "--override-channels", "--prefix", prefix,
+          ...this.config.allowedChannels.flatMap((channel) => ["--channel", channel]),
+          ...starterPackages(language),
+        ], `bootstrap-${language}-attempt-${attempt}`);
+        const revision = await this.recordRevision(id, revisionId, language, prefix, this.config.allowedChannels);
+        const createdAt = new Date().toISOString();
+        this.catalog.environments.push({
+          createdAt,
+          currentRevisionId: revision.id,
+          id,
+          kind: "starter",
+          language,
+          name: language === "python" ? "Starter Python" : "Starter R",
+          updatedAt: createdAt,
+        });
+        await this.saveCatalog();
+        return;
+      } catch (error) {
+        this.catalog = previousCatalog;
+        await this.removeEnvironmentPrefix(id);
+        lastError = error;
+        if (attempt >= STARTER_BOOTSTRAP_ATTEMPTS || !isRetryableStarterFailure(error)) {
+          throw await this.explainProvisioningFailure(error);
+        }
+        await sleepMs(retryDelayMs(attempt, STARTER_BOOTSTRAP_RETRY_BASE_MS, STARTER_BOOTSTRAP_RETRY_MAX_MS, Math.random));
+      }
     }
+    throw await this.explainProvisioningFailure(lastError);
   }
 
   private async persistLocalWheel(workspaceRoot: string, sourcePath: string): Promise<EnvironmentLocalWheel> {
