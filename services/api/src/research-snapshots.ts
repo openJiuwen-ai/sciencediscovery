@@ -1156,9 +1156,25 @@ export function createResearchSnapshots({ store, evolutionStore, evolveCandidate
           if (object) await provenanceRecorder.cas.put(Buffer.isBuffer(object) ? object : Buffer.from(object));
         }
         const versions = new VersionStore(store.dataDir);
+        // `records.versionObjects` still names every version the session's records
+        // refer to, including the ones the exporter could not read: one real package
+        // carries 271 of those in `manifest.omissions` and the same 271 refs here, and
+        // none of their objects is in the archive (#1520). Skipping them is what the
+        // omission already promised; the line below is only for a package that is
+        // silent about a missing object, so the receipt never reports the same version
+        // twice.
+        const declaredOmissions = new Set(omissions);
         for (const ref of records.versionObjects ?? []) {
           const object = imported.objects.get(ref.digest.slice(7));
-          if (object) await versions.put(ref.pool, Buffer.isBuffer(object) ? object : Buffer.from(object), ref.mediaType);
+          if (!object) {
+            const key = `version:${ref.pool}:${ref.digest}`;
+            if (!declaredOmissions.has(`${key}:unavailable source object`)) {
+              omissions.push(`${key}:missing object`);
+              declaredOmissions.add(`${key}:missing object`);
+            }
+            continue;
+          }
+          await versions.put(ref.pool, Buffer.isBuffer(object) ? object : Buffer.from(object), ref.mediaType);
         }
         const environmentRevisions = (records.environmentRevisions ?? []).map((revision) => ({
           ...revision, id: ids.id(revision.id), environmentId: ids.id(revision.environmentId),

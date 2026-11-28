@@ -671,9 +671,15 @@ class DirectoryObjects implements PackageObjectDirectory {
   constructor(private readonly directory: string, private readonly paths: readonly string[]) {}
   get size(): number { return this.paths.length; }
   has(path: string): boolean { return this.paths.includes(path); }
-  get(path: string): Uint8Array { return readFileSync(join(this.directory, path)); }
-  private *generate(): Generator<[string, Uint8Array]> { for (const path of this.paths) yield [path, this.get(path)]; }
-  private *generateValues(): Generator<Uint8Array> { for (const path of this.paths) yield this.get(path); }
+  /** A path the archive does not carry answers `undefined`, exactly as the in-memory
+   *  map does: this class is only the same `Map` over files on disk. `readFileSync`
+   *  used to throw `ENOENT` here, so an object the exporter had already declared
+   *  missing turned into a 404 on import instead of the omission it is (#1520). */
+  get(path: string): Uint8Array | undefined { return this.has(path) ? this.read(path) : undefined; }
+  /** Only for paths this class has listed; `generate*` iterate `paths`. */
+  private read(path: string): Uint8Array { return readFileSync(join(this.directory, path)); }
+  private *generate(): Generator<[string, Uint8Array]> { for (const path of this.paths) yield [path, this.read(path)]; }
+  private *generateValues(): Generator<Uint8Array> { for (const path of this.paths) yield this.read(path); }
   values(): MapIterator<Uint8Array> { return this.generateValues() as unknown as MapIterator<Uint8Array>; }
   keys(): MapIterator<string> { return this.paths.values() as unknown as MapIterator<string>; }
   entries(): MapIterator<[string, Uint8Array]> { return this.generate() as unknown as MapIterator<[string, Uint8Array]>; }
