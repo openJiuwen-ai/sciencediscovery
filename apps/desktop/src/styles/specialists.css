@@ -70,7 +70,7 @@
 .specialist-access > button { display: flex; flex-direction: column; gap: 12px; padding: 22px; border: 1px solid #ccc; border-radius: 9px; background: #fff; text-align: left; color: #222; }
 .specialist-access > button.is-selected { border-color: #1677ff; box-shadow: 0 0 0 1px #1677ff; background: #f0f7ff; }
 .specialist-access strong { font-size: 17px; }
-.specialist-access > button > span { color: #909090; font-size: 13px; line-height: 1.7; }
+.specialist-access > button > span { color: var(--text-hint); font-size: 13px; line-height: 1.7; }
 .specialist-config-section { position: relative; margin-top: 8px; padding-top: 2px; }
 .specialist-config-section > summary { padding: 8px 200px 12px 0; color: #333; font-weight: 600; font-size: 14px; cursor: pointer; }
 .specialist-section-add { position: absolute; top: 4px; right: 0; padding: 4px 0; border: 0; background: transparent; color: #444; font-size: 14px; }

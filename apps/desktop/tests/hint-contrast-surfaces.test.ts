@@ -33,9 +33,7 @@ import {
 
 const TOKENS = stylesheet(import.meta.url, "tokens.css");
 const INDEX = stylesheet(import.meta.url, "index.css");
-/** The form that owns the settings block: one hint under a field, one inside
- *  the selected capability option. Read as source so the pairing asserted
- *  below is the DOM's, not a claim made in a comment. */
+/** The editor that renders the capability hints inside the radio buttons. */
 const SPECIALIST_FORM = readFileSync(
   new URL("../src/views/settings/system/SpecialistForm.tsx", import.meta.url),
   "utf8",
@@ -99,6 +97,8 @@ const SURFACES = {
   settings: declaredBackground("design.css", ".settings-main"),
   /** The selected capability option, painted `--primary-softer`. */
   selectedOption: declaredBackground("design.css", ".settings-ability-option.is-selected"),
+  specialistOption: declaredBackground("specialists.css", ".specialist-access > button"),
+  specialistSelectedOption: declaredBackground("specialists.css", ".specialist-access > button.is-selected"),
   /** The session flyout, which also hosts the 专家 and 会话设置 rows. */
   flyout: declaredBackground("design.css", ".session-menu-flyout"),
   /** A flyout row while the pointer is over it — when the line is being read. */
@@ -118,15 +118,13 @@ const SURFACES = {
 type SurfaceName = keyof typeof SURFACES;
 
 /**
- * The hint rules this report is about, each with the surfaces it is actually
- * painted on. The pairing is the point: `.settings-ability-option-hint` is the
- * hint that renders inside the selected option, and `.settings-field-hint` is
- * not — a suite that measured the wrong one would report a ratio for a
- * combination no reader ever sees.
+ * Hint rules and the surfaces each rule paints on. The Specialist editor
+ * uses its own sheet and measures both states of its capability buttons.
  */
-const HINTS: { selector: string; surfaces: SurfaceName[] }[] = [
+const HINTS: { selector: string; surfaces: SurfaceName[]; sheet?: string }[] = [
   { selector: ".settings-field-hint", surfaces: ["settings"] },
   { selector: ".settings-ability-option-hint", surfaces: ["settings", "selectedOption"] },
+  { selector: ".specialist-access > button > span", sheet: "specialists.css", surfaces: ["specialistOption", "specialistSelectedOption"] },
   { selector: ".settings-field-count", surfaces: ["settings"] },
   { selector: ".settings-textarea-count", surfaces: ["settings"] },
   { selector: ".settings-ability-divider", surfaces: ["settings"] },
@@ -137,9 +135,9 @@ const HINTS: { selector: string; surfaces: SurfaceName[] }[] = [
 ];
 
 /** The one hint colour, resolved through tokens.css. */
-function hintColour(selector: string): string {
-  const rules = baseRules(stylesheet(import.meta.url, "design.css"), selector);
-  assert.equal(rules.length, 1, `design.css declares ${selector} ${rules.length} times at the top level`);
+function hintColour({ selector, sheet = "design.css" }: typeof HINTS[number]): string {
+  const rules = baseRules(stylesheet(import.meta.url, sheet), selector);
+  assert.equal(rules.length, 1, `${sheet} declares ${selector} ${rules.length} times at the top level`);
   const colours = declarations(rules[0]!, "color");
   assert.equal(colours.length, 1, `${selector} declares ${colours.length} colours; a hint is one colour`);
   const value = resolve(colours[0] ?? "", TOKENS);
@@ -154,13 +152,14 @@ test("every hint in the report is the one hint colour", () => {
   // literal would let the next per-surface tweak drift one of them back below
   // the floor without touching tokens.css.
   for (const hint of HINTS) {
-    const rules = baseRules(stylesheet(import.meta.url, "design.css"), hint.selector);
-    assert.equal(rules.length, 1, `design.css declares ${hint.selector} ${rules.length} times at the top level`);
+    const sheet = hint.sheet ?? "design.css";
+    const rules = baseRules(stylesheet(import.meta.url, sheet), hint.selector);
+    assert.equal(rules.length, 1, `${sheet} declares ${hint.selector} ${rules.length} times at the top level`);
     const colours = declarations(rules[0]!, "color");
     assert.equal(colours.length, 1, `${hint.selector} declares ${colours.length} colours: ${colours.join(", ")}`);
     assert.equal(colours[0], "var(--text-hint)", `${hint.selector} must name var(--text-hint), not ${colours[0]}`);
   }
-  const colours = new Set(HINTS.map(hint => hintColour(hint.selector).toLowerCase()));
+  const colours = new Set(HINTS.map(hint => hintColour(hint).toLowerCase()));
   assert.equal(colours.size, 1, `the hints declare ${[...colours].join(", ")}; one colour keeps the intent in one place`);
   console.log(`\nhint colour: ${[...colours].join(", ")} (--text-hint), ${HINTS.length} rules`);
 });
@@ -172,7 +171,7 @@ test("every hint clears WCAG AA on every surface it is painted on", () => {
   // 4.54:1) falls to 4.26:1 there. That is the regression this test catches.
   const reported: string[] = [];
   for (const hint of HINTS) {
-    const colour = hintColour(hint.selector);
+    const colour = hintColour(hint);
     for (const name of hint.surfaces) {
       const background = SURFACES[name];
       const ratio = contrast(parseHex(colour)!, background.rgb);
@@ -186,26 +185,15 @@ test("every hint clears WCAG AA on every surface it is painted on", () => {
   console.log(`\nWCAG AA hint contrast (threshold ${AA_NORMAL_TEXT}:1)\n${reported.join("\n")}`);
 });
 
-test("the hint paired with the selected option is the one rendered inside it", () => {
-  // The setting form is `<label class="settings-ability-option…"><input/><span>
-  // <span class="settings-ability-option-title">…</span><span class="
-  // settings-ability-option-hint">…</span></span></label>`. The label is what
-  // turns `--primary-softer` when chosen, so only the hint inside it is painted
-  // on that surface; `.settings-field-hint` sits one level up, in
-  // `.settings-ability`, and never lands on `#f4f8ff`. Asserting the source
-  // keeps the surface lists above honest.
-  const start = SPECIALIST_FORM.indexOf("<label className={`settings-ability-option");
-  assert.ok(start >= 0, "the capability option's <label> was not found");
-  const opening = SPECIALIST_FORM.slice(start, SPECIALIST_FORM.indexOf(">", start));
-  assert.ok(opening.includes("is-selected"), `the option is no longer given \`is-selected\`: ${opening}`);
-  const label = SPECIALIST_FORM.slice(start);
-  const option = label.slice(0, label.indexOf("</label>"));
-  assert.ok(option.length > 0 && option.length < label.length, "the capability option's </label> was not found");
-  assert.ok(option.includes("settings-ability-option-hint"), "the option's own hint is not inside the option");
-  assert.ok(
-    !option.includes("settings-field-hint"),
-    "a settings-field-hint is inside the capability option; the surface lists in this test would be wrong",
-  );
+test("both Specialist capability hints render inside the buttons that paint their backgrounds", () => {
+  const group = SPECIALIST_FORM.match(/<div className="specialist-access"[^>]*>([\s\S]*?)<\/div>/)?.[1];
+  assert.ok(group, "the Specialist capability group was not found");
+  const options = [...group.matchAll(/<button\b([^]*?)>\s*<strong>[^]*?<\/strong>\s*<span>\{labels\.(fullAccessHint|capabilitiesHint)\}<\/span>\s*<\/button>/g)];
+  assert.deepEqual(options.map(option => option[2]).sort(), ["capabilitiesHint", "fullAccessHint"]);
+  for (const [, opening, hint] of options) {
+    assert.match(opening ?? "", /className=\{!?all\s*\?\s*"is-selected"/, `${hint} must be inside a selectable button`);
+  }
+  assert.ok(ORDER.includes("specialists.css"), "the renderer must import the measured Specialist styles");
 });
 
 test("the surfaces measured here are the ones the sheets paint", () => {
@@ -219,6 +207,8 @@ test("the surfaces measured here are the ones the sheets paint", () => {
   assert.deepEqual(painted, {
     settings: "#ffffff",
     selectedOption: "#f4f8ff",
+    specialistOption: "#ffffff",
+    specialistSelectedOption: "#f0f7ff",
     flyout: "#ffffff",
     flyoutHover: "#f5f5f5",
     panel: "#ffffff",
@@ -254,7 +244,7 @@ test("no rule repaints a hint, so one colour cannot be traded for another", () =
   // repainted by the documented error state, and that state must stay --danger
   // rather than a hint shade.
   for (const hint of HINTS) {
-    for (const rule of rulesReaching(stylesheet(import.meta.url, "design.css"), hint.selector)) {
+    for (const rule of rulesReaching(stylesheet(import.meta.url, hint.sheet ?? "design.css"), hint.selector)) {
       const colours = declarations(rule, "color");
       if (colours.length === 0) continue;
       assert.equal(colours.length, 1, `${hint.selector} rule "${rule.prelude}" declares ${colours.length} colours`);
