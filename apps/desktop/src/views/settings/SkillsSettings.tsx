@@ -59,7 +59,7 @@ import { SkillGitImportView } from "./SkillGitImportView.js";
 import { SkillRowMenu, type SkillRowAction } from "./SkillRowMenu.js";
 import { markTone } from "./skill-tone.js";
 import { SkillUploadView } from "./SkillUploadView.js";
-import { BulkToggles, LoadGate, Switch } from "./rows.js";
+import { BulkToggles, CatalogSearch, LoadGate, Switch } from "./rows.js";
 
 interface Props {
   client: ApiClient;
@@ -257,7 +257,6 @@ export function SkillsSettings({ client, onConfirm }: Props) {
   const [notice, setNotice] = useState<string>();
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<SkillScope>("all");
-  const searchInput = useRef<HTMLInputElement>(null);
   const [exportStatus, setExportStatus] = useState<{
     error?: boolean;
     id: string;
@@ -732,11 +731,10 @@ export function SkillsSettings({ client, onConfirm }: Props) {
         };
         const bulkRows = page ? bulkTargets(page, scope, query.trim().toLowerCase()) : [];
         return (
-          <div className="skill-toolbar">
+          <div className="settings-catalog-toolbar skill-toolbar">
             {page ? (
               <div
                 aria-label={TEXT.settings.skills.tabs.label}
-                className="skill-tabs"
                 id="skill-tabs"
                 role="tablist"
               >
@@ -744,7 +742,6 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                   <button
                     aria-controls="skill-list-panel"
                     aria-selected={scope === tab}
-                    className={`skill-tab${scope === tab ? " is-active" : ""}`}
                     key={tab}
                     onClick={() => setScope(tab)}
                     role="tab"
@@ -754,8 +751,8 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                   </button>
                 ))}
               </div>
-            ) : <div className="skill-tabs" />}
-            <div className="skill-toolbar-end">
+            ) : null}
+            <div className="settings-catalog-actions">
               {page?.switchesAvailable && bulkRows.length > 0
                 ? <BulkToggles
                   busy={busy || bulkPending}
@@ -763,43 +760,7 @@ export function SkillsSettings({ client, onConfirm }: Props) {
                   variant="toolbar"
                 />
                 : null}
-              <div className="skill-search-field">
-                <input
-                  aria-label={TEXT.settings.skills.search}
-                  className="skill-search-input"
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder={TEXT.settings.skills.searchPlaceholder}
-                  ref={searchInput}
-                  type="search"
-                  value={query}
-                />
-                {query === "" ? null : (
-                  <button
-                    aria-label={TEXT.settings.skills.clearSearch}
-                    className="skill-search-clear"
-                    onClick={() => {
-                      setQuery("");
-                      // The field is what the user is working in; clearing it
-                      // should leave the caret there rather than on the button.
-                      searchInput.current?.focus();
-                    }}
-                    type="button"
-                  >
-                    <svg
-                      aria-hidden="true"
-                      fill="none"
-                      height="14"
-                      stroke="currentColor"
-                      strokeLinecap="round"
-                      strokeWidth="1.8"
-                      viewBox="0 0 24 24"
-                      width="14"
-                    >
-                      <path d="M6 6l12 12M18 6L6 18" />
-                    </svg>
-                  </button>
-                )}
-              </div>
+              <CatalogSearch label={TEXT.settings.skills.search} placeholder={TEXT.settings.skills.searchPlaceholder} value={query} onChange={setQuery} />
               <SkillAddMenu
                 onChoose={(choice) => {
                   if (choice === "create") goTo({ kind: "create" });

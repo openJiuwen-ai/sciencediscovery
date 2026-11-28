@@ -354,6 +354,118 @@ test.describe("专家", () => {
 });
 
 
+test("Skills toolbar stays right-aligned before load and after a load error", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await installMockApi(page, { skills: [skill()] });
+  let respond!: () => void;
+  const pending = new Promise<void>(resolve => { respond = resolve; });
+  let failCatalog = true;
+  await page.route("**/api/skills", async route => {
+    if (!failCatalog) return route.fallback();
+    await pending;
+    await route.fulfill({ status: 500, json: { error: "Skills catalog could not load" } });
+  });
+  const dialog = await openSettings(page, "技能");
+  const toolbar = dialog.locator(".settings-catalog-toolbar");
+  const tabs = toolbar.getByRole("tablist");
+  const addInset = () => toolbar.evaluate(element =>
+    element.getBoundingClientRect().right
+    - element.querySelector(".pill-button")!.getBoundingClientRect().right);
+
+  try {
+    await expect(tabs).toHaveCount(0);
+    expect(Math.abs(await addInset()), "loading").toBeLessThanOrEqual(1);
+  } finally {
+    respond();
+  }
+
+  await expect(dialog.getByText("Skills catalog could not load", { exact: true })).toBeVisible();
+  await expect(tabs).toHaveCount(0);
+  expect(Math.abs(await addInset()), "load error").toBeLessThanOrEqual(1);
+  failCatalog = false;
+  await dialog.getByRole("button", { name: "重试", exact: true }).click();
+  await expect(tabs).toBeVisible();
+  expect(Math.abs(await addInset()), "after retry").toBeLessThanOrEqual(1);
+});
+
+for (const locale of [
+  { id: "zh-CN", settings: "设置", skills: "技能", specialists: "专家", mcp: "MCP 服务器", bulkScope: "批量操作仅影响当前显示的自定义服务", clear: "清空搜索" },
+  { id: "en", settings: "Settings", skills: "Skills", specialists: "Specialists", mcp: "MCP servers", bulkScope: "Bulk actions affect only the custom servers shown", clear: "Clear search" },
+] as const) {
+  test(`catalog toolbars keep search and add together at narrow widths (${locale.id})`, async ({ page }) => {
+    await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [LOCALE_STORAGE_KEY, locale.id]);
+    await installMockApi(page, {
+      specialists: [specialist()],
+      skills: [skill()],
+      mcpSources: [{ manifest: { id: "built-in-search", displayName: "Built-in search", description: "Search", tools: {} }, status: { status: "ready" } }],
+    });
+
+    await page.setViewportSize({ width: 1600, height: 900 });
+    const dialog = await openSettings(page, locale.skills, locale.settings);
+    for (const group of [locale.skills, locale.specialists, locale.mcp]) {
+      await dialog.getByRole("button", { name: group, exact: true }).click();
+      const toolbar = dialog.locator(".settings-catalog-toolbar");
+      await expect(toolbar).toBeVisible();
+
+      for (const width of [1600, 1100, 960, 650, 520]) {
+        await page.setViewportSize({ width, height: 900 });
+        const layout = await toolbar.evaluate(element => {
+          const tabs = element.querySelector("[role=tablist]")!.getBoundingClientRect();
+          const actions = element.querySelector(".settings-catalog-actions")!;
+          const bulk = actions.querySelector(".settings-bulk")!.getBoundingClientRect();
+          const search = actions.querySelector(".settings-catalog-search")!.getBoundingClientRect();
+          const add = actions.querySelector(".pill-button")!.getBoundingClientRect();
+          const bounds = element.getBoundingClientRect();
+          const container = element.closest<HTMLElement>(".settings-group-detail.is-skill-list, .specialist-page, .mcp-settings")!;
+          const containerStyle = getComputedStyle(container);
+          const containerWidth = container.clientWidth - parseFloat(containerStyle.paddingLeft) - parseFloat(containerStyle.paddingRight);
+          const centerY = (rect: DOMRect) => rect.y + rect.height / 2;
+          return {
+            containerWidth,
+            tabsToActions: actions.getBoundingClientRect().top - tabs.bottom,
+            tabsCenter: centerY(tabs),
+            bulkCenter: centerY(bulk),
+            bulkBottom: bulk.bottom,
+            searchTop: search.top,
+            searchCenter: centerY(search),
+            addCenter: centerY(add),
+            addInset: bounds.right - add.right,
+            overflow: element.scrollWidth - element.clientWidth,
+          };
+        });
+        const at = `${locale.id} / ${group} / ${width}`;
+        expect(Math.abs(layout.searchCenter - layout.addCenter), at).toBeLessThanOrEqual(1);
+        expect(Math.abs(layout.addInset), at).toBeLessThanOrEqual(1);
+        expect(layout.overflow, at).toBeLessThanOrEqual(1);
+        if (width === 1600) expect(Math.abs(layout.tabsCenter - layout.searchCenter), at).toBeLessThanOrEqual(1);
+        if (layout.containerWidth <= 900) expect(layout.tabsToActions, at).toBeGreaterThanOrEqual(0);
+        if (width === 520) expect(layout.containerWidth, at).toBeLessThanOrEqual(520);
+        if (layout.containerWidth <= 520) {
+          expect(layout.bulkBottom, at).toBeLessThanOrEqual(layout.searchTop);
+        } else {
+          expect(Math.abs(layout.bulkCenter - layout.searchCenter), at).toBeLessThanOrEqual(1);
+        }
+      }
+
+      const search = toolbar.getByRole("searchbox");
+      await search.fill("no matching entries");
+      await toolbar.getByRole("button", { name: locale.clear, exact: true }).click();
+      await expect(search).toHaveValue("");
+      await expect(search).toBeFocused();
+
+      const bulk = toolbar.locator(".settings-bulk");
+      await expect(bulk).toBeVisible();
+      if (group === locale.mcp) {
+        const buttons = bulk.getByRole("button");
+        await expect(buttons).toHaveCount(2);
+        await expect(buttons.nth(0)).toBeDisabled();
+        await expect(buttons.nth(1)).toBeDisabled();
+        await expect(dialog.getByText(locale.bulkScope, { exact: false })).toBeVisible();
+      }
+    }
+  });
+}
+
 test.describe("MCP 服务器", () => {
   const sources: JsonRecord[] = [
     {

@@ -1,17 +1,13 @@
 /* Copyright (C) 2026 Huawei Technologies Co., Ltd
  * SPDX-License-Identifier: Apache-2.0 */
 
-.specialist-page { padding: 38px 48px 56px; container: specialists / inline-size; }
+.specialist-page { padding: 38px 48px 56px; container: specialists settings-catalog / inline-size; }
 .specialist-page-heading h2 { margin: 0; font-size: 26px; font-weight: 650; color: #191919; }
 .specialist-page-heading p { margin: 9px 0 30px; color: #8c8c8c; font-size: 14px; line-height: 1.6; }
-.specialist-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-bottom: 28px; }
-.specialist-source-tabs { display: flex; gap: 26px; min-width: 0; }
-.specialist-source-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 12px 0; color: #484848; white-space: nowrap; font-size: 14px; }
-.specialist-source-tabs button[aria-selected="true"] { border-color: #191919; color: #191919; font-weight: 650; }
-.specialist-toolbar-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.specialist-toolbar-actions .settings-bulk { margin: 0; border: 0; gap: 10px; }
-.specialist-toolbar-actions .bulk-button { border: 0; padding: 6px 0; background: transparent; color: #444; }
-.specialist-toolbar .pill-button { white-space: nowrap; }
+.specialist-toolbar { margin-bottom: 28px; }
+.specialist-drawer-body .specialist-source-tabs { display: flex; gap: 26px; min-width: 0; }
+.specialist-drawer-body .specialist-source-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; padding: 12px 0; color: #484848; white-space: nowrap; font-size: 14px; }
+.specialist-drawer-body .specialist-source-tabs button[aria-selected="true"] { border-color: #191919; color: #191919; font-weight: 650; }
 .specialist-search { display: flex; align-items: center; gap: 7px; border: 1px solid #ccc; border-radius: 8px; min-width: 160px; padding: 0 10px; width: 240px; height: 34px; color: #bfbfbf; }
 .specialist-search input { min-width: 0; width: 100%; border: 0; outline: 0; color: #191919; font: inherit; font-size: 13px; background: transparent; }
 .specialist-search:focus-within { border-color: #1677ff; box-shadow: 0 0 0 2px #1677ff1a; }
@@ -121,7 +117,7 @@
 .specialist-picker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .specialist-drawer-footer { display: flex; align-items: center; justify-content: space-between; padding: 18px 28px; border-top: 1px solid #eee; font-size: 14px; }
 .specialist-drawer-footer > div { display: flex; gap: 10px; }
-@container specialists (max-width: 1100px) { .specialist-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .specialist-toolbar-actions { flex: 1; } }
-@container specialists (max-width: 700px) { .specialist-grid { grid-template-columns: minmax(0, 1fr); } .specialist-source-tabs { gap: 18px; } }
+@container specialists (max-width: 1100px) { .specialist-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container specialists (max-width: 700px) { .specialist-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 1100px) { .specialist-page { padding: 28px; } .specialist-subpage-content { padding: 26px 32px 40px; } .specialist-selected-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 700px) { .specialist-page { padding: 22px 18px; } .specialist-toolbar-actions { gap: 12px; } .specialist-search { width: 100%; } .specialist-access, .specialist-selected-grid, .specialist-picker-grid { grid-template-columns: minmax(0, 1fr); } .specialist-subpage-content { padding: 24px 20px 36px; } .specialist-detail-actions { gap: 12px; } .specialist-card-open { padding: 18px; } .specialist-source-tabs { gap: 14px; } }
+@media (max-width: 700px) { .specialist-page { padding: 22px 18px; } .specialist-search { width: 100%; } .specialist-access, .specialist-selected-grid, .specialist-picker-grid { grid-template-columns: minmax(0, 1fr); } .specialist-subpage-content { padding: 24px 20px 36px; } .specialist-detail-actions { gap: 12px; } .specialist-card-open { padding: 18px; } .specialist-drawer-body .specialist-source-tabs { column-gap: 14px; } }

@@ -44,7 +44,7 @@ import { McpAddMenu } from "../McpAddMenu.js";
 import { draftOf, emptyDraft, inputOf, parseMcpDrafts, draftProblem, secretProblem, type Draft, type SecretRow } from "../mcp-config.js";
 import { McpServerCard } from "../McpServerCard.js";
 import { McpServerDetails } from "../McpServerDetails.js";
-import { Group, LoadGate, Row, Select, Switch } from "../rows.js";
+import { BulkToggles, CatalogSearch, Group, LoadGate, Row, Select, Switch } from "../rows.js";
 
 interface Props {
   client: ApiClient;
@@ -464,18 +464,23 @@ export function McpServers({ client, onConfirm, onToast, onTry }: Props) {
       <LoadGate loaded={loaded}>
         {(page) => (
           <Group>
-            <div className="mcp-page-toolbar">
-              <div className="mcp-catalog-tabs" role="tablist" aria-label="MCP">
+            <div className="settings-catalog-toolbar mcp-page-toolbar">
+              <div role="tablist" aria-label="MCP">
                 {(["all", "mine", "official"] as const).map((value) => <button key={value} role="tab" type="button"
                   aria-selected={category === value} onClick={() => setCategory(value)}>
                   {value === "all" ? TEXT.settings.system.mcp.allMcp : value === "mine" ? TEXT.settings.system.mcp.myMcp : TEXT.settings.system.mcp.officialMcp}
-                  <span>({value === "all" ? (servers ?? page.custom).length + page.builtins.length : value === "mine" ? (servers ?? page.custom).length : page.builtins.length})</span>
+                  {" "}({value === "all" ? (servers ?? page.custom).length + page.builtins.length : value === "mine" ? (servers ?? page.custom).length : page.builtins.length})
                 </button>)}
               </div>
-              <div className="mcp-toolbar-actions">
-                <button className="mcp-bulk-button" disabled={busy || !visibleServers.some((server) => !server.enabled)} onClick={() => void setAllEnabled(true)} type="button"><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="9" /><path d="m10 8 6 4-6 4Z" /></svg>{TEXT.settings.system.mcp.enableAll}</button>
-                <button className="mcp-bulk-button" disabled={busy || !visibleServers.some((server) => server.enabled)} onClick={() => void setAllEnabled(false)} type="button"><svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v10M6 5a9 9 0 1 0 12 0" /></svg>{TEXT.settings.system.mcp.disableAll}</button>
-                <input type="search" className="field-input mcp-search" aria-label={TEXT.settings.system.mcp.searchMcp} placeholder={TEXT.settings.system.mcp.searchMcp} value={query} onChange={(event) => setQuery(event.target.value)} />
+              <div className="settings-catalog-actions">
+                <BulkToggles
+                  busy={busy}
+                  disableDisabled={!visibleServers.some(server => server.enabled)}
+                  enableDisabled={!visibleServers.some(server => !server.enabled)}
+                  onAll={next => void setAllEnabled(next)}
+                  variant="toolbar"
+                />
+                <CatalogSearch label={TEXT.settings.system.mcp.searchMcp} value={query} onChange={setQuery} />
                 <McpAddMenu disabled={busy} onChoose={(source) => { if (source === "manual") openCreate(); else openImport(); }} />
               </div>
             </div>

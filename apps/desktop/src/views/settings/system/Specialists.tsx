@@ -8,9 +8,9 @@ import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
 import { useTopmostEscape } from "../../use-dialog-escape.js";
-import { BulkToggles, LoadGate, Switch } from "../rows.js";
+import { BulkToggles, CatalogSearch, LoadGate, Switch } from "../rows.js";
 import { SpecialistForm } from "./SpecialistForm.js";
-import { SpecialistActions, SpecialistGlyph, SpecialistMark, SpecialistSearch, SpecialistSourceTabs, type SpecialistSource } from "./SpecialistParts.js";
+import { SpecialistActions, SpecialistGlyph, SpecialistMark, SpecialistSourceTabs, type SpecialistSource } from "./SpecialistParts.js";
 
 interface Props {
   client: ApiClient;
@@ -100,8 +100,13 @@ export function SpecialistsSettings({ client, onConfirm, onSubpageChange, onTry 
       : view.kind === "detail" ? <SpecialistDetail specialist={view.specialist} page={page} busy={busy} onBack={() => setView({ kind: "list" })} onEdit={() => setView({ kind: "edit", specialist: view.specialist })} onToggle={next => void toggle(view.specialist, next)} onDelete={() => remove(view.specialist)} onTry={prompt => void tryRole(view.specialist, prompt)} />
         : <div className="specialist-page">
           <header className="specialist-page-heading"><h2>{labels.heading}</h2><p>{labels.help}</p></header>
-          <div className="specialist-toolbar"><SpecialistSourceTabs value={source} onChange={setSource} counts={{ all: page.specialists.length, mine: page.specialists.filter(s => !s.builtIn).length, official: page.specialists.filter(s => s.builtIn).length }} />
-            <div className="specialist-toolbar-actions"><BulkToggles busy={busy || page.specialists.length === 0} onAll={next => void setAll(next)} /><SpecialistSearch value={query} onChange={setQuery} /><button className="pill-button is-dark" disabled={busy} type="button" onClick={() => { setNotice(undefined); setView({ kind: "create" }); }}>{labels.add}</button></div>
+          <div className="settings-catalog-toolbar specialist-toolbar">
+            <SpecialistSourceTabs value={source} onChange={setSource} counts={{ all: page.specialists.length, mine: page.specialists.filter(s => !s.builtIn).length, official: page.specialists.filter(s => s.builtIn).length }} />
+            <div className="settings-catalog-actions">
+              <BulkToggles busy={busy || page.specialists.length === 0} onAll={next => void setAll(next)} variant="toolbar" />
+              <CatalogSearch label={labels.search} value={query} onChange={setQuery} />
+              <button className="pill-button is-dark" disabled={busy} type="button" onClick={() => { setNotice(undefined); setView({ kind: "create" }); }}>{labels.add}</button>
+            </div>
           </div>
           <div className="specialist-grid">
             {page.specialists.filter(s => (source === "all" || Boolean(s.builtIn) === (source === "official")) && `${s.name} ${s.description}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map(specialist => <article className="specialist-card settings-card" key={specialist.id}>

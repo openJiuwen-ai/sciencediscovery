@@ -56,13 +56,16 @@ export function McpAddMenu({ disabled, onChoose }: {
         aria-controls={open ? id : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="primary-button mcp-import-trigger"
+        className="pill-button is-dark"
         disabled={disabled}
         onClick={() => { focusLast.current = false; setOpen((value) => !value); }}
         ref={trigger}
         type="button"
       >
-        {TEXT.settings.system.mcp.addServer}<span aria-hidden="true">▾</span>
+        {TEXT.settings.system.mcp.addServer}
+        <svg aria-hidden="true" className={`skill-add-chev${open ? " is-open" : ""}`} fill="none" height="11" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="11">
+          <path d="M6 9l6 6 6-6" />
+        </svg>
       </button>
       {open ? (
         <div aria-label={TEXT.settings.system.mcp.addServer} className="mcp-import-popover" id={id} role="menu">

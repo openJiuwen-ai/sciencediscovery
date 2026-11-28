@@ -1814,8 +1814,6 @@ export const ZH = {
         myMcp: "我的MCP",
         officialMcp: "官方MCP",
         searchMcp: "搜索MCP",
-        enableAll: "一键启用",
-        disableAll: "一键关闭",
         bulkHint: "批量操作仅影响当前显示的自定义服务；内置服务开关控制会话默认使用。",
         bulkFailed: (names: string) => `以下服务更新失败：${names}。可重试更新剩余服务。`,
         tryIt: "去试试",

@@ -366,11 +366,9 @@ test("the bulk pair sits on the tab row, each label behind its own glyph", async
   const stub = new StubClient().reply([alpha]).reply(page);
   const view = await mount(stub.asClient());
   try {
-    // The handoff draws the pair in the toolbar beside the filters, not on a
-    // line over the list: 技能's two writes are looked for there now.
-    const toolbarEnd = view.root.findAllByProps({ className: "skill-toolbar-end" });
-    assert.equal(toolbarEnd.length, 1, "the list has no toolbar end");
-    const bulk = toolbarEnd[0]!.findAllByProps({ className: "settings-bulk is-toolbar" });
+    const actions = view.root.findAllByProps({ className: "settings-catalog-actions" });
+    assert.equal(actions.length, 1, "the list has no toolbar actions");
+    const bulk = actions[0]!.findAllByProps({ className: "settings-bulk is-toolbar" });
     assert.equal(bulk.length, 1, "the bulk pair is not in the toolbar");
     const labels = bulk[0]!.findAllByType("button").map((button) => button.children.at(-1));
     assert.deepEqual(labels, [TEXT.settings.enableAll, TEXT.settings.disableAll]);
