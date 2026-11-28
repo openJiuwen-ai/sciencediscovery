@@ -30,6 +30,7 @@ import type { EvolveCandidateView, EvolveRunView } from "../src/evolve/model.js"
 import { emptyRunView } from "../src/evolve/model.js";
 import { getLanguage, setLanguage, TEXT } from "../src/text.js";
 import { CandidateInspector } from "../src/views/evolve/CandidateInspector.js";
+import { DirectionInput } from "../src/views/evolve/DirectionInput.js";
 import { EvolveCreateDialog } from "../src/views/evolve/EvolveCreateDialog.js";
 import { EvolveDetail, lastGain } from "../src/views/evolve/EvolveDetail.js";
 import { EvolveNodeList } from "../src/views/evolve/EvolveNodeList.js";
@@ -1502,4 +1503,202 @@ test("a deployment that will not install says so instead of offering a dead butt
   );
   assert.match(html, /请联系管理员/);
   assert.match(html, /<button[^>]*disabled=""[^>]*>准备运行时<\/button>/);
+});
+
+
+test("the parameter panel states the run limits without claiming to change them", () => {
+  // The panel edits the program's starting JSON. The same words name run-budget
+  // fields, so the dialog states the real limits and the budget arithmetic as a
+  // reference — and nothing more (#1346).
+  const html = renderToStaticMarkup(
+    <DirectionInput
+      chinese
+      onChange={() => {}}
+      value={{ baseline: JSON.stringify({ expansions: 40, maxSeconds: 30, ratio: 2 }), editable: ["ratio"] }}
+    />,
+  );
+
+  assert.match(html, /运行限制参考（不是本面板的设置）/);
+  assert.match(html, /检查点 3/);
+  assert.match(html, /助手/);
+  assert.match(html, /不会改变运行预算/);
+  // Folded at rest: the editor is what the panel is for, so the reference
+  // must not push it off the first screen. The summary still carries the
+  // bounds while closed.
+  const details = html.match(/<details[^>]*class="evolve-json-budget"[^>]*>/)?.[0] ?? "";
+  assert.equal(details.includes("open"), false);
+  assert.match(html, /expansions 1–40 次 · workers 1–8 个 · maxTokens 上限 600000 tokens · maxSeconds 固定 7200 秒/);
+  // Every limit is the server's own: the tool bound, the defaults and the
+  // per-call ceilings.
+  assert.match(html, /data-budget-field="expansions"/);
+  assert.match(html, /整数 1–40 次，步长 1/);
+  assert.match(html, /超出会被拒绝/);
+  assert.match(html, /data-budget-field="workers"/);
+  assert.match(html, /整数 1–8 个/);
+  assert.match(html, /expansions ≥ 4 × workers/);
+  assert.match(html, /data-budget-field="maxTokens"/);
+  assert.match(html, /上限 600000 tokens（服务端固定上限）/);
+  assert.match(html, /data-budget-field="maxTokensPerCall"/);
+  assert.match(html, /不可设置/);
+  assert.match(html, /PUCT 96000/);
+  assert.match(html, /OpenEvolve 128000/);
+  assert.match(html, /data-budget-field="maxSeconds"/);
+  assert.match(html, /服务端固定 7200 秒，不可设置/);
+
+  // The per-call ceiling leaves a different number of whole expansions, and the
+  // dialog shows all three derivations instead of one promised value.
+  assert.match(html, /data-budget-derivation="expansions"/);
+  assert.match(html, /关闭思考 16000 × n ≤ 600000，最多 37 次/);
+  assert.match(html, /PUCT 思考 96000，最多 6 次/);
+  assert.match(html, /OpenEvolve 思考 128000，最多 4 次/);
+  assert.match(html, /由检查点 3 的模型与思考设置决定/);
+
+  // A field with a budget name is described as a program field, not as a
+  // setting this dialog would rewrite.
+  assert.match(html, /data-param-field="expansions"/);
+  assert.match(html, /程序字段「expansions」/);
+  assert.match(html, /data-param-field="maxSeconds"/);
+  assert.match(html, /程序字段「maxSeconds」/);
+  assert.equal(html.includes("实际生效"), false);
+  assert.equal(html.includes("data-param-effective"), false);
+  assert.equal(html.includes("data-param-problem"), false);
+  // Internal tool names and literal translations stay out of the dialog.
+  for (const wording of ["checkpoint", "get_evolve_budget", "create_evolve_run", "工具边界", "花费闸门", "服务端默认值", "设计对话"]) {
+    assert.equal(html.includes(wording), false, `the panel must not say ${wording}`);
+  }
+  // An ordinary program field keeps the generic editor.
+  assert.equal(html.includes('data-param-field="ratio"'), false);
+
+  // Each budget-named row's hint is the description of that row's value input,
+  // and the reference block is labelled by its own heading rather than an
+  // aria-label that repeats it.
+  const described = html.match(/<input aria-describedby="([^"]+)" aria-label="expansions"/)?.[1];
+  assert.ok(described);
+  assert.match(html, new RegExp(`<p class="evolve-json-param-hint" data-param-field="expansions" id="${described}"`));
+  const titleId = html.match(/<h4 id="([^"]+-budget-title)">/)?.[1];
+  assert.ok(titleId);
+  assert.match(html, new RegExp(`aria-labelledby="${titleId}"`));
+  assert.equal((html.match(new RegExp(`id="${titleId}"`, "g")) ?? []).length, 1);
+});
+
+test("an object-valued budget name is described like a scalar one", () => {
+  // A candidate may hold an object under a budget-shaped name. The description
+  // has to reach the control that opens it, not only a scalar input.
+  const html = renderToStaticMarkup(
+    <DirectionInput
+      chinese
+      onChange={() => {}}
+      value={{ baseline: JSON.stringify({ expansions: { count: 41 } }), editable: [] }}
+    />,
+  );
+  const described = html.match(/<summary aria-describedby="([^"]+)">/)?.[1];
+  assert.ok(described, "the object summary must carry aria-describedby");
+  assert.match(html, new RegExp(`id="${described}"`));
+  assert.match(html, /程序字段「expansions」/);
+  assert.equal(html.includes("实际生效"), false);
+});
+
+test("a program field called expansions is honoured exactly as typed", async () => {
+  const sent: Array<string | undefined> = [];
+  let panel: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    panel = create(
+      <DirectionInput
+        chinese
+        onChange={(direction) => sent.push(direction?.baseline)}
+        value={{ baseline: JSON.stringify({ expansions: 41 }), editable: ["expansions"] }}
+      />,
+    );
+  });
+  try {
+    // 41 is a legal field of an evolved program even though the run budget
+    // would refuse it; the panel neither rewrites nor blocks it.
+    assert.equal((panel!.root.findAllByProps({ "aria-label": "expansions" })).length, 1);
+    assert.equal(panel!.root.findAllByProps({ "aria-label": "expansions" })[0].props.value, "41");
+    assert.match(nodeText(panel!.toJSON()), /程序字段「expansions」/);
+    assert.equal(panel!.root.findAll((node) => String(node.props.className).includes("param-problem")).length, 0);
+
+    const field = () => panel!.root.findByProps({ "aria-label": "expansions" });
+    await act(async () => {
+      (field().props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "42" } });
+    });
+    // The typed value is what the design conversation receives; the run budget
+    // is decided there, not here.
+    assert.equal(JSON.parse(sent.at(-1) ?? "{}").expansions, 42);
+    assert.equal((field().props.value as string), "42");
+    assert.equal(nodeText(panel!.toJSON()).includes("实际生效"), false);
+
+    // Folded at rest; opening it shows every limit and the derivation.
+    const details = panel!.root.findByType("details");
+    assert.equal(details.props.open, false);
+    await act(async () => {
+      (details.props.onToggle as (event: { currentTarget: { open: boolean } }) => void)({ currentTarget: { open: true } });
+    });
+    assert.equal(panel!.root.findByType("details").props.open, true);
+    const opened = nodeText(panel!.toJSON());
+    for (const text of ["整数 1–40 次", "整数 1–8 个", "上限 600000 tokens", "固定 7200 秒", "最多 37 次", "最多 6 次", "最多 4 次"]) {
+      assert.equal(opened.includes(text), true, `the opened reference must show ${text}`);
+    }
+  } finally {
+    await act(async () => { panel!.unmount(); });
+  }
+});
+
+test("a budget-named program field does not stop the design from starting", async () => {
+  let dialog: ReturnType<typeof create> | undefined;
+  await act(async () => {
+    dialog = create(
+      <EvolveCreateDialog
+        archived={false}
+        initialGoal="压缩并解压文本，往返完全无损"
+        initializing={false}
+        onClose={() => {}}
+        onInitialize={() => {}}
+        onSend={() => {}}
+        running={false}
+        status={{ canInitialize: true, state: "ready" }}
+      />,
+    );
+  });
+  const submit = () => dialog!.root.findAllByType("button")
+    .find((node) => node.props.className === "evolve-create-submit")!;
+  const byText = (text: string) => dialog!.root.findAllByType("button")
+    .find((node) => nodeText(node).includes(text))!;
+  try {
+    // The custom-parameters switch is the second one on the form.
+    const switches = dialog!.root.findAllByProps({ role: "switch" });
+    await act(async () => {
+      (switches[1]!.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    });
+    await act(async () => { (byText("添加参数").props.onClick as () => void)(); });
+    const nameField = () => dialog!.root.findAllByProps({ "aria-label": "参数名" }).at(-1)!;
+    await act(async () => {
+      (nameField().props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "expansions" } });
+    });
+    const scope = dialog!.root.findAll((node) => typeof node.props["aria-label"] === "string"
+      && String(node.props["aria-label"]).startsWith("参与搜索")).at(-1)!;
+    await act(async () => {
+      (scope.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    });
+    const field = () => dialog!.root.findAll((node) => node.props["aria-label"] === "expansions").at(-1)!;
+    // A run budget would refuse 41 at the tool boundary; a program field may
+    // carry it, so the form stays sendable and the value stays as typed.
+    await act(async () => {
+      (field().props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "41" } });
+    });
+    assert.equal(submit().props.disabled, false);
+    assert.equal(field().props.value, "41");
+    assert.match(nodeText(dialog!.toJSON()), /程序字段「expansions」/);
+    // The reference the panel adds is inside the dialog, with all three caps
+    // and the zh-CN terminology the rest of the surface uses.
+    assert.match(nodeText(dialog!.toJSON()), /最多 37 次/);
+    assert.match(nodeText(dialog!.toJSON()), /最多 6 次/);
+    assert.match(nodeText(dialog!.toJSON()), /最多 4 次/);
+    assert.match(nodeText(dialog!.toJSON()), /检查点 3/);
+    assert.equal(nodeText(dialog!.toJSON()).includes("checkpoint"), false);
+    assert.equal(nodeText(dialog!.toJSON()).includes("实际生效"), false);
+    assert.equal(nodeText(dialog!.toJSON()).includes("请先改正"), false);
+  } finally {
+    await act(async () => { dialog!.unmount(); });
+  }
 });

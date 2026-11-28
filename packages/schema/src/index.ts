@@ -25,6 +25,7 @@ export * from "./npu-device.js";
 export * from "./artifact-provenance.js";
 export * from "./memory-graph.js";
 export * from "./evolution.js";
+export * from "./evolve-budget.js";
 export * from "./evolve-direction.js";
 export * from "./search-graph.js";
 export * from "./session.js";

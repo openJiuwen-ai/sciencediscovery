@@ -2391,7 +2391,7 @@ export const EN: Text = {
       taskLabel: "Task",
       taskPlaceholder: "The task to evolve, with its constraints and how it is scored. For example: write a compressor and decompressor for text whose round trip is exactly lossless; the score is how much smaller the output gets.",
       parametersLabel: "Custom evolution parameters",
-      parametersHint: "Set a starting value for each parameter. The search tries different values for ticked ones; unticked ones always keep their starting value.",
+      parametersHint: "Set a starting value for each field of the program under evolution. The search tries different values for ticked ones; unticked ones always keep their starting value. These are starting values of the evolved program's JSON, not this run's budget: the assistant sets and shows the budget at checkpoint 3, and only reference limits are listed below.",
       /* Windows has no bwrap/seatbelt. There is no switch here, only two
          warnings: a banner under the title so the risk is seen at a glance,
          and an alert that asks again when the search is started. The answer

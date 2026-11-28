@@ -134,6 +134,11 @@ export function EvolveCreateDialog({
   const task = useRef<HTMLTextAreaElement>(null);
   const scrollArea = useRef<HTMLDivElement>(null);
   const fields = useRef<HTMLDivElement>(null);
+  /** The custom-parameter panel. Below the task and the settings, so in a short
+   *  window switching it on used to change nothing visible: the panel opened
+   *  under the fold. Turning the switch on is the request to edit parameters,
+   *  so the panel is brought to the top of the scrolling area. */
+  const directionPanel = useRef<HTMLDivElement>(null);
   /** Whether the fields continue below the fold. The actions stay pinned, so
    *  without this the form looks complete at the cut and the parameters are
    *  never found in a short window. */
@@ -156,6 +161,11 @@ export function EvolveCreateDialog({
   useEffect(() => {
     void onRefreshStatus?.();
   }, [onRefreshStatus]);
+
+  useEffect(() => {
+    if (!customScope) return;
+    directionPanel.current?.scrollIntoView({ block: "start" });
+  }, [customScope]);
 
   useEffect(() => {
     const node = scrollArea.current;
@@ -402,6 +412,7 @@ export function EvolveCreateDialog({
               <div
                 className="evolve-create-direction"
                 hidden={!customScope}
+                ref={directionPanel}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && event.target instanceof HTMLInputElement) event.preventDefault();
                 }}
