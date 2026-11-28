@@ -432,17 +432,6 @@ body.is-resizing {
   mask-image: linear-gradient(to right, #000 calc(100% - 60px), transparent calc(100% - 50px));
 }
 
-/* A device without a hover capability has no pointer to wait for, so the
-   controls it could never summon are simply shown: the first tap then lands on
-   the control the reader can see, instead of only opening the row under it. */
-@media (hover: none) {
-  .side-label-row .side-mini-button.is-add,
-  .side-row.side-project .side-actions,
-  .side-row.side-sub .side-actions {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
 
 .side-mini-button.is-add {
   font-size: 17px;
@@ -532,6 +521,39 @@ body.is-resizing {
 .side-row.side-sub:hover .side-session-time,
 .side-row.side-sub:focus-within .side-session-time {
   opacity: 0;
+}
+
+/* A device without a hover capability has no pointer to wait for, so the
+   controls it could never summon are simply shown: the first tap then lands on
+   the control the reader can see, instead of only opening the row under it.
+   Showing them is only half of it. The room that keeps them off the text is
+   made in the `:hover`/`:focus-within` rules above, which a device without a
+   pointer never reaches, so the same room has to be made here once: otherwise
+   the name's tail is painted under the `+`/`⋯`, and a Session's clock under its
+   `⋯`, on exactly the devices that cannot move them out of the way. Here there
+   is no transition to keep steady, so the room is held rather than animated. */
+@media (hover: none) {
+  .side-label-row .side-mini-button.is-add,
+  .side-row.side-project .side-actions,
+  .side-row.side-sub .side-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* The Project strip floats over the name's tail here too, so that band of the
+     name fades the way it does under a pointer. */
+  .side-row.side-project .side-project-toggle .label {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 60px), transparent calc(100% - 50px));
+    mask-image: linear-gradient(to right, #000 calc(100% - 60px), transparent calc(100% - 50px));
+  }
+
+  /* A Session row gives back the width the `⋯` sits on: the row's own 12px plus
+     34px, so the clock ends before the strip starts instead of running under
+     it. Measured on both an active row (the strip paints its own background)
+     and a quiet one (the ellipsis paints over the digits). */
+  .side-row.side-sub {
+    padding-right: 46px;
+  }
 }
 
 .side-spinner {

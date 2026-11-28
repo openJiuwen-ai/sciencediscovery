@@ -271,6 +271,23 @@ test("a device that cannot hover is shown the row controls without one", () => {
   }
   assert.match(block, /opacity: 1;/u);
   assert.match(block, /pointer-events: auto;/u);
+
+  // Showing the controls is only half of it: the room that keeps them off the
+  // text is made under `:hover`/`:focus-within`, which no device without a
+  // pointer ever reaches. Without the same room here, a long Project name is
+  // painted under the `+` and `⋯`, and a Session's clock under its `⋯`, on
+  // exactly the devices that cannot move them out of the way — so the media
+  // branch carries both compensations itself.
+  assert.ok(
+    block.includes(".side-row.side-project .side-project-toggle .label"),
+    "the no-hover branch shows a Project's strip over a name it does not fade",
+  );
+  assert.match(block, /mask-image: linear-gradient\(to right, #000 calc\(100% - 60px\), transparent calc\(100% - 50px\)\)/u);
+  assert.match(
+    block,
+    /\.side-row\.side-sub \{\n\s*padding-right: 46px;/u,
+    "the Session row keeps its own 12px plus the 34px the `⋯` needs, so the clock ends before the strip",
+  );
 });
 
 test("a project's name is its own fold control, with no chevron beside it", () => {
