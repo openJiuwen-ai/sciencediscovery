@@ -95,3 +95,42 @@ test("a runtime fault is never client input, whatever its message says", () => {
   // A body that does not parse is the caller's own bytes.
   assert.equal(isKnownClientInputError(new SyntaxError("Unexpected token in JSON")), true);
 });
+
+test("a plain Error quoting the engine's own sentence is not client input either", () => {
+  // A handler that re-wraps `cause.message` in a plain Error keeps the engine's
+  // wording but loses the class, so the wording itself has to be recognised:
+  // #1533 asks that this text never comes back as a 400 body.
+  for (const message of [
+    "Cannot read properties of undefined (reading 'match')",
+    // A handler that prefixes its own sentence keeps the engine's wording.
+    "Research package import failed: Cannot read properties of undefined (reading 'match')",
+    "Cannot read property 'match' of undefined",
+    "Cannot read properties of null (reading 'length')",
+    "Cannot set properties of undefined (setting 'enabled')",
+    "Cannot set property 'enabled' of undefined",
+    "Cannot convert undefined or null to object",
+    "Cannot create property 'id' on string 'abc'",
+    "Cannot destructure property 'settings' of 'undefined' as it is undefined.",
+    "state.specialists.map is not a function",
+    "undefined is not iterable",
+    "params is not defined",
+    "Invalid array length",
+    "Maximum call stack size exceeded",
+    "Cannot use 'in' operator to search for 'id' in undefined",
+    "Assignment to constant variable.",
+  ]) {
+    assert.equal(isKnownClientInputError(new Error(message)), false, message);
+  }
+
+  // The legacy validators keep their 400: these describe the caller's field,
+  // and the words "must" / "cannot" are why the wording list still exists.
+  for (const message of [
+    "after_ms must be a positive integer",
+    "SCIENCE_AGENT_MAX_PARALLEL_TOOL_CALLS must be a positive integer",
+    "Model is referenced by runtime settings and cannot be deleted",
+    "Session deletion confirmation does not match the target",
+    "Unsafe skill package path: ../escape.txt",
+  ]) {
+    assert.equal(isKnownClientInputError(new Error(message)), true, message);
+  }
+});

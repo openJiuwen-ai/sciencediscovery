@@ -94,6 +94,25 @@ describe("an internal fault is answered 500 and never quotes its own message", (
       `the fault must be logged as unclassified for the team to find it, saw ${JSON.stringify(events)}`);
   });
 
+  test("a plain Error quoting the same text is a 500 too", async (context) => {
+    const events: string[] = [];
+    context.mock.method(apiLog, "error", (event: string) => { events.push(event); });
+    // A handler that re-wraps `cause.message` keeps the engine's wording and
+    // loses the class; the text alone must still be read as this server's
+    // fault, never as caller input the client gets to see.
+    failOnceWith(context as never, new Error("Cannot read properties of undefined (reading 'match')"));
+
+    const response = await request("GET", "/api/projects");
+
+    assert.equal(response.status, 500, "the engine's wording is never the caller's fault");
+    assert.equal(response.body.error, "Internal server error");
+    const body = JSON.stringify(response.body);
+    assert.equal(body.includes("reading 'match'"), false, "the interpreter's text must not reach the client");
+    assert.equal(body.includes("Cannot read properties"), false, "the interpreter's text must not reach the client");
+    assert.ok(events.includes("unclassified_request_error"),
+      `the fault must be logged as unclassified for the team to find it, saw ${JSON.stringify(events)}`);
+  });
+
   test("a validator's own rejection still answers 400 with its wording", async () => {
     const response = await request("POST", "/api/specialists", { description: "d", instructions: "i" });
     assert.equal(response.status, 400, "legacy validator wording keeps its 400");
