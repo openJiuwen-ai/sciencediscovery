@@ -72,21 +72,39 @@ function quotesInterpreterFault(message: string): boolean {
 }
 
 /**
+ * An `Error` labelled with a string `code` was classified by the layer that
+ * raised it, not described in prose: Node and the filesystem use codes for
+ * system faults (`ERR_SQLITE_ERROR`, `ENOTDIR`, ...), and a handler that does
+ * know the answer uses a stable code too, which the catch-all reads before this
+ * classifier runs (`CONFLICT`, `INVALID_UPLOAD_PATH`, ...). #1533 names such a
+ * code as a legitimate source of a 400 beside `ApiStatusError`, so the code,
+ * not the wording, decides the branch — and a coded error that still reaches
+ * the wording list is this server's own fault.
+ */
+function carriesExplicitCode(error: Error): boolean {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.length > 0;
+}
+
+/**
  * Legacy validators still throw plain Error objects. Keep their established
  * 400 responses while allowing genuinely unclassified faults to surface as
  * 500. New handlers should prefer ApiStatusError or a stable error code.
  *
  * Only a non-runtime `Error` is matched against the wording list, because that
  * list is a record of what the legacy validators say, not a guess about prose
- * in general. An `Error` whose text is one of the engine's own sentences is
- * excluded first: that text is evidence about this server, not about the
- * caller, whatever class the re-wrap gave it. `SyntaxError` stays a client
- * error: a body that does not parse is the caller's own bytes.
+ * in general. Two kinds of `Error` are excluded before it: one whose text is
+ * one of the engine's own sentences (that text is evidence about this server,
+ * not about the caller, whatever class the re-wrap gave it), and one carrying a
+ * string `code` (the code decides the answer; see `carriesExplicitCode`).
+ * `SyntaxError` stays a client error: a body that does not parse is the
+ * caller's own bytes.
  */
 export function isKnownClientInputError(error: unknown): boolean {
   if (error instanceof SyntaxError) return true;
   if (!(error instanceof Error)) return false;
   if (isRuntimeFault(error)) return false;
+  if (carriesExplicitCode(error)) return false;
   if (quotesInterpreterFault(error.message)) return false;
   return [
     /\bis required\b/i,
