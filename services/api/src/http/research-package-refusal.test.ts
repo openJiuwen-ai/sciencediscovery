@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createTest } from "../../../test/support/tagged/compat.mjs";
+import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -23,10 +23,10 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { TestContext } from "node:test";
-import { createApiServer, closeApiServer } from "./http/index.js";
-import { researchPackageRefusal, RESEARCH_PACKAGE_INVALID_CODE, RESEARCH_PACKAGE_TRUNCATED_CODE } from "./http/research-package-refusal.js";
-import { offlineMcpTransport } from "./mcp/offline-transport.fixture.js";
-import type { ServerConfig } from "./bootstrap/config.js";
+import { createApiServer, closeApiServer } from "./index.js";
+import { researchPackageRefusal, RESEARCH_PACKAGE_INVALID_CODE, RESEARCH_PACKAGE_TRUNCATED_CODE } from "./research-package-refusal.js";
+import { offlineMcpTransport } from "../mcp/offline-transport.fixture.js";
+import type { ServerConfig } from "../bootstrap/config.js";
 
 const PROJECT_PATH = "/api/projects/0123456789abcdef/research-package/inspect";
 
