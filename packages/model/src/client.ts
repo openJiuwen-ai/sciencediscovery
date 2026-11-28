@@ -554,6 +554,30 @@ async function* sseData(body: AsyncIterable<Uint8Array>, recorder: ModelWireReco
   if (last.startsWith("data:") && last.slice(5).trim() !== "[DONE]") { recorder.record(); yield last.slice(5).trim(); }
 }
 
+/**
+ * #1238: a gateway can reset the connection after the provider declared the turn
+ * complete and before it writes `[DONE]`. The reader cannot know that on its own,
+ * so each protocol hands over its live completion state: once a terminal record
+ * was seen the turn is returned as parsed, and before that the transport error
+ * still reaches the caller.
+ */
+async function* sseDataWithRecovery(
+  body: AsyncIterable<Uint8Array>,
+  recorder: ModelWireRecorder,
+  onProgress: (() => void) | undefined,
+  completion: () => { observed: boolean; reason: string | undefined; truncated: boolean; parseErrors: number },
+  onRecovered: () => void,
+): AsyncGenerator<string> {
+  try {
+    yield* sseData(body, recorder, onProgress);
+  } catch (error) {
+    const state = completion();
+    if (!canRecoverAfterCompletion(error, state.reason, state.observed, state.truncated, state.parseErrors)) throw error;
+    onRecovered();
+    recorder.markRecoveredAfterCompletion();
+  }
+}
+
 interface RequestOptions {
   body: string;
   headers: Record<string, string>;
@@ -1369,7 +1393,14 @@ async function streamResponsesTurn(
   const partialItems = new Map<number, Record<string, unknown>>();
   const emitTool = toolDeltaEmitter(callbacks);
   const streamDiagnostics = { protocol: "openai-responses" as const, unparseableSsePayloads: 0 };
-  for await (const payload of sseData(body, recorder, callbacks.onProgress)) {
+  let recoveredAfterCompletion = false;
+  for await (const payload of sseDataWithRecovery(body, recorder, callbacks.onProgress, () => ({
+    observed: completionObserved,
+    // Responses reports a completed/incomplete status instead of a finish reason.
+    reason: truncated ? "length" : "stop",
+    truncated,
+    parseErrors: streamDiagnostics.unparseableSsePayloads,
+  }), () => { recoveredAfterCompletion = true; })) {
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
@@ -1441,6 +1472,9 @@ async function streamResponsesTurn(
     const parsed = parseToolCallArgs(call.function.arguments);
     return { args: parsed.args, id: call.id, name: call.function.name, ...(parsed.error ? { argsParseError: parsed.error } : {}) };
   });
+  if (recoveredAfterCompletion && (wireToolCalls.some((call) => !call.function.name) || toolCalls.some((call) => call.argsParseError))) {
+    throw new Error("Model stream ended after completion with incomplete tool arguments");
+  }
   recorder.final({
     hasText: Boolean(text.trim()),
     hasToolCalls: toolCalls.length > 0,
@@ -1545,6 +1579,8 @@ async function streamAnthropicTurn(
   let outputTokens: number | undefined;
   let truncated = false;
   let completionObserved = false;
+  let completionReason: string | undefined;
+  let recoveredAfterCompletion = false;
   let cacheReadTokens: number | null = null;
   let cacheWriteTokens: number | null = null;
   const blocks = new Map<number, AnthropicBlock>();
@@ -1552,7 +1588,12 @@ async function streamAnthropicTurn(
   const toolErrors = new Map<string, string>();
   const emitTool = toolDeltaEmitter(callbacks);
   const streamDiagnostics = { protocol: "anthropic-messages" as const, unparseableSsePayloads: 0 };
-  for await (const payload of sseData(body, recorder, callbacks.onProgress)) {
+  for await (const payload of sseDataWithRecovery(body, recorder, callbacks.onProgress, () => ({
+    observed: completionObserved,
+    reason: completionReason,
+    truncated,
+    parseErrors: streamDiagnostics.unparseableSsePayloads,
+  }), () => { recoveredAfterCompletion = true; })) {
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(payload) as Record<string, unknown>;
@@ -1609,6 +1650,11 @@ async function streamAnthropicTurn(
       }
       if (isRecord(event.delta) && typeof event.delta.stop_reason === "string") {
         completionObserved = true;
+        // The shared recovery guard compares canonical finish reasons, so the
+        // Anthropic vocabulary is mapped before it is handed over.
+        completionReason = event.delta.stop_reason === "tool_use"
+          ? "tool_calls"
+          : event.delta.stop_reason === "max_tokens" ? "length" : "stop";
         recorder.finishReason(event.delta.stop_reason);
       }
       // Anthropic's equivalent of `finish_reason: "length"`.
@@ -1635,6 +1681,9 @@ async function streamAnthropicTurn(
     const parsed = parseToolCallArgs(call.function.arguments);
     return { args: parsed.args, id: call.id, name: call.function.name, ...(toolErrors.get(call.id) || parsed.error ? { argsParseError: toolErrors.get(call.id) ?? parsed.error } : {}) };
   });
+  if (recoveredAfterCompletion && (wireToolCalls.some((call) => !call.function.name) || toolCalls.some((call) => call.argsParseError))) {
+    throw new Error("Model stream ended after completion with incomplete tool arguments");
+  }
   recorder.final({
     hasText: Boolean(text.trim()),
     hasToolCalls: toolCalls.length > 0,
