@@ -24,6 +24,7 @@ import {
 import { createPortal } from "react-dom";
 
 import type {
+  CreateProviderModelRequest,
   ModelApiProtocol,
   ModelApiVariant,
   ModelCatalogDetails,
@@ -51,7 +52,6 @@ import { isAuthFailure } from "./api/auth.js";
 import { ModelConnectivityButton } from "./ModelConnectivityButton.js";
 import { ModelDeletionDialog } from "./ModelDeletionDialog.js";
 import { ModelConnectWizard } from "./ModelConnectWizard.js";
-import { modelOptionLabel } from "./modelLabels.js";
 import {
   EMPTY_MANUAL_MODEL,
   ManualModelFields,
@@ -311,13 +311,11 @@ function ModelRowPopup({
 function ProviderModelRow({
   busy,
   model,
-  onAddModel,
   onDeleteModel,
   provider,
 }: {
   busy: boolean;
   model: ProviderModelEntry;
-  onAddModel: () => void;
   onDeleteModel: (profileId: string) => void;
   provider: ModelProvider;
 }) {
@@ -346,7 +344,7 @@ function ProviderModelRow({
       : null}
     {model.profileId
       ? <button className="danger-button compact-button" disabled={busy} onClick={() => onDeleteModel(model.profileId!)} type="button">{t("common.delete")}</button>
-      : <button className="secondary-button compact-button" disabled={busy} onClick={onAddModel} type="button">{t("providers.models.add")}</button>}
+      : null}
   </div>;
 }
 
@@ -407,13 +405,236 @@ interface ListingState {
   loading: boolean;
 }
 
+export interface AddModelsResult {
+  added: ModelProfile[];
+  failed: number;
+}
+
+/** The one way to register models on an existing provider. It opens the
+ *  provider's fetched listing, ticks the models to add, and keeps the same
+ *  manual fields as a fallback for a model the listing cannot return.
+ *  Nothing is written until the dialog's own submit; closing a non-empty
+ *  selection asks before discarding it. */
+export function AddModelsDialog({
+  busy,
+  listing,
+  onAddModels,
+  onClose,
+  onRefresh,
+  provider,
+}: {
+  busy: boolean;
+  listing?: ListingState | undefined;
+  onAddModels: (providerId: string, requests: CreateProviderModelRequest[]) => Promise<AddModelsResult>;
+  onClose: () => void;
+  onRefresh: (providerId: string) => void;
+  provider: ModelProvider;
+}) {
+  const { t } = useLocale();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [manualEntries, setManualEntries] = useState<CreateProviderModelRequest[]>([]);
+  const [manual, setManual] = useState<ManualModelForm>({ ...EMPTY_MANUAL_MODEL });
+  const [result, setResult] = useState<{
+    added: number;
+    addedIds: string[];
+    availableIds: string[];
+    total: number;
+  }>();
+  const available = (listing?.list?.models ?? []).filter((entry) => !entry.profileId);
+  const availableIds = new Set(available.map((entry) => entry.id));
+  // A registered model disappears from the listing. Never count or submit a
+  // tick that no longer belongs to a visible row.
+  const selectedAvailableIds = [...selectedIds].filter((id) => availableIds.has(id));
+  const allSelected = available.length > 0 && selectedAvailableIds.length === available.length;
+  const selectedCount = selectedAvailableIds.length + manualEntries.length;
+  const dirty = selectedCount > 0 || Boolean(manual.modelId.trim());
+  const availableKey = [...availableIds].sort().join("\u0000");
+  useEffect(() => {
+    const node = dialog.current;
+    node?.showModal?.();
+    return () => node?.close?.();
+  }, []);
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => availableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+    setResult((current) => {
+      if (!current) return current;
+      const previousIds = new Set(current.availableIds);
+      const nextIds = new Set(availableIds);
+      const removed = [...previousIds].filter((id) => !nextIds.has(id));
+      const added = [...nextIds].filter((id) => !previousIds.has(id));
+      // Keep the partial outcome only when the listing shrank by exactly the
+      // rows this submit just registered. Any other change means the plan the
+      // banner described no longer exists.
+      return added.length === 0 && removed.length > 0 && removed.every((id) => current.addedIds.includes(id))
+        ? current
+        : undefined;
+    });
+    // The listing can change after a refresh or another client registers a row.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableKey]);
+
+  function close(): void {
+    if (dirty && !window.confirm(t("providers.unsaved.addModels"))) return;
+    onClose();
+  }
+
+  function toggleSelected(id: string, checked: boolean): void {
+    setResult(undefined);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleAll(checked: boolean): void {
+    setResult(undefined);
+    setSelectedIds(checked ? new Set(available.map((entry) => entry.id)) : new Set());
+  }
+
+  function stageManual(): void {
+    const modelId = manual.modelId.trim();
+    if (!modelId) return;
+    setResult(undefined);
+    const request = manualModelRequest(modelId, manual);
+    setManualEntries((current) => [...current.filter((entry) => entry.model !== modelId), request]);
+    setManual({ ...EMPTY_MANUAL_MODEL });
+  }
+
+  async function submit(): Promise<void> {
+    const byModel = new Map<string, CreateProviderModelRequest>();
+    for (const entry of available) {
+      if (selectedAvailableIds.includes(entry.id)) byModel.set(entry.id, manualModelRequest(entry.id, { ...EMPTY_MANUAL_MODEL }, entry));
+    }
+    for (const entry of manualEntries) byModel.set(entry.model, entry);
+    if (!byModel.size) return;
+    const total = byModel.size;
+    setResult(undefined);
+    const outcome = await onAddModels(provider.id, [...byModel.values()]);
+    const addedIds = new Set(outcome.added.map((model) => model.model));
+    if (addedIds.size) {
+      // Succeeded rows are gone from the pending selection; only failures stay
+      // ticked, so a retry cannot silently re-send what already landed.
+      setSelectedIds((current) => new Set([...current].filter((id) => !addedIds.has(id))));
+      setManualEntries((current) => current.filter((entry) => !addedIds.has(entry.model)));
+      setManual((current) => addedIds.has(current.modelId.trim()) ? { ...EMPTY_MANUAL_MODEL } : current);
+    }
+    if (outcome.failed === 0 && outcome.added.length === total) {
+      onClose();
+      return;
+    }
+    setResult({
+      added: outcome.added.length,
+      addedIds: [...addedIds],
+      availableIds: [...availableIds],
+      total,
+    });
+  }
+
+  return <dialog
+    aria-label={t("providers.models.addTitle", { provider: provider.name })}
+    className="model-deletion-dialog model-add-dialog model-connect-wizard"
+    onCancel={(event) => { event.preventDefault(); close(); }}
+    onKeyDown={(event) => event.stopPropagation()}
+    ref={dialog}
+  >
+    <div className="wizard-section-heading">
+      <h2>{t("providers.models.addTitle", { provider: provider.name })}</h2>
+      <button
+        className="secondary-button compact-button"
+        disabled={busy || listing?.loading}
+        onClick={() => { setResult(undefined); onRefresh(provider.id); }}
+        type="button"
+      >{listing?.loading ? t("common.loading") : t("providers.models.refresh")}</button>
+    </div>
+    <p>{t("providers.models.addHint")}</p>
+    {listing?.error ? <div className="wizard-alert wizard-alert-error" role="alert">
+      <div className="wizard-alert-content"><strong>{t("providers.discovery.failed")}</strong><span>{listing.error}</span></div>
+    </div> : null}
+    {result ? <div className="wizard-alert wizard-alert-error" role="status">
+      <div className="wizard-alert-content"><span>{t("providers.models.partial", { added: result.added, total: result.total })}</span></div>
+    </div> : null}
+    {available.length ? <div aria-label={t("providers.models.table", { provider: provider.name })} className="wizard-model-table" role="table">
+      <label className="wizard-model-row wizard-model-row-all" role="row">
+        <input
+          aria-label={t("wizard.models.selectAll")}
+          checked={allSelected}
+          disabled={busy}
+          onChange={(event) => toggleAll(event.target.checked)}
+          type="checkbox"
+        />
+        <span>
+          <strong>{t("wizard.models.selectAll")}</strong>
+          <small>{t("providers.models.selected", { count: selectedCount - manualEntries.length })}</small>
+        </span>
+      </label>
+      {available.map((entry) => <label className="wizard-model-row" key={entry.id} role="row">
+        <input
+          aria-label={entry.id}
+          checked={selectedAvailableIds.includes(entry.id)}
+          disabled={busy}
+          onChange={(event) => toggleSelected(entry.id, event.target.checked)}
+          type="checkbox"
+        />
+        <span className="provider-model-cell-name">
+          <strong>{providerModelDisplayName(entry, provider)}</strong>
+          <code>{entry.id}</code>
+        </span>
+        <ModelRowFacts model={entry} />
+      </label>)}
+    </div> : listing?.loading ? <p className="muted">{t("providers.configured.loading")}</p> : listing?.list?.models.length
+      ? <p className="muted">{t("providers.models.allAdded")}</p>
+      : <p className="muted">{t("providers.models.empty")}</p>}
+    {manualEntries.length ? <ul aria-label={t("wizard.models.manualList")} className="wizard-manual-list">
+      {manualEntries.map((entry) => <li className="wizard-manual-item" key={entry.model}>
+        <span className="provider-model-cell-name"><strong>{entry.label ?? entry.model}</strong><code>{entry.model}</code></span>
+        <em>{t("wizard.models.manualTag")}</em>
+        <button
+          className="danger-button compact-button wizard-manual-remove"
+          disabled={busy}
+          onClick={() => {
+            setResult(undefined);
+            setManualEntries((current) => current.filter((item) => item.model !== entry.model));
+          }}
+          type="button"
+        >{t("wizard.models.remove")}</button>
+      </li>)}
+    </ul> : null}
+    <details className="provider-advanced" open={available.length === 0}>
+      <summary>{t("providers.models.manualFallback")}</summary>
+      <ManualModelFields
+        busy={busy}
+        form={manual}
+        onChange={(next) => { setResult(undefined); setManual(next); }}
+        onSubmit={stageManual}
+        presetId={provider.presetId}
+        submitLabel={t("providers.models.addManual")}
+      />
+    </details>
+    <div className="dialog-actions">
+      <button className="secondary-button" disabled={busy} onClick={close} type="button">{t("common.cancel")}</button>
+      <button
+        className="primary-button"
+        disabled={busy || selectedCount === 0}
+        onClick={() => void submit()}
+        type="button"
+      >{busy ? t("common.saving") : t("providers.models.addSubmit")}</button>
+    </div>
+  </dialog>;
+}
+
 export function ProviderRow({
   addedProfiles,
   busy,
   editorPanel,
   expanded,
   listing,
-  onAddModel,
+  onAddModels,
   onDeleteModel,
   onEdit,
   onRefresh,
@@ -426,7 +647,7 @@ export function ProviderRow({
   editorPanel?: ReactNode;
   expanded: boolean;
   listing?: ListingState | undefined;
-  onAddModel: (providerId: string, modelId: string, entry: ProviderModelEntry | undefined, manual: ManualModelForm) => Promise<boolean>;
+  onAddModels: (providerId: string, requests: CreateProviderModelRequest[]) => Promise<AddModelsResult>;
   onDeleteModel: (providerId: string, modelId: string, profileId: string) => Promise<boolean>;
   onEdit: (provider: ModelProvider) => void;
   onRefresh: (providerId: string) => void;
@@ -435,8 +656,7 @@ export function ProviderRow({
   testModel: SettingsApiClient["testModel"];
 }) {
   const { t } = useLocale();
-  const [manual, setManual] = useState<ManualModelForm>({ ...EMPTY_MANUAL_MODEL });
-  const [manualOpen, setManualOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [testModelId, setTestModelId] = useState("");
   const rows = mergeProviderModelRows(listing?.list?.models, addedProfiles, provider);
   // The total counts the same union the table shows, so the count, the table,
@@ -444,14 +664,6 @@ export function ProviderRow({
   const total = listing?.list ? rows.length : undefined;
   const ready = provider.hasApiToken || provider.tokenOptional;
   const testProfile = addedProfiles.find((profile) => profile.id === testModelId) ?? addedProfiles[0];
-
-  async function submitManual(): Promise<void> {
-    const added = await onAddModel(provider.id, manual.modelId, undefined, manual);
-    if (added) {
-      setManual({ ...EMPTY_MANUAL_MODEL });
-      setManualOpen(false);
-    }
-  }
 
   return <div className={expanded ? "provider-row expanded" : "provider-row"}>
     <button
@@ -499,21 +711,20 @@ export function ProviderRow({
           busy={busy}
           key={model.id}
           model={model}
-          onAddModel={() => void onAddModel(provider.id, model.id, model, { ...EMPTY_MANUAL_MODEL })}
           onDeleteModel={(profileId) => void onDeleteModel(provider.id, model.id, profileId)}
           provider={provider}
         />)}
       </div> : listing?.list ? <p className="muted">{t("providers.models.empty")}</p> : null}
-      <button aria-expanded={manualOpen} className="provider-add-model-toggle" onClick={() => setManualOpen((current) => !current)} type="button">
+      <button aria-expanded={addOpen} className="provider-add-model-toggle" onClick={() => setAddOpen((current) => !current)} type="button">
         {t("providers.models.add")}
       </button>
-      {manualOpen ? <ManualModelFields
+      {addOpen ? <AddModelsDialog
         busy={busy}
-        form={manual}
-        onChange={setManual}
-        onSubmit={() => void submitManual()}
-        presetId={provider.presetId}
-        submitLabel={t("providers.models.add")}
+        {...(listing ? { listing } : {})}
+        onAddModels={onAddModels}
+        onClose={() => setAddOpen(false)}
+        onRefresh={onRefresh}
+        provider={provider}
       /> : null}
     </div> : null}
   </div>;
@@ -590,8 +801,11 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   onCatalogChange?: (details: ModelCatalogDetails) => void;
   onDraftStateChange?: (dirty: boolean) => void;
   initialWizardOpen?: boolean;
+  onEditDefaultModel?: () => void;
   onError: (reason: string | Error) => void;
-  onDefaultModelSet?: (modelId: string | undefined) => Promise<void>;
+  /** Only used by the wizard's first-model path; the registry itself never
+   *  edits the default, it points at Global defaults → Task model. */
+  onDefaultModelSet?: (modelId: string) => Promise<void>;
   onModelsChange: (models: ModelProfile[]) => void;
   onNotice: (message: string, detail?: string) => void;
   onProvidersChange: (providers: ModelProvider[]) => void;
@@ -607,6 +821,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   onCatalogChange,
   onDefaultModelSet,
   onDraftStateChange,
+  onEditDefaultModel,
   onError,
   onModelsChange,
   onNotice,
@@ -708,6 +923,13 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
   }
 
   function toggleRow(providerId: string): void {
+    // Collapsing the row (or opening another one) would hide a dirty provider
+    // draft. Ask now, while the editor is still on screen, not later at close.
+    if (draftDirty) {
+      if (!allowDraftReplacement()) return;
+      baselineDraft.current = undefined;
+      setDraft(undefined);
+    }
     setExpandedId((current) => current === providerId ? undefined : providerId);
   }
 
@@ -793,42 +1015,53 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     }
   }
 
-  async function addModel(
+  async function addModels(
     providerId: string,
-    modelId: string,
-    entry: ProviderModelEntry | undefined,
-    manual: ManualModelForm,
-  ): Promise<boolean> {
-    if (!modelId.trim() || busy) return false;
+    requests: CreateProviderModelRequest[],
+  ): Promise<AddModelsResult> {
+    if (!requests.length || busy) return { added: [], failed: 0 };
+    const byModel = new Map<string, CreateProviderModelRequest>();
+    for (const request of requests) {
+      const modelId = request.model.trim();
+      if (modelId) byModel.set(modelId, { ...request, model: modelId });
+    }
+    if (!byModel.size) return { added: [], failed: 0 };
+    const added: ModelProfile[] = [];
+    const merge = () => [...models.filter((model) => !added.some((entry) => entry.id === model.id)), ...added]
+      .toSorted((left, right) => left.name.localeCompare(right.name));
+    const recordListings = () => setListings((current) => {
+      const listing = current[providerId]?.list;
+      if (!listing) return current;
+      const nextModels = [...listing.models];
+      for (const saved of added) {
+        const index = nextModels.findIndex((entry) => entry.id === saved.model);
+        if (index >= 0) nextModels[index] = { ...nextModels[index]!, profileId: saved.id };
+        else nextModels.unshift({ id: saved.model, profileId: saved.id });
+      }
+      return { ...current, [providerId]: { ...current[providerId]!, list: { ...listing, models: nextModels }, loading: false } };
+    });
     setBusy(true);
     try {
-      const saved = await client.addProviderModel(providerId, manualModelRequest(modelId, manual, entry));
-      const nextModels = [...models.filter((model) => model.id !== saved.id), saved]
-        .toSorted((left, right) => left.name.localeCompare(right.name));
-      onModelsChange(nextModels);
-      setListings((current) => {
-        const listing = current[providerId]?.list;
-        if (!listing) return current;
-        const known = listing.models.some((model) => model.id === modelId.trim());
-        return {
-          ...current,
-          [providerId]: {
-            ...current[providerId]!,
-            list: {
-              ...listing,
-              models: known
-                ? listing.models.map((model) => model.id === modelId.trim() ? { ...model, profileId: saved.id } : model)
-                : [{ id: modelId.trim(), profileId: saved.id }, ...listing.models],
-            },
-            loading: false,
-          },
-        };
-      });
-      onNotice(t("providers.notice.modelAdded"), saved.name);
-      return true;
+      for (const request of byModel.values()) {
+        const saved = await client.addProviderModel(providerId, request);
+        added.push(saved);
+      }
+      onModelsChange(merge());
+      recordListings();
+      const providerName = providers.find((provider) => provider.id === providerId)?.name;
+      onNotice(added.length === 1
+        ? t("providers.notice.modelAdded")
+        : t("providers.notice.modelsAdded", { count: added.length }), added.length === 1 ? added[0]!.name : providerName);
+      return { added, failed: 0 };
     } catch (reason) {
+      // Keep the models that did register, mark their listing rows as added,
+      // and tell the dialog how many of the request actually landed.
+      if (added.length) {
+        onModelsChange(merge());
+        recordListings();
+      }
       onError(reason instanceof Error ? reason : t("providers.models.addFailed"));
-      return false;
+      return { added, failed: byModel.size - added.length };
     } finally {
       setBusy(false);
     }
@@ -898,25 +1131,22 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
     <section className="provider-registry" aria-label={t("providers.configured.title")}>
       <div className="provider-section-heading">
         <div><h4>{t("providers.configured.title")}</h4></div>
-        {/* The global default task model, mirrored from 全局默认值 → 任务模型:
-            both write the same globalSettings.modelId via the same handler. */}
+        {/* One editable control for the default model lives in Global
+            defaults → Task model. Here it is a read-only value that links to
+            that control, so the same field cannot be saved two ways. */}
         <div className="registry-default-inline">
-          <label htmlFor="registry-default-model">{t("providers.globalDefaultModel")}</label>
-          <select
-            disabled={!onDefaultModelSet}
-            id="registry-default-model"
-            onChange={(event) => {
-              const pending = onDefaultModelSet?.(event.target.value || undefined);
-              if (!pending) return;
-              void pending.catch((reason: unknown) => {
-                onError(reason instanceof Error ? reason : String(reason));
-              });
-            }}
-            value={defaultModelId ?? ""}
+          <span id="registry-default-model-label">{t("providers.globalDefaultModel")}</span>
+          <output aria-labelledby="registry-default-model-label" id="registry-default-model" title={t("providers.globalDefaultModel.hint")}>
+            {models.find((model) => model.id === defaultModelId)?.name ?? t("common.notConfigured")}
+          </output>
+          {onEditDefaultModel ? <button
+            className="secondary-button compact-button"
+            onClick={onEditDefaultModel}
+            title={t("providers.globalDefaultModel.hint")}
+            type="button"
           >
-            <option value="">{t("common.notConfigured")}</option>
-            {models.map((model) => <option key={model.id} value={model.id}>{modelOptionLabel(model, models, t)}</option>)}
-          </select>
+            {t("providers.globalDefaultModel.edit")}
+          </button> : null}
         </div>
         <button
           aria-expanded={wizardOpen}
@@ -936,6 +1166,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           onNotice={onNotice}
           onProvidersChange={onProvidersChange}
           presets={presets}
+          providers={providers}
           {...(proxySettings ? { proxySettings } : {})}
         />
       ) : null}
@@ -958,7 +1189,7 @@ export const ProviderModelSettings = forwardRef<ProviderModelSettingsHandle, {
           expanded={expandedId === provider.id}
           key={provider.id}
           {...(listings[provider.id] ? { listing: listings[provider.id] } : {})}
-          onAddModel={addModel}
+          onAddModels={addModels}
           onDeleteModel={deleteModel}
           onEdit={editProvider}
           onRefresh={(providerId) => void loadModels(providerId, true)}

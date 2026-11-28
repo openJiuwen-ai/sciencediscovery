@@ -64,10 +64,10 @@ for (const [kind, locale] of [['responses-min16', 'en'], ['reasoning-limit', 'en
         const dialog = page.getByRole('dialog'); const nav = dialog.getByRole('navigation', { name: locale === 'en' ? 'Setting groups' : '设置分组' });
         if (!await nav.isVisible()) await dialog.getByRole('button', { name: locale === 'en' ? /^Settings directory/ : /^设置目录/ }).click();
         await nav.getByRole('button', { name: locale === 'en' ? /^Model registry/ : /^模型注册表/ }).click();
-        if (!await wizard.count()) await dialog.getByRole('button', { name: locale === 'en' ? /Connect model/ : /连接模型/ }).click();
+        if (!await wizard.count()) await dialog.getByRole('button', { name: locale === 'en' ? /Add provider/ : /添加服务商/ }).click();
         await wizard.locator('#wizard-provider-select').selectOption('custom'); await wizard.locator('#wizard-custom-name').fill(name);
         await wizard.locator('#wizard-custom-url').fill(`http://127.0.0.1:${(server.address() as any).port}/v1`); await wizard.locator('#wizard-custom-model').fill('synthetic'); await wizard.locator('#wizard-api-key').fill('synthetic-local');
-        await wizard.getByRole('button', { name: locale === 'en' ? 'Advanced configuration' : '高级配置', exact: true }).click(); await wizard.locator('#wizard-api-protocol').selectOption(protocol); expect(requests).toHaveLength(0);
+        await wizard.getByRole('button', { name: locale === 'en' ? 'Advanced provider settings' : '高级服务商设置', exact: true }).click(); await wizard.locator('#wizard-api-protocol').selectOption(protocol); expect(requests).toHaveLength(0);
       });
       await journey.step('Read cost disclosure and consent to one bounded request', 'Submit disabled until consent, exactly one request with selected output limit', async () => {
         const submit = wizard.locator('.wizard-submit-button'); await expect(submit).toBeDisabled();
@@ -82,7 +82,7 @@ for (const [kind, locale] of [['responses-min16', 'en'], ['reasoning-limit', 'en
         // took the key, answered on the chosen protocol and stopped at a limit
         // the probe itself wrote, so the check passes — and the wizard names
         // the pass as the basic check it is (issue #824).
-        if (kind === 'reasoning-limit') await expect(wizard).toContainText(locale === 'en' ? 'Basic connection check passed' : '基础连接检查通过');
+        if (kind === 'reasoning-limit') await expect(wizard).toContainText(locale === 'en' ? 'Provider added' : '服务商已添加');
         const providers = (await call('/api/providers')).providers.filter((p: any) => p.name === name); expect(providers).toHaveLength(failed ? 0 : 1);
         if (!failed) expect(providers[0].apiProtocol).toBe(protocol);
         expect(requests).toHaveLength(1);
@@ -92,7 +92,9 @@ for (const [kind, locale] of [['responses-min16', 'en'], ['reasoning-limit', 'en
         const outcome = wizard.locator('.wizard-alert');
         await outcome.scrollIntoViewIfNeeded(); await expect(outcome).toBeInViewport();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
-        await expect(wizard.locator('.wizard-submit-button')).toBeInViewport();
+        const failed = kind === 'auth' || kind === 'empty';
+        if (failed) await expect(wizard.locator('.wizard-submit-button')).toBeInViewport();
+        else await expect(wizard.getByRole('button', { name: locale === 'en' ? 'Add another provider' : '再添加一个服务商' })).toBeInViewport();
       });
     } finally {
       try {

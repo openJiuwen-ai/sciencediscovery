@@ -97,6 +97,7 @@ export function ConversationalModelCard({
         onProvidersChange={onProvidersChange}
         onSuccess={(model) => { setConnectedModel(model); void apply(model); }}
         presets={presets}
+        providers={providers}
         proxySettings={proxySettings}
         setFirstModelAsGlobalDefault={firstModelSetup}
       />

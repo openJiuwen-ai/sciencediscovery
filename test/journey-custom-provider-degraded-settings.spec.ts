@@ -74,7 +74,7 @@ async function openConnectWizard(page: Page) {
   await navigation.getByRole("button", { name: /^模型注册表/ }).click();
   await expect(dialog.getByRole("heading", { name: "模型注册表" })).toBeVisible();
   const wizard = dialog.locator(".model-connect-wizard");
-  if (!await wizard.count()) await dialog.getByRole("button", { name: /连接模型/ }).click();
+  if (!await wizard.count()) await dialog.getByRole("button", { name: /添加服务商/ }).click();
   await expect(wizard).toBeVisible();
   return { dialog, wizard };
 }
@@ -121,7 +121,7 @@ async function journeyProviderNames(page: Page): Promise<string[]> {
  * Steps:
  *   1. 让记忆图谱设置接口返回 500 后打开模型注册表：设置弹窗显示该接口的报错，连接卡片仍列出预置服务商并默认选中 DeepSeek。
  *   2. 选择「自定义服务商」：名称、基础 URL、模型标识输入框出现。
- *   3. 填入本地 stub 端点与 Key 后「保存并连接」：连接成功，服务商在后端可查到。
+ *   3. 填入本地 stub 端点、模型标识与 Key 后「添加服务商」：连接成功，服务商在后端可查到。
  * Environment: Isolated local stack at E2E_BASE_URL; the memory settings GET is failed at the browser boundary.
  * Type: mocked
  * LLM: none — 旅程自带的本地 HTTP stub，无外部调用。
@@ -150,7 +150,7 @@ test("无关设置接口失败时仍能配置自定义服务商", { tag: "@mocke
   try {
     await journey.step(
       "记忆图谱设置接口故障时打开模型注册表",
-      "系统设置顶部显示记忆图谱接口的报错；连接模型卡片的服务商下拉仍有 DeepSeek 等全部预置服务商，默认选中 DeepSeek 并给出它的 Key 申请链接。",
+      "系统设置顶部显示记忆图谱接口的报错；添加服务商卡片的服务商下拉仍有 DeepSeek 等全部预置服务商，默认选中 DeepSeek 并给出它的 Key 申请链接。",
       async () => {
         await failGet(page, "**/api/memory/settings", "E2E injected memory settings failure");
         const { dialog, wizard } = await openConnectWizard(page);
@@ -180,7 +180,7 @@ test("无关设置接口失败时仍能配置自定义服务商", { tag: "@mocke
 
     await journey.step(
       "填写自定义端点并保存连接",
-      "填入名称、本地 stub 的基础 URL、模型标识与 Key 后点「保存并连接」，卡片提示基础连接检查通过，后端服务商列表里出现这个自定义服务商。",
+      "填入名称、本地 stub 的基础 URL、模型标识与 Key 后点「添加服务商」，卡片进入 Done 状态并提示服务商已添加，后端服务商列表里出现这个自定义服务商。",
       async () => {
         const wizard = page.getByRole("dialog", { name: "系统设置" }).locator(".model-connect-wizard");
         await wizard.locator("#wizard-custom-name").fill(providerName);
@@ -191,7 +191,7 @@ test("无关设置接口失败时仍能配置自定义服务商", { tag: "@mocke
         await wizard.locator(".wizard-submit-button").click();
         const success = wizard.locator(".wizard-alert-success");
         // Saving connects the model and refreshes both registries before showing success.
-        await expect(success).toContainText("基础连接检查通过", { timeout: 30_000 });
+        await expect(success).toContainText("服务商已添加", { timeout: 30_000 });
         // issue #824: the unqualified "模型已连接" claim must not return.
         await expect(success).not.toContainText("模型已连接");
         await success.scrollIntoViewIfNeeded();
@@ -209,7 +209,7 @@ test("无关设置接口失败时仍能配置自定义服务商", { tag: "@mocke
  * Purpose: GitCode #137 / GitHub #281 — 服务商注册表接口本身失败、没有任何预置服务商时，连接卡片直接处于自定义模式，用户仍能连接自定义服务商。
  * Steps:
  *   1. 让 GET /api/providers 返回 500 后打开模型注册表：设置弹窗显示该报错，服务商下拉只有「自定义服务商」且自定义输入框已出现。
- *   2. 填入本地 stub 端点与 Key 后「保存并连接」：连接成功，服务商在后端可查到。
+ *   2. 填入本地 stub 端点、模型标识与 Key 后「添加服务商」：连接成功，服务商在后端可查到。
  * Environment: Isolated local stack at E2E_BASE_URL; the provider registry GET is failed at the browser boundary, POST is untouched.
  * Type: mocked
  * LLM: none — 旅程自带的本地 HTTP stub，无外部调用。
@@ -256,7 +256,7 @@ test("没有预置服务商时连接卡片直接进入自定义模式", { tag: "
 
     await journey.step(
       "填写自定义端点并保存连接",
-      "填入名称、本地 stub 的基础 URL、模型标识与 Key 后点「保存并连接」，卡片提示基础连接检查通过，后端服务商列表里出现这个自定义服务商。",
+      "填入名称、本地 stub 的基础 URL、模型标识与 Key 后点「添加服务商」，卡片进入 Done 状态并提示服务商已添加，后端服务商列表里出现这个自定义服务商。",
       async () => {
         const wizard = page.getByRole("dialog", { name: "系统设置" }).locator(".model-connect-wizard");
         await wizard.locator("#wizard-custom-name").fill(providerName);
@@ -266,7 +266,7 @@ test("没有预置服务商时连接卡片直接进入自定义模式", { tag: "
         await wizard.getByRole("checkbox", { name: /我同意发送一次/ }).check();
         await wizard.locator(".wizard-submit-button").click();
         const success = wizard.locator(".wizard-alert-success");
-        await expect(success).toContainText("基础连接检查通过");
+        await expect(success).toContainText("服务商已添加");
         await expect(success).not.toContainText("模型已连接");
         await success.scrollIntoViewIfNeeded();
         expect(await journeyProviderNames(page)).toContain(providerName);

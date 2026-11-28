@@ -6227,6 +6227,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     }
                   }}
                   onDraftStateChange={setProviderDraftDirty}
+                  onEditDefaultModel={() => selectSystemSettingsGroup("global")}
                   onError={reportSystemSettingsError}
                   onModelsChange={(items) => { setModels(items); void refreshModelState().catch(reportSystemSettingsError); }}
                   onNotice={(message, detail) => pushToast("success", message, detail)}

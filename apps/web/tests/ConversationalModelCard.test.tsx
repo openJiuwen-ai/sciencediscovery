@@ -10,7 +10,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { ModelProfile } from "@sciencediscovery/schema";
+import type { ModelProfile, ModelProvider } from "@sciencediscovery/schema";
 import type { SettingsApiClient } from "../src/api/settings.js";
 import { ConversationalModelCard } from "../src/configuration/ConversationalModelCard.js";
 import { ModelConnectWizard } from "../src/ModelConnectWizard.js";
@@ -83,4 +83,37 @@ test("an empty registry offers first-model connection with an explicit global sc
     wizard.props.onSuccess({ id: "first-model", model: "first-model", name: "First", providerId: "provider" } as ModelProfile);
   });
   assert.deepEqual(applied, [{ id: "first-model", firstModelSetup: true }]);
+});
+
+test("the conversation card passes its provider list to the shared wizard for same-name confirmation", async () => {
+  const provider = {
+    apiProtocol: "openai-chat-completions",
+    apiVariant: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    hasApiToken: true,
+    id: "existing-provider",
+    modelDiscovery: "openai-models",
+    name: "DeepSeek",
+    presetId: "deepseek",
+    proxyPolicy: "inherit",
+    tokenOptional: false,
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  } as ModelProvider;
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConversationalModelCard, {
+      client: {} as SettingsApiClient,
+      models: [],
+      onApply: async () => undefined,
+      onDismiss: () => undefined,
+      onModelsChange: () => undefined,
+      onProvidersChange: () => undefined,
+      pendingTask: false,
+      presets: [],
+      providers: [provider],
+    })));
+  });
+  const wizard = renderer!.root.findByType(ModelConnectWizard);
+  assert.deepEqual(wizard.props.providers, [provider]);
 });

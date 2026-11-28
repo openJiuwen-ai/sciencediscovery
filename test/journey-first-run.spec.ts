@@ -152,10 +152,10 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
 
     await journey.step(
       "在模型注册表确认服务商与模型已就位且重开仍在",
-      "注册表以连接模型为唯一新建入口：没有独立的添加 Provider 表单，编辑器只在显式编辑后出现；本步经 API 预置服务商与模型（界面创建路径由连接模型旅程覆盖），随后核对行内计数、模型行与重开持久化。",
+      "注册表以添加服务商为唯一新建入口：没有独立的添加 Provider 表单，编辑器只在显式编辑后出现；本步经 API 预置服务商与模型（界面创建路径由添加服务商旅程覆盖），随后核对行内计数、模型行与重开持久化。",
       async () => {
         providerName = `J1 自定义服务商 ${Date.now()}`;
-        // 界面新建入口已并入连接模型向导（向导旅程覆盖）；本旅程聚焦分析主路径，
+        // 界面新建入口已并入添加服务商向导（向导旅程覆盖）；本旅程聚焦分析主路径，
         // 服务商与模型经 API 预置。向导的连通性探针由后端发起且需要非流式响应，
         // 与 scriptedModel 的 SSE 形态不兼容，因此不在本旅程走向导提交。
         const created = await apiJsonSafe("/api/providers", {
@@ -441,7 +441,7 @@ test("J1 首次进入即可完成并恢复两轮分析", { tag: "@mocked" }, asy
         await page.getByRole("dialog", { name: /删除服务商/ }).getByRole("button", { name: "删除", exact: true }).click();
         expect((await deleteResponse).status()).toBe(200);
         await expect(settings.locator(".provider-row")).toHaveCount(0);
-        await expect(settings.getByText("还没有服务商——先在上方「连接模型」里选择服务商并填入 API Key。")).toBeVisible();
+        await expect(settings.getByText("还没有服务商——在上方点「添加服务商」并填入 API Key。")).toBeVisible();
         // The unreferenced model profile is deleted together with the provider.
         model = undefined;
         const registryCount = await apiJsonSafe("/api/models");

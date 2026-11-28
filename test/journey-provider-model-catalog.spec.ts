@@ -15,7 +15,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { expect, type Page, type Route } from "@playwright/test";
+import { expect, type Locator, type Page, type Route } from "@playwright/test";
 
 import type { ModelProfile, ModelProvider } from "@sciencediscovery/schema";
 
@@ -281,7 +281,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
   const openConnectCard = async (dialog: ReturnType<typeof page.getByRole>) => {
     const card = dialog.locator(".model-connect-wizard");
     if (!await card.count()) {
-      await dialog.getByRole("button", { name: /连接模型|Connect model/ }).first().click();
+      await dialog.getByRole("button", { name: /添加服务商|Add provider/ }).first().click();
     }
     await expect(card).toBeVisible();
     return card;
@@ -349,6 +349,19 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
   const modelRowById = (dialog: ReturnType<typeof page.getByRole>, id: string) =>
     dialog.locator(".provider-model-row")
       .filter({ has: page.locator("code").getByText(id, { exact: true }) });
+
+  /** Register one listed model through the provider's single Add model
+   *  dialog: tick its checkbox, then submit the dialog once. */
+  const addListedModel = async (providerRow: Locator, modelId: string) => {
+    await providerRow.locator(".provider-add-model-toggle").click();
+    const addDialog = providerRow.getByRole("dialog", { name: /添加模型/ });
+    await expect(addDialog).toBeVisible();
+    await addDialog.getByRole("checkbox", { name: modelId, exact: true }).check();
+    const response = page.waitForResponse((candidate) => candidate.request().method() === "POST"
+      && /\/api\/providers\/[^/]+\/models$/.test(new URL(candidate.url()).pathname));
+    await addDialog.getByRole("button", { name: "添加所选模型" }).click();
+    return response;
+  };
 
   const thinkingStops = (picker: ReturnType<typeof page.getByRole>) =>
     picker.getByRole("radiogroup", { name: /^(当前对话的思考，从关闭到最强|Thinking for this conversation, off to strongest)$/ })
@@ -596,8 +609,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       async () => {
         const dialog = page.getByRole("dialog", { name: "系统设置" });
         // 预置的服务商行默认收起（从界面新建时它是展开的），先展开智谱这一行。
-        await dialog.locator(".provider-row").filter({ hasText: zhipuName }).first()
-          .locator(".provider-row-summary").click();
+        const zhipuRow = dialog.locator(".provider-row").filter({ hasText: zhipuName }).first();
+        await zhipuRow.locator(".provider-row-summary").click();
         // 清单出处：服务商自己返回的，而不是目录顶替。
         await expect(dialog.locator(".provider-row-source").filter({ hasText: /服务商返回/ })).toBeVisible();
         await expect(dialog.locator(".provider-row-source").filter({ hasText: /models\.dev 数据库/ })).toHaveCount(0);
@@ -627,10 +640,7 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         expect(popupBox!.y).toBeGreaterThanOrEqual(0);
         expect(popupBox!.y + popupBox!.height).toBeLessThanOrEqual(page.viewportSize()!.height + 1);
         await expect(card.getByRole("link")).toHaveCount(0);
-        const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
-          && /\/api\/providers\/[^/]+\/models$/.test(new URL(response.url()).pathname));
-        await card.getByRole("button", { name: "添加模型" }).click();
-        const profile = await (await responsePromise).json() as ModelProfile;
+        const profile = await (await addListedModel(zhipuRow, "glm-5.2")).json() as ModelProfile;
         modelIds.push(profile.id);
         await expect(card.getByRole("button", { name: "删除" })).toBeEnabled();
       },
@@ -699,10 +709,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         const unknownPopup = page.locator("body > .provider-model-popup");
         await expect(unknownPopup).toBeVisible();
         await expect(unknownPopup).toContainText("未知");
-        const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
-          && /\/api\/providers\/[^/]+\/models$/.test(new URL(response.url()).pathname));
-        await known.getByRole("button", { name: "添加模型" }).click();
-        const profile = await (await responsePromise).json() as ModelProfile;
+        const deepseekRow = dialog.locator(".provider-row").filter({ hasText: customName }).first();
+        const profile = await (await addListedModel(deepseekRow, "deepseek-v4-flash")).json() as ModelProfile;
         deepseekModelId = profile.id;
         modelIds.push(profile.id);
       },
@@ -754,17 +762,23 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       async () => {
         stub.failListing();
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByRole("button", { name: "刷新列表" }).click();
+        await dialog.getByRole("button", { name: "刷新模型列表" }).click();
         const alert = dialog.getByRole("alert").filter({ hasText: "无法刷新服务商模型列表" });
         await expect(alert).toContainText("403");
         await expect(alert).toContainText("fixture model-list permission denied");
         await expect(alert).toContainText("上次成功结果仍保留");
         await expect(modelRowById(dialog, "deepseek-v4-flash")).toBeVisible();
-        await dialog.locator(".provider-add-model-toggle").click();
-        await dialog.getByLabel("手动模型 ID").fill("fixture-manual");
+        const deepseekRow = dialog.locator(".provider-row").filter({ hasText: customName }).first();
+        await deepseekRow.locator(".provider-add-model-toggle").click();
+        const addDialog = deepseekRow.getByRole("dialog", { name: /添加模型/ });
+        if (!await addDialog.locator("details").evaluate((element) => (element as HTMLDetailsElement).open)) {
+          await addDialog.locator("summary").click();
+        }
+        await addDialog.getByLabel("手动模型 ID").fill("fixture-manual");
+        await addDialog.locator(".provider-manual-form").getByRole("button", { name: "加入待添加列表" }).click();
         const responsePromise = page.waitForResponse((response) => response.request().method() === "POST"
           && /\/api\/providers\/[^/]+\/models$/.test(new URL(response.url()).pathname));
-        await dialog.locator(".provider-manual-form").getByRole("button", { name: "添加模型" }).click();
+        await addDialog.getByRole("button", { name: "添加所选模型" }).click();
         const profile = await (await responsePromise).json() as ModelProfile;
         modelIds.push(profile.id);
         expect(profile.model).toBe("fixture-manual");
@@ -828,13 +842,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
 
         // Re-expand B (expanding A collapsed it) and add B's model to B.
         await rowB.locator(".provider-row-summary").click();
-        const addResponse = page.waitForResponse((response) => response.request().method() === "POST"
-          && new URL(response.url()).pathname === `/api/providers/${providerB.id}/models`);
-        await rowB.locator(".provider-model-row")
-          .filter({ hasText: "race-provider-b-model" })
-          .getByRole("button", { name: "添加模型" })
-          .click();
-        const profile = await (await addResponse).json() as ModelProfile;
+        const addResponse = await addListedModel(rowB, "race-provider-b-model");
+        const profile = await addResponse.json() as ModelProfile;
         modelIds.push(profile.id);
         raceModelId = profile.id;
         expect(profile.providerId).toBe(providerB.id);
@@ -848,8 +857,8 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
       async () => {
         const before = await apiJson<{ overrides: Record<string, unknown> }>(page, "/api/settings");
         const dialog = page.getByRole("dialog", { name: "系统设置" });
-        await dialog.getByLabel("全局默认任务模型").selectOption(raceModelId);
-        await expect(dialog.getByLabel("全局默认任务模型")).toHaveValue(raceModelId);
+        await apiJson(page, "/api/settings", { data: { ...before.overrides, modelId: raceModelId }, method: "PUT" });
+        expect((await apiJson<{ overrides: { modelId?: string } }>(page, "/api/settings")).overrides.modelId).toBe(raceModelId);
         const providerRow = dialog.locator(".provider-row").filter({ hasText: "J7 Race Provider B" });
         if (!await providerRow.locator(".provider-row-detail").count()) {
           await providerRow.locator(".provider-row-summary").click();
@@ -893,7 +902,14 @@ test("J7 Provider 模型目录、失败降级与对话思考选择", { tag: "@mo
         expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewport + 1);
         expect(geometry.controlsInside).toBe(true);
         await dialog.locator(".provider-add-model-toggle").click();
-        await expect(dialog.getByLabel("手动模型 ID")).toBeVisible();
+        const addDialog = dialog.locator(".model-add-dialog");
+        await expect(addDialog).toBeVisible();
+        if (!await addDialog.locator("details").evaluate((element) => (element as HTMLDetailsElement).open)) {
+          await addDialog.locator("summary").click();
+        }
+        await expect(addDialog.getByLabel("手动模型 ID")).toBeVisible();
+        await addDialog.getByRole("button", { name: "取消", exact: true }).click();
+        await expect(addDialog).toHaveCount(0);
       },
     );
 
