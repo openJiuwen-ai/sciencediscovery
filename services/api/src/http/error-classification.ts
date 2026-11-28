@@ -29,19 +29,65 @@ export function isRuntimeFault(error: unknown): boolean {
 }
 
 /**
+ * The sentences the engine itself writes. A plain `Error` can carry one of them
+ * verbatim, for instance when a handler re-wraps `cause.message`, so the type
+ * check above is not enough: `Cannot read properties of undefined (reading
+ * 'match')` has to stay a 500 even when it arrives inside an `Error`.
+ *
+ * Every pattern keeps the part that makes the wording unmistakable: a binding
+ * that is not a function, a value that is undefined where the engine needed an
+ * object, an array or stack limit. Legacy validators describe the caller's own
+ * field instead (`after_ms must be a positive integer`, `... is required`), so
+ * they do not take these shapes; the suite pins both directions.
+ */
+const INTERPRETER_FAULT_WORDING: readonly RegExp[] = [
+  // TypeError: `Cannot read properties of undefined (reading 'match')`, and the
+  // pre-ES2021 `Cannot read property 'match' of undefined`.
+  /\bCannot read propert(?:y|ies)\b[^]*\bof (?:undefined|null)\b/,
+  // TypeError: `Cannot set properties of undefined (setting 'x')`, and the
+  // older `Cannot set property 'x' of undefined`.
+  /\bCannot set propert(?:y|ies)\b[^]*\bof (?:undefined|null)\b/,
+  // TypeError: `Cannot use 'in' operator to search for 'x' in undefined`.
+  /\bCannot use 'in' operator to search for\b/,
+  // TypeError: `Cannot create property 'x' on string 'y'`.
+  /\bCannot create property\b[^]*\bon (?:string|number|boolean|symbol|bigint)\b/,
+  // TypeError: `Cannot destructure property 'x' of 'y' as it is undefined.`
+  /\bCannot destructure (?:property\b|'[^']*' as )/,
+  // TypeError: `Cannot convert undefined or null to object`, `Cannot convert a
+  // BigInt value to a number`, `Cannot convert object to primitive value`.
+  /\bCannot convert (?:undefined or null to object|a BigInt value to a number|object to primitive value)\b/,
+  // TypeError: `state.items is not a function` / `x is not iterable`;
+  // ReferenceError: `params is not defined`.
+  /\bis not (?:a function|iterable|defined)\.?\s*$/,
+  // RangeError: `Invalid array length`, `Invalid string length`.
+  /\bInvalid (?:array|string) length\b/,
+  // RangeError: `Maximum call stack size exceeded`.
+  /\bMaximum call stack size exceeded\b/,
+  // TypeError: `Assignment to constant variable.`
+  /\bAssignment to constant variable\b/,
+];
+
+function quotesInterpreterFault(message: string): boolean {
+  return INTERPRETER_FAULT_WORDING.some((pattern) => pattern.test(message));
+}
+
+/**
  * Legacy validators still throw plain Error objects. Keep their established
  * 400 responses while allowing genuinely unclassified faults to surface as
  * 500. New handlers should prefer ApiStatusError or a stable error code.
  *
  * Only a non-runtime `Error` is matched against the wording list, because that
  * list is a record of what the legacy validators say, not a guess about prose
- * in general. `SyntaxError` stays a client error: a body that does not parse is
- * the caller's own bytes.
+ * in general. An `Error` whose text is one of the engine's own sentences is
+ * excluded first: that text is evidence about this server, not about the
+ * caller, whatever class the re-wrap gave it. `SyntaxError` stays a client
+ * error: a body that does not parse is the caller's own bytes.
  */
 export function isKnownClientInputError(error: unknown): boolean {
   if (error instanceof SyntaxError) return true;
   if (!(error instanceof Error)) return false;
   if (isRuntimeFault(error)) return false;
+  if (quotesInterpreterFault(error.message)) return false;
   return [
     /\bis required\b/i,
     /\bmust\b/i,
