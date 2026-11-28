@@ -229,11 +229,129 @@ test("web_fetch judges IPv4-mapped and IPv4-compatible IPv6 literals by their em
   );
 });
 
+test("web_fetch judges NAT64, 6to4, IPv4-translated, Teredo and site-local literals by their embedded IPv4", async () => {
+  // Each family decodes its embedded IPv4 and hands it to the same ipv4Blocked table, so the
+  // loopback, RFC1918, link-local metadata and CGNAT rows all reject through one rule.
+  const blocked = [
+    // NAT64 well-known prefix 64:ff9b::/96
+    "64:ff9b::7f00:1",        // 127.0.0.1
+    "64:ff9b::a00:1",         // 10.0.0.1
+    "64:ff9b::a9fe:a9fe",     // 169.254.169.254
+    "64:ff9b::6440:1",        // 100.64.0.1
+    // NAT64 local-use prefix 64:ff9b:1::/96
+    "64:ff9b:1::7f00:1",
+    "64:ff9b:1::a00:1",
+    "64:ff9b:1::a9fe:a9fe",
+    "64:ff9b:1::6440:1",
+    // 6to4 2002::/16
+    "2002:7f00:1::",
+    "2002:a00:1::",
+    "2002:a9fe:a9fe::",
+    "2002:6440:1::",
+    // IPv4-translated ::ffff:0:0:0/96
+    "::ffff:0:7f00:1",
+    "::ffff:0:a00:1",
+    "::ffff:0:a9fe:a9fe",
+    "::ffff:0:6440:1",
+    // Teredo 2001:0::/32, whose client IPv4 is stored bitwise-inverted
+    "2001:0:4136:e378:8000:63bf:80ff:fffe", // 127.0.0.1
+    "2001:0:4136:e378:8000:63bf:f5ff:fffe", // 10.0.0.1
+    "2001:0:4136:e378:8000:63bf:5601:5601", // 169.254.169.254
+    "2001:0:4136:e378:8000:63bf:9bbf:fffe", // 100.64.0.1
+    // Deprecated site-local fec0::/10 carries no IPv4 at all
+    "fec0::1",
+    "fec0:ffff::abcd",
+  ];
+  for (const address of blocked) {
+    assert.equal(isBlockedAddress(address), true, address);
+  }
+  // Public embedded IPv4 values stay public: rejecting a whole prefix would break NAT64/6to4 egress.
+  const allowed = [
+    "64:ff9b::808:808",                     // NAT64 to 8.8.8.8
+    "64:ff9b:1::808:808",                   // local-use NAT64 to 8.8.8.8
+    "2002:808:808::",                       // 6to4 to 8.8.8.8
+    "::ffff:0:808:808",                     // IPv4-translated 8.8.8.8
+    "2001:0:4136:e378:8000:63bf:f7f7:f7f7", // Teredo client 8.8.8.8
+    "2606:4700:4700::1111",                 // native public IPv6, none of these classes
+  ];
+  for (const address of allowed) {
+    assert.equal(isBlockedAddress(address), false, address);
+  }
+  // The literal gate rejects a private embedded address in every family ...
+  for (const address of [
+    "64:ff9b::7f00:1", "64:ff9b:1::a00:1", "2002:7f00:1::", "::ffff:0:7f00:1",
+    "2001:0:4136:e378:8000:63bf:3f57:fefe", "fec0::1",
+  ]) {
+    await assert.rejects(assertPublicUrl(`http://[${address}]/`), PublicUrlError, address);
+  }
+  // ... and accepts the public embedded values, so an IPv6-only/NAT64 network keeps web_fetch.
+  for (const address of [
+    "64:ff9b::808:808", "2002:808:808::", "::ffff:0:808:808",
+    "2001:0:4136:e378:8000:63bf:f7f7:f7f7",
+  ]) {
+    assert.equal(await assertPublicUrl(`http://[${address}]/`), `http://[${address}]/`, address);
+  }
+});
+
+test("web_fetch judges dotted and hex spellings of an embedded IPv4 alike", async () => {
+  // A trailing dotted quad is the same 32 bits as two hextets. Each family keeps its address in a
+  // different position, so the dotted spelling must be placed there too rather than judged at the
+  // tail: 6to4 carries it in hextets 1-2 and Teredo inverts hextets 6-7.
+  const spellings = [
+    ["2002:a9fe:a9fe::1.1.1.1", "2002:a9fe:a9fe::101:101"],                                 // 6to4 -> 169.254.169.254
+    ["2001:0:4136:e378:8000:63bf:128.255.255.254", "2001:0:4136:e378:8000:63bf:80ff:fffe"], // Teredo -> 127.0.0.1
+    ["2002:808:808::8.8.8.8", "2002:808:808::808:808"],                                     // 6to4 -> 8.8.8.8
+    ["2001:0:4136:e378:8000:63bf:247.247.247.247", "2001:0:4136:e378:8000:63bf:f7f7:f7f7"], // Teredo -> 8.8.8.8
+    ["64:ff9b::169.254.169.254", "64:ff9b::a9fe:a9fe"],                                     // NAT64 -> 169.254.169.254
+    ["::ffff:0:127.0.0.1", "::ffff:0:7f00:1"],                                              // IPv4-translated -> 127.0.0.1
+  ] as const;
+  for (const [dotted, hex] of spellings) {
+    assert.equal(isBlockedAddress(dotted), isBlockedAddress(hex), `${dotted} vs ${hex}`);
+  }
+  // Dotted spellings of private embedded values are blocked, at their own family's position ...
+  for (const address of [
+    "2002:a9fe:a9fe::1.1.1.1",                    // 6to4 to 169.254.169.254
+    "2001:0:4136:e378:8000:63bf:128.255.255.254", // Teredo deobfuscates to 127.0.0.1
+  ]) {
+    assert.equal(isBlockedAddress(address), true, address);
+    await assert.rejects(assertPublicUrl(`http://[${address}]/`), PublicUrlError, address);
+  }
+  // ... and dotted spellings of public embedded values stay allowed. URL parsing canonicalises an
+  // IPv6 host to hex, so the gate confirms the same verdict for the equivalent canonical form.
+  for (const address of [
+    "2002:808:808::8.8.8.8",                     // 6to4 to 8.8.8.8
+    "2001:0:4136:e378:8000:63bf:247.247.247.247", // Teredo deobfuscates to 8.8.8.8
+  ]) {
+    assert.equal(isBlockedAddress(address), false, address);
+    assert.equal(await assertPublicUrl(`http://[${address}]/`), `http://[${address}]/`, address);
+  }
+  // The mapped forms keep their previous verdicts under both spellings.
+  assert.equal(isBlockedAddress("::ffff:127.0.0.1"), true);
+  assert.equal(isBlockedAddress("::ffff:93.184.216.34"), false);
+  assert.equal(await assertPublicUrl("http://[::ffff:8.8.8.8]/"), "http://[::ffff:8.8.8.8]/");
+});
+
 test("web_fetch applies the same judgement to resolved addresses, not only literals", async () => {
   // The DNS path runs the same predicate, so a mapped literal returned by a resolver must reject.
   await assert.rejects(
     assertPublicUrl("http://example.com/", async () => ["::ffff:7f00:1"]),
     PublicUrlError,
+  );
+  // Every family added for #665 must reject on the resolver path too.
+  for (const address of [
+    "64:ff9b::7f00:1", "64:ff9b:1::a00:1", "2002:7f00:1::", "::ffff:0:7f00:1",
+    "2001:0:4136:e378:8000:63bf:80ff:fffe", "fec0::1",
+  ]) {
+    await assert.rejects(
+      assertPublicUrl("http://example.com/", async () => [address]),
+      PublicUrlError,
+      address,
+    );
+  }
+  // A resolver answer that embeds a public IPv4 stays acceptable.
+  assert.equal(
+    await assertPublicUrl("http://example.com/", async () => ["2002:808:808::"]),
+    "http://example.com/",
   );
 });
 
