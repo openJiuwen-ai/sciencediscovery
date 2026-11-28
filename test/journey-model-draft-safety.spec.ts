@@ -40,7 +40,8 @@ async function apiJson<T>(page: Page, path: string, options: { data?: unknown; m
  *   取消保留草稿、确认才丢弃；底部保存准确提交草稿且不误报未保存。旧的“高级独立模型”双编辑器已删除，本场景按新主路径验证。
  * Steps:
  *   1. 打开模型注册表：没有自动选中的服务商；已建 Provider 行显示“已添加 1”，点“编辑”后才出现编辑器且值与保存一致。
- *   2. 修改服务商名称后改点另一个服务商的「编辑」：只出现一次未保存确认；取消时草稿保留，确认后切到该服务商的编辑器。
+ *   2. 修改服务商名称后点另一个服务商行摘要：摘要点击即出现一次未保存确认；取消时该行保持收起、原草稿保留；
+ *      再次点摘要并确认后该行展开，再点「编辑」打开其已保存值，且编辑点击不再出现确认。
  *   3. 修改名称后切换“全局默认值”分组：同样只确认一次；取消时留在注册表且草稿保留，确认后切换成功、重开值恢复已保存。
  *   4. 修改名称后点底部“保存”：PUT 命中 Provider、无确认弹窗、对话框保持打开；关闭时不再误报未保存，重开值与保存一致。
  * Environment: Isolated local stack at E2E_BASE_URL with isolated data dir；Provider 使用 loopback base URL 和 manual 发现策略。
@@ -138,9 +139,10 @@ test("T1 服务商草稿不会静默丢失", { tag: "@mocked" }, async ({ journe
     );
 
     await journey.step(
-      "切换编辑对象前明确确认：取消保留、确认才切换",
-      "修改服务商名称后改点另一个服务商的「编辑」：只出现一次“放弃尚未保存的服务商修改？”确认。"
-      + "取消时草稿保留、重开原行编辑器仍是未保存值；明确确认后切到另一个服务商，名称显示其已保存值。",
+      "切换编辑对象前明确确认：摘要点击即确认，取消保留、确认才展开",
+      "修改服务商名称后点另一个服务商的行摘要：切换在摘要点击时就要求确认，只出现一次“丢弃未保存的更改？”。"
+      + "取消时该行保持收起、原行编辑器与未保存值保留；再次点该行摘要并确认后该行展开，"
+      + "再点「编辑」打开其已保存值，且编辑点击本身不再出现确认。",
       async () => {
         const dialog = await openModelRegistry();
         const editor = await openProviderEditor(dialog);
@@ -148,40 +150,46 @@ test("T1 服务商草稿不会静默丢失", { tag: "@mocked" }, async ({ journe
         await editor.getByLabel("服务商名称").fill(unsavedName);
 
         const rowB = dialog.locator(".provider-row").filter({ hasText: providerBName });
-        const expandRowB = async () => {
-          if (!await rowB.locator(".provider-row-detail").count()) {
-            await rowB.locator(".provider-row-summary").click();
-          }
-        };
 
+        // 第一次尝试：确认挂在 B 行摘要点击上，而不是之后的「编辑」。
         let dismissMessage = "";
+        let dismissCount = 0;
         page.once("dialog", (confirmation) => {
+          dismissCount += 1;
           dismissMessage = confirmation.message();
           void confirmation.dismiss();
         });
-        await expandRowB();
-        await rowB.getByRole("button", { name: "编辑", exact: true }).click();
-        expect(dismissMessage).toContain("放弃尚未保存的服务商修改");
-        // 取消切换：B 行不带编辑器；重开 A 行，未保存草稿原样保留。
-        await expect(rowB.getByRole("region", { name: "服务商编辑器" })).toHaveCount(0);
-        const rowA = dialog.locator(".provider-row").filter({ hasText: providerName });
-        if (!await rowA.locator(".provider-row-detail").count()) {
-          await rowA.locator(".provider-row-summary").click();
-        }
+        await rowB.locator(".provider-row-summary").click();
+        expect(dismissCount).toBe(1);
+        expect(dismissMessage).toContain("丢弃未保存的更改");
+        // 取消切换：B 行保持收起，A 行编辑器仍带着未保存名称。
+        await expect(rowB.locator(".provider-row-detail")).toHaveCount(0);
         await expect(dialog.getByRole("region", { name: "服务商编辑器" }).getByLabel("服务商名称"))
           .toHaveValue(unsavedName);
 
+        // 第二次尝试：再次点同一个行摘要，接受确认后 B 行才展开。
         let acceptCount = 0;
         page.once("dialog", (confirmation) => {
           acceptCount += 1;
           void confirmation.accept();
         });
-        await expandRowB();
-        await rowB.getByRole("button", { name: "编辑", exact: true }).click();
+        await rowB.locator(".provider-row-summary").click();
         expect(acceptCount).toBe(1);
+        await expect(rowB.locator(".provider-row-detail")).toBeVisible();
+
+        // 确认已经消费了草稿冲突；打开 B 的编辑器不应再弹确认。
+        let editConfirmation = 0;
+        const countEditConfirmation = (confirmation: import("@playwright/test").Dialog) => {
+          editConfirmation += 1;
+          void confirmation.dismiss();
+        };
+        page.on("dialog", countEditConfirmation);
+        await rowB.getByRole("button", { name: "编辑", exact: true }).click();
         const newEditor = dialog.getByRole("region", { name: "服务商编辑器" });
         await expect(newEditor.getByText("编辑服务商")).toBeVisible();
         await expect(newEditor.getByLabel("服务商名称")).toHaveValue(providerBName);
+        page.off("dialog", countEditConfirmation);
+        expect(editConfirmation).toBe(0);
         await dialog.getByRole("button", { name: "取消并关闭" }).filter({ hasText: "取消并关闭" }).click();
         await expect(dialog).toBeHidden();
       },
