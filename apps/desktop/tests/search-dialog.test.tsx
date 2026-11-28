@@ -19,8 +19,11 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { groupsFor } from "../src/app/session-search.js";
+import { groupsFor, searchDetail, searchSnippet } from "../src/app/session-search.js";
 import type { WorkbenchSearchResult } from "../src/api/types.js";
+import { getLanguage, setLanguage } from "../src/text.js";
+import { EN } from "../src/text/en.js";
+import { ZH } from "../src/text/zh.js";
 import { SearchDialog, type SearchKindFilter } from "../src/views/SearchDialog.js";
 
 const noop = () => {};
@@ -155,6 +158,47 @@ test("a truncated answer adds nothing: the rows it drew are the answer", () => {
 
 test("nothing typed yet asks for a query instead of claiming an empty answer", () => {
   const markup = render({ query: "", results: undefined });
-  assert.match(markup, /输入以搜索会话、项目和产物。/u, "an untouched field asks for a query");
+  assert.match(markup, /输入以搜索会话、项目和产物，也会搜索会话中的消息正文。/u, "an untouched field asks for a query");
   assert.doesNotMatch(markup, /没有匹配/u, "an untouched field is not an empty answer");
+});
+
+test("a Session found by its message text shows the matching line on its own row", () => {
+  const longProject = "材料与晶体结构联合研究项目材料与晶体结构联合研究项目材料与晶体结构联合研究项目";
+  const markup = render({
+    query: "crystal",
+    results: answer([
+      hit("session", "本周实验", "2026-01-03T00:00:00.000Z", {
+        projectName: longProject,
+        snippet: "We grew a crystal at 300 K",
+      }),
+    ]),
+  });
+  assert.match(markup, new RegExp(longProject, "u"), "the long Project name is still drawn");
+  assert.match(markup, /class="search-hit-snippet">We grew a crystal at 300 K/u, "the matching line is its own row");
+  assert.equal(searchDetail(hit("session", "a", "2026-01-01T00:00:00.000Z", { projectName: "材料", snippet: "…crystal…" })), "材料",
+    "the Project line does not absorb the snippet");
+  assert.equal(searchSnippet(hit("session", "a", "2026-01-01T00:00:00.000Z", { snippet: "…crystal…" })), "…crystal…");
+  assert.equal(searchSnippet(hit("artifact", "f", "2026-01-01T00:00:00.000Z", { projectName: "材料", snippet: "ignored" })), undefined);
+  const plain = render({ results: answer([hit("artifact", "figure.png", "2026-01-04T00:00:00.000Z", { projectName: "材料" })]) });
+  assert.doesNotMatch(plain, /search-hit-snippet/u, "a hit without a snippet keeps the old two-line row");
+});
+
+test("the hint and empty state say message text is searched, in both languages", () => {
+  for (const text of [ZH, EN]) {
+    assert.doesNotMatch(text.sidebar.searchHint, /not message text|不包含消息正文/u);
+    assert.doesNotMatch(text.sidebar.searchEmpty("q"), /not message text|不包含消息正文/u);
+  }
+  assert.match(ZH.sidebar.searchHint, /消息正文/u);
+  assert.match(ZH.sidebar.searchEmpty("q"), /消息正文/u);
+  assert.match(EN.sidebar.searchHint, /messages inside a session/u);
+  assert.match(EN.sidebar.searchEmpty("q"), /messages inside a session/u);
+
+  setLanguage("en");
+  try {
+    const empty = render({ query: "crystal", results: answer([]) });
+    assert.match(empty, /Nothing matches &quot;crystal&quot;\. Search matches names, titles and messages inside a session\./u);
+  } finally {
+    setLanguage("zh-CN");
+  }
+  assert.equal(getLanguage(), "zh-CN");
 });

@@ -18,8 +18,9 @@ import type { WorkbenchSearchResponse } from "./types.js";
 /**
  * `GET /api/search`, the route the web client's palette uses.
  *
- * It matches project names, Session titles and artifact names/titles — **not
- * message bodies** — so the desktop field must not promise more than that.
+ * It matches project names, Session titles and artifact names/titles, and —
+ * for a non-empty query — the message bodies of recently active Sessions. A
+ * body hit is still a Session hit and carries the matching line in `snippet`.
  */
 export function searchWorkbench(
   client: ApiClient,

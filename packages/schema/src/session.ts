@@ -385,6 +385,10 @@ export interface WorkbenchSearchResult {
   projectName?: string;
   /** For an artifact: the title of the Session that created it, absent when that Session was deleted. */
   sessionTitle?: string;
+  /** For a Session matched by its message text: the first matching line, clipped
+   *  around the needle and including ellipses when it was cut. Both clients
+   *  render it under the label; `detail` alone is their Project line. */
+  snippet?: string;
   archived?: boolean;
   origin?: ArtifactOrigin;
   /** When this row last changed, so a client can order a group newest first:

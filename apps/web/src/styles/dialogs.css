@@ -27,6 +27,9 @@
 .global-search-results > button strong, .global-search-results > button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .global-search-results > button strong { color: var(--text); font-size: 13px; }
 .global-search-results > button small { color: var(--muted); }
+/* The matching message line sits under the Project line, so a long Project
+   name cannot ellipsize the reason the row is in the list. */
+.global-search-results > button small.global-search-snippet { color: var(--text); }
 .global-search-results > button em { border-radius: 999px; background: var(--surface-hover); padding: 3px 7px; color: var(--muted); font-size: 10px; font-style: normal; text-transform: uppercase; }
 .global-search-results > p { margin: 26px; color: var(--muted); text-align: center; }
 

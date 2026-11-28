@@ -5598,6 +5598,9 @@ body.is-resizing {
 .search-hit:hover, .search-hit.is-active { background: rgba(127, 127, 127, 0.14); }
 .search-hit-label { display: block; font-size: 13px; line-height: 18px; }
 .search-hit-detail { display: block; color: var(--muted); font-size: 11px; line-height: 16px; }
+/* Why a Session is in the list, on its own row: a long Project name above it
+   must not be able to hide the matching line. */
+.search-hit-snippet { display: block; color: var(--text); font-size: 11px; line-height: 16px; }
 /* The footer is the dialog's only filter: 全部 groups the hits, a kind shows
    only itself. */
 .search-panel-foot { display: flex; gap: 4px; padding: 8px 10px; border-top: 1px solid var(--border); }
@@ -5619,4 +5622,4 @@ body.is-resizing {
    column of results can be told apart before any of them is read. */
 .search-hit-icon { flex: none; color: var(--muted); }
 .search-hit-text { min-width: 0; }
-.search-hit-label, .search-hit-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-hit-label, .search-hit-detail, .search-hit-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
