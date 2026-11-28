@@ -1079,3 +1079,45 @@ test("a package whose workspace objects are all absent reports the loss instead 
   const detail = await (await request(`/api/sessions/${target.firstSession.id}`)).json() as { messages: unknown[] };
   assert.deepEqual(detail.messages, []);
 });
+
+test("a package whose records name a version object it does not carry still imports, and says so (#1520)", async (context) => {
+  const { request, project } = await fixture(context);
+  const target = await project();
+  // One real export carried 271 of these: `manifest.omissions` declared the versions
+  // unreadable, `records.versionObjects` still named every one of them, and none of
+  // their objects was in the archive. The import must skip them and keep the receipt
+  // honest, not answer 404 File not found on the first one.
+  const absentDigest = `sha256:${"8a".repeat(32)}`;
+  const bytes = createResearchPackage({
+    source: { projectId: "source-project", title: "missing version object" },
+    records: {
+      sessions: [{ session: { id: "source-one", title: "缺失版本对象" }, messages: [] }],
+      versionObjects: [{ pool: "agent-state", digest: absentDigest, size: 42, mediaType: "application/json" }],
+    },
+  }).bytes;
+  const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(bytes),
+  })).json() as { omissions: string[] };
+  assert.ok(receipt.omissions.includes(`version:agent-state:${absentDigest}:missing object`),
+    `the missing version object is named in the receipt: ${JSON.stringify(receipt.omissions)}`);
+});
+
+test("a version object the package already declared unreadable is not reported twice (#1520)", async (context) => {
+  const { request, project } = await fixture(context);
+  const target = await project();
+  const absentDigest = `sha256:${"8b".repeat(32)}`;
+  const declared = `version:agent-state:${absentDigest}:unavailable source object`;
+  const bytes = createResearchPackage({
+    source: { projectId: "source-project", title: "declared missing version object" },
+    records: {
+      sessions: [{ session: { id: "source-one", title: "已声明的缺失版本" }, messages: [] }],
+      versionObjects: [{ pool: "agent-state", digest: absentDigest, size: 7, mediaType: "application/json" }],
+    },
+    omissions: [declared],
+  }).bytes;
+  const receipt = await (await request(`/api/projects/${target.id}/research-package/import?sessionId=${target.firstSession.id}`, {
+    method: "POST", body: Buffer.from(bytes),
+  })).json() as { omissions: string[] };
+  assert.equal(receipt.omissions.filter((item) => item.includes(absentDigest)).length, 1,
+    `one line per version, not two: ${JSON.stringify(receipt.omissions)}`);
+});

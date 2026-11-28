@@ -43,6 +43,26 @@ function withExtraEntry(bytes: Uint8Array, name: string, payload: Buffer): Uint8
   return gzipSync(Buffer.concat([body, header, payload, Buffer.alloc(padding), Buffer.alloc(1024)]), { level: 6 });
 }
 
+test("a streamed package's object map answers undefined for an object it does not carry, like the in-memory map", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "streamed-missing-"));
+  try {
+    const { packageBytes } = fixture();
+    const memory = importResearchPackage(packageBytes);
+    const streamed = await importResearchPackageStreamed(pieces(packageBytes, 7), { objectDirectory: join(directory, "objects") });
+    const absent = sha256(Buffer.from("never packed\n"));
+    assert.equal(memory.objects.has(absent), false);
+    assert.equal(memory.objects.get(absent), undefined);
+    assert.equal(streamed.objects.has(absent), false);
+    // A read of a path the archive does not carry is a `Map` miss, not a filesystem
+    // probe: `DirectoryObjects.get` used to call `readFileSync` and throw ENOENT, which
+    // the API mapped to 404 and turned an already-declared omission into a failed
+    // import (#1520). The two import paths have to answer the same way.
+    assert.equal(streamed.objects.get(absent), undefined);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
 test("a streamed import unpacks the objects to files and reads the same records as the in-memory import", async () => {
   const directory = await mkdtemp(join(tmpdir(), "streamed-import-"));
   try {
