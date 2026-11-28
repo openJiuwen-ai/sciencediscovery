@@ -4,7 +4,11 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { createTest } from "../support/tagged/compat.mjs";
-import { waitForEnvironmentSetup } from "./environment-setup.ts";
+import {
+  ENVIRONMENT_SETUP_ERROR_LIMIT,
+  formatEnvironmentSetupBlockedReason,
+  waitForEnvironmentSetup,
+} from "./environment-setup.ts";
 
 const { test } = createTest(import.meta.url, {
   tags: ["category:ut", "os:linux", "os:macos", "arch:amd64", "arch:arm64"],
@@ -145,6 +149,85 @@ test("a hung GET fails after ten seconds even if the reader ignores its timeout"
   finishRead(ready);
   await setImmediate();
   assert.equal(read.mock.callCount(), 1);
+});
+
+const failedWithTranscript = {
+  state: "failed",
+  message: "Conda environment setup failed",
+  error: "LibMambaUnsatisfiableError: Encountered problems while solving:\n  - package python-3.12.0 requires openssl >=3.0",
+  components: {
+    conda: {
+      state: "failed",
+      message: "Conda environment setup failed",
+      error: "LibMambaUnsatisfiableError: Encountered problems while solving:\n  - package python-3.12.0 requires openssl >=3.0",
+    },
+    micromamba: { state: "ready", message: "micromamba is ready", error: null },
+  },
+};
+
+test("a failed Python base preserves its error transcript instead of stripping it", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const read = context.mock.fn(async () => failedWithTranscript);
+  assert.deepEqual(await waitForEnvironmentSetup(read), failedWithTranscript);
+  assert.equal(read.mock.callCount(), 1);
+});
+
+test("a failed setup with an error transcript includes it in the BLOCKED reason", () => {
+  const reason = formatEnvironmentSetupBlockedReason(failedWithTranscript);
+  assert.ok(reason.startsWith("failed: Conda environment setup failed"));
+  assert.match(reason, /LibMambaUnsatisfiableError/);
+  assert.match(reason, /openssl >=3\.0/);
+});
+
+test("a failed setup without an error renders exactly as before", () => {
+  assert.equal(
+    formatEnvironmentSetupBlockedReason(failed),
+    "failed: Managed Python base installation failed",
+  );
+  assert.equal(
+    formatEnvironmentSetupBlockedReason({ ...failed, error: null, components: { conda: { error: null } } }),
+    "failed: Managed Python base installation failed",
+  );
+  assert.equal(
+    formatEnvironmentSetupBlockedReason({ ...failed, error: "   " }),
+    "failed: Managed Python base installation failed",
+  );
+  assert.equal(
+    formatEnvironmentSetupBlockedReason({ ...failed, error: "" }),
+    "failed: Managed Python base installation failed",
+  );
+  assert.equal(
+    formatEnvironmentSetupBlockedReason({ ...failed, error: null, components: {} }),
+    "failed: Managed Python base installation failed",
+  );
+  assert.equal(
+    formatEnvironmentSetupBlockedReason({ ...failed, error: null, components: { conda: {} } }),
+    "failed: Managed Python base installation failed",
+  );
+});
+
+test("a conda error that differs from the setup error is appended after it", () => {
+  const setup = {
+    ...failedWithTranscript,
+    error: "conda channel https://conda.anaconda.org/conda-forge unreachable (ECONNRESET)",
+  };
+  const reason = formatEnvironmentSetupBlockedReason(setup);
+  assert.ok(reason.indexOf("ECONNRESET") < reason.indexOf("LibMambaUnsatisfiableError"));
+  assert.match(reason, /conda: LibMambaUnsatisfiableError/);
+});
+
+test("an identical conda error is not repeated in the BLOCKED reason", () => {
+  const reason = formatEnvironmentSetupBlockedReason(failedWithTranscript);
+  assert.equal(reason.match(/LibMambaUnsatisfiableError/g)?.length, 1);
+});
+
+test("a transcript longer than the bound is truncated with a marker", () => {
+  const longError = "x".repeat(ENVIRONMENT_SETUP_ERROR_LIMIT + 50);
+  const reason = formatEnvironmentSetupBlockedReason({ ...failed, error: longError });
+  const marker = "… (transcript truncated)";
+  assert.ok(reason.endsWith(marker));
+  assert.ok(reason.includes("x".repeat(ENVIRONMENT_SETUP_ERROR_LIMIT)));
+  assert.ok(!reason.includes("x".repeat(ENVIRONMENT_SETUP_ERROR_LIMIT + 1)));
 });
 
 test("the last GET receives only the remaining total readiness budget", async (context) => {
