@@ -116,6 +116,7 @@ import type {
 } from "@sciencediscovery/schema";
 import type { ModelCatalogDetails } from "@sciencediscovery/schema";
 import { constrainCatalogThinking, setModelCatalogSnapshot, effectiveRunnerIds } from "@sciencediscovery/schema";
+import { specialistCapabilityAccess } from "@sciencediscovery/schema";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import {
   classifyScientificArtifact,
@@ -5144,6 +5145,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     );
   }
 
+  // The composer reports the sources the next run will use, so it needs the
+  // bound Specialist's access mode, not only its connector list: `specific`
+  // replaces the Session's selection instead of extending it.
+  const boundSpecialist = session ? specialists.find((item) => item.id === session.specialistId) : undefined;
+
   return (
     <ErrorDiagnosticClient.Provider value={client}><RuntimeConfigClient.Provider value={client}><ResearchContinuationContext.Provider value={continuationTasks}><PluginWebHost client={client} projectId={activeProjectId} sessionId={activeSessionId}>
     <div className="app-shell">
@@ -5759,7 +5765,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         disabled={isRunning || sessionReadOnly}
                         enabledIds={session.enabledConnectorIds}
                         onToggle={toggleConnector}
-                        specialistIds={specialists.find(item => item.id === session.specialistId)?.connectorIds ?? []}
+                        specialistAccess={specialistCapabilityAccess(boundSpecialist)}
+                        specialistIds={boundSpecialist?.connectorIds ?? []}
                         sourceStatuses={mcpReadiness.sourceStatuses}
                         onOpen={mcpReadiness.check}
                         onReload={mcpReadiness.reload}

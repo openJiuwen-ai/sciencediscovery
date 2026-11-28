@@ -327,6 +327,12 @@ button.settings-card-main:hover strong { color: var(--primary-strong); }
 }
 .settings-section .seg-pills button:disabled:hover { color: var(--text-secondary); }
 
+/* The external runtime's limits sit under the model field that selects it. */
+.specialist-runtime-note {
+  margin: 0 0 14px;
+  line-height: 17px;
+}
+
 /* ============================================================================
    Settings pages: the nine nav entries share these primitives
    ============================================================================ */

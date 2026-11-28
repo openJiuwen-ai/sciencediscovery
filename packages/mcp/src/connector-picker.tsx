@@ -15,7 +15,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ConnectorId, ConnectorManifest, McpSourceStatus } from "@sciencediscovery/schema";
 import type { ReactNode } from "react";
-type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable"|"connectors.catalogDegraded"|"connectors.catalogEmpty"|"connectors.catalogUnknown"|"connectors.omittedTools"|"connectors.unknownTools"|"connectors.specialist"|"connectors.reload"|"connectors.refreshing"|"connectors.refreshFailed"|"connectors.lastOutage",variables?:Record<string,string|number>)=>string;
+type Translate=(key:"connectors.title"|"connectors.summary"|"connectors.providerPolicy"|"connectors.enabled"|"connectors.note"|"connectors.specialistReplaces"|"connectors.specialistReplacement"|"connectors.groupBuiltin"|"connectors.groupWeb"|"connectors.groupCustom"|"connectors.catalogUnavailable"|"connectors.catalogDegraded"|"connectors.catalogEmpty"|"connectors.catalogUnknown"|"connectors.omittedTools"|"connectors.unknownTools"|"connectors.specialist"|"connectors.reload"|"connectors.refreshing"|"connectors.refreshFailed"|"connectors.lastOutage",variables?:Record<string,string|number>)=>string;
 
 export function connectorName(id: ConnectorId): string {
   return ({
@@ -36,6 +36,8 @@ export function connectorName(id: ConnectorId): string {
 }
 
 export type ConnectorGroupLabel = "connectors.groupBuiltin" | "connectors.groupWeb" | "connectors.groupCustom";
+/** How the bound Specialist relates to the Session's own connector selection. */
+export type ConnectorAccessMode = "all" | "specific";
 
 /** Data sources, Web access and custom MCP servers: one list, shown in the same groups wherever it is checked. */
 export function groupConnectors(connectors: readonly ConnectorManifest[]): Array<{ label: ConnectorGroupLabel; items: ConnectorManifest[] }> {
@@ -56,6 +58,7 @@ export function ConnectorPicker({
   onToggle,
   sourceStatuses = {},
   specialistIds = [],
+  specialistAccess = "all",
   onOpen, onReload, refreshing = false, refreshError,
 }: {
   t: Translate; icons:{database:ReactNode;external:ReactNode};
@@ -68,6 +71,11 @@ export function ConnectorPicker({
    * source selectable, but make a connector with no injectable tools visible. */
   sourceStatuses?: Readonly<Record<string, McpSourceStatus>>;
   specialistIds?: readonly string[];
+  /** `specific` replaces the Session's selection with `specialistIds`, so the
+   * Session's own rows are shown but neither applied nor togglable here; the
+   * count then matches what the next run actually uses. `all` keeps the
+   * additive union of both selections. */
+  specialistAccess?: ConnectorAccessMode;
   onOpen?: () => void;
   onReload?: () => void;
   refreshing?: boolean;
@@ -75,7 +83,8 @@ export function ConnectorPicker({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   useEffect(() => { if (open) onOpen?.(); }, [open, onOpen]);
-  const effectiveIds = new Set([...enabledIds, ...specialistIds]);
+  const replacesSession = specialistAccess === "specific";
+  const effectiveIds = new Set(replacesSession ? [...specialistIds] : [...enabledIds, ...specialistIds]);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -117,6 +126,7 @@ export function ConnectorPicker({
     </button>
     {open ? <div aria-label={t("connectors.title")} className="connector-picker-popover" role="dialog">
       <div className="connector-picker-heading"><strong>{t("connectors.title")}</strong><span>{t("connectors.enabled", { enabled: enabledCount, total: connectors.length })}</span></div>
+      {replacesSession ? <p className="connector-picker-replaces" role="note">{t("connectors.specialistReplacement")}</p> : null}
       {groups.map((group) => <div key={group.label} className="connector-picker-group">
         <small className="connector-picker-group-label">{t(group.label)}</small>
         <ul>
@@ -125,18 +135,22 @@ export function ConnectorPicker({
             const policyLabel = t("connectors.providerPolicy", { name });
             const status = sourceStatuses[connector.id];
             const inherited = specialistIds.includes(connector.id);
+            // Under `specific` access the Session's own selection is saved but
+            // not applied, so it is shown as such instead of as checked.
+            const notApplied = replacesSession && !inherited && enabledIds.includes(connector.id);
             const selected = effectiveIds.has(connector.id);
             const unavailable = selected && connector.id !== "web" && (!status || status.status !== "ready" || !status.availableTools.length);
             return <li key={connector.id}>
               <label>
                 <input
                   checked={selected}
-                  disabled={disabled || inherited}
+                  disabled={disabled || inherited || replacesSession}
                   onChange={() => onToggle(connector.id)}
                   type="checkbox"
                 />
                 <span><strong>{name}</strong><small>{connector.publisher}</small>
                   {inherited ? <small>{t("connectors.specialist")}</small> : null}
+                  {notApplied ? <small className="connector-picker-not-applied">{t("connectors.specialistReplaces")}</small> : null}
                   {unavailable ? <small className="connector-picker-status" role="status">
                     {!status ? t("connectors.catalogUnknown") : status.status === "ready" ? t("connectors.catalogEmpty") : t(status.status === "degraded" ? "connectors.catalogDegraded" : "connectors.catalogUnavailable", { error: status.error ?? "" })}
                     {status && status.status !== "ready" ? <> {status.missingTools.length ? t("connectors.omittedTools", { tools: status.missingTools.join(", ") }) : t("connectors.unknownTools")}</> : null}

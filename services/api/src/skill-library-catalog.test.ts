@@ -442,6 +442,90 @@ test("queued runs pin enabled skill library heads to immutable version refs", as
   }
 });
 
+test("a specific-capability Specialist does not apply the Session's pinned skill libraries", async () => {
+  const dataDir = await temporaryDataDir();
+  try {
+    const skillCatalog = new SkillCatalog(dataDir, repositoryRoot);
+    await skillCatalog.load();
+    const store = new SessionStore(dataDir);
+    store.setAvailableSkillIds(skillCatalog.ids());
+    await store.load();
+    const model = await store.createModel({
+      apiToken: "model-token",
+      baseUrl: "https://models.example.test/v1",
+      model: "science-model",
+      name: "Science model",
+    });
+    const catalog = new SkillLibraryCatalog(dataDir);
+    await catalog.load();
+    await catalog.create({ id: "pinned-library" });
+    const committed = await catalog.commitVersion("pinned-library", {
+      author: { kind: "system" },
+      operations: [{ package: skillPackage("pinned-literature-skill", "Find pinned literature evidence."), type: "upsert" }],
+    });
+    const project = await store.createProject("Pinned library project", {
+      enabledSkillIds: [],
+      enabledSkillLibraries: [{ libraryId: "pinned-library", versionId: "head" }],
+      modelId: model.id,
+      skillSelectionMode: "selected",
+    });
+
+    const specific = await store.createSpecialist({
+      capabilityAccess: "specific",
+      description: "No selected capabilities",
+      instructions: "Use only the selected capabilities.",
+      name: "Pinned library specific empty",
+    });
+    const specificWithSkill = await store.createSpecialist({
+      capabilityAccess: "specific",
+      description: "One selected skill",
+      enabledSkillIds: ["code-engineer"],
+      instructions: "Use only the selected capabilities.",
+      name: "Pinned library specific skill",
+    });
+    const all = await store.createSpecialist({
+      capabilityAccess: "all",
+      description: "Inherit the Session",
+      instructions: "Inherit the Session capabilities.",
+      name: "Pinned library all",
+    });
+
+    async function queued(specialistId: string, title: string) {
+      const session = await store.createSession(project.id, title);
+      await store.updateSession(session.id, { specialistId });
+      return await createQueuedRun(
+        store,
+        skillCatalog,
+        catalog,
+        createIdeaTreeAuthorityRegistry(),
+        session.id,
+        { content: "find pinned literature evidence" },
+        ideaTreeRepositoryForSession({ url: "http://127.0.0.1:1" }, { projectId: project.id, sessionId: session.id }),
+      );
+    }
+
+    for (const specialist of [specific, specificWithSkill]) {
+      const run = await queued(specialist.id, `${specialist.name} session`);
+      assert.deepEqual(run.settingsSnapshot.enabledSkillLibraries, [],
+        "a specific selection replaces the Session's pinned libraries");
+      assert.equal(run.skillLibraryRefs, undefined, "no library skill is recalled for a specific Specialist");
+    }
+
+    const inherited = await queued(all.id, "Pinned library all session");
+    assert.deepEqual(inherited.settingsSnapshot.enabledSkillLibraries, [{
+      libraryId: "pinned-library",
+      versionId: "head",
+    }]);
+    assert.deepEqual(inherited.skillLibraryRefs, [{
+      contentHash: committed.version!.contentHash,
+      libraryId: "pinned-library",
+      versionId: committed.version!.id,
+    }], "full access still recalls the Session's pinned library");
+  } finally {
+    await rm(dataDir, { force: true, recursive: true });
+  }
+});
+
 test("run-level skill self-evolution queues a guided proposal run", async () => {
   const dataDir = await temporaryDataDir();
   try {

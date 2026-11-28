@@ -207,13 +207,15 @@ test.describe("专家", () => {
       await expect(form).toBeHidden();
       await expect(browser.locator(".settings-card").filter({ hasText: "Data quality reviewer" })).toBeVisible();
       expect(mock.calls.filter((call) => call.method === "POST" && call.path === "/api/specialists")).toHaveLength(1);
+      // A new role defaults to full access and keeps the native runtime it was
+      // never asked to change, so the body carries the mode but no runtime.
       expect(writeCall(mock, "POST", "/api/specialists")).toEqual({
+        capabilityAccess: "all",
         connectorIds: [],
         description: "Checks missing values",
         enabledSkillIds: [],
         instructions: "Report anomalies with evidence.",
         name: "Data quality reviewer",
-        runtime: { kind: "native" },
       });
     });
   });
@@ -264,6 +266,7 @@ test.describe("专家", () => {
       await expect(dialog.locator(".settings-card").filter({ hasText: "文献核查专家" })).toBeVisible();
       expect(mock.calls.filter((call) => call.method === "POST" && call.path === "/api/specialists")).toHaveLength(2);
       expect(lastWriteCall(mock, "POST", "/api/specialists")).toMatchObject({
+        capabilityAccess: "specific",
         connectorIds: ["connector-1"],
         description: "复核文献引用",
         enabledSkillIds: ["skill-1"],
@@ -291,16 +294,16 @@ test.describe("专家", () => {
     await card.getByRole("menuitem", { name: "编辑" }).click();
     const form = browser.getByRole("dialog", { name: "编辑专家" });
     await expect(form).toBeVisible();
-    // A specialist with no explicit lists has been inheriting everything, which
-    // the form shows as 完全访问 rather than as two empty lists.
+    // A stored role with no explicit mode is read the way the store reads it: no
+    // lists means 完全访问, and the mode is written explicitly on save.
     await expect(form.getByRole("radio", { name: /完全访问/u })).toBeChecked();
 
     await form.getByLabel("描述").fill("看分子结构");
     await form.getByLabel("运行时").selectOption("codex");
     await form.locator(".settings-row", { hasText: "模型" }).locator("input").fill("gpt-5");
 
-    // The first capability picked is what turns 完全访问 into an explicit pair
-    // of lists; until then the record carries nothing.
+    // The picker switches 完全访问 to 特定能力, so the saved mode is specific and
+    // the two lists carry what was picked.
     await form.getByRole("button", { name: "添加技能" }).click();
     const picker = browser.getByRole("dialog", { name: "添加技能和连接器" });
     await picker.getByRole("checkbox", { name: /文献检索/u }).check();
@@ -314,6 +317,7 @@ test.describe("专家", () => {
 
     await expect(form).toBeHidden();
     expect(writeCall(mock, "PUT", "/api/specialists/specialist-1")).toMatchObject({
+      capabilityAccess: "specific",
       connectorIds: ["connector-1"],
       description: "看分子结构",
       enabledSkillIds: ["skill-1"],
@@ -337,6 +341,8 @@ test.describe("专家", () => {
 
     await expect(dialog.locator(".settings-card").filter({ hasText: "晶体专家（改）" })).toBeVisible();
     expect(writeCall(mock, "PUT", "/api/specialists/specialist-1")).toMatchObject({
+      // A legacy record stores no mode; the form writes the one it resolved.
+      capabilityAccess: "all",
       name: "晶体专家（改）",
     });
 

@@ -15,6 +15,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  specialistCapabilityAccess,
   type IdeaTreeExecutorDescriptor,
   type IdeaTreeWorkflowRoleSnapshot,
   type Specialist,
@@ -55,6 +56,10 @@ export function ideaTreeFingerprint(value: unknown): string {
 export function specialistConfigHash(specialist: Specialist): string {
   return ideaTreeFingerprint({
     ...(specialist.runtime && specialist.runtime.kind !== "native" ? { runtime: specialist.runtime } : {}),
+    // The resolved mode decides replace-vs-inherit, so it belongs to the
+    // executable configuration this hash claims to identify. Resolving it also
+    // keeps a legacy record and its normalized copy on one hash.
+    capabilityAccess: specialistCapabilityAccess(specialist),
     builtIn: specialist.builtIn === true,
     connectorIds: [...specialist.connectorIds].toSorted(),
     description: specialist.description,

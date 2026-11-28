@@ -75,6 +75,9 @@ test("Custom Specialist receives dedicated MCP and returns results through Swarm
     const toolName = `mcp__${serverId}__${echo!.id}`;
     const savedSpecialist = await page.request.post(`${apiBaseUrl()}/api/specialists`, { headers, data: {
       name: marker, description: "Synthetic dedicated MCP Specialist", instructions,
+      // The lane exists to use this one MCP source, so state that it replaces
+      // the Session's sources instead of leaving the mode to list inference.
+      capabilityAccess: "specific",
       connectorIds: [serverId], enabledSkillIds: [],
     } });
     expect(savedSpecialist.ok()).toBe(true);

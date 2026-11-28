@@ -32,6 +32,7 @@ import {
   cloneRunEventDetails,
   computeSettingsSnapshot,
   firstUserAuthoredMessage,
+  resolveSpecialistCapabilities,
   hasConversation,
   skillAuthoringCommandPrompt,
   splitArtifactVersionSuffix,
@@ -331,6 +332,137 @@ test("a Session's Idea Tree override is what a research created there reads", as
   const cleared = store.resolveIdeaTreeSettings(session.id);
   assert.equal(cleared.maxDepth, global.maxDepth);
   assert.equal(cleared.maxNodes, 42);
+});
+
+test("a bound specific Specialist replaces the Session's capability sets", async (context) => {
+  installApiTestModelCatalog();
+  const tempRoot = resolve(process.cwd(), ".tmp", `specialist-capabilities-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const store = new SessionStore(tempRoot);
+  context.after(async () => {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  });
+  await store.load();
+  store.setAvailableSkillIds(["code-engineer", "report-writer", "literature-searcher"]);
+  const provider = await store.createProvider({ apiToken: "test-token", presetId: "openai" });
+  const model = await store.materializeProviderModel(provider.id, "gpt-5.5");
+  const project = await store.createProject("Specialist capabilities");
+  const session = await store.createSession(project.id, "Specialist capabilities", model.id);
+  await store.updateSession(session.id, {
+    enabledConnectorIds: ["pubmed", "arxiv", "europe-pmc"],
+    enabledSkillIds: ["code-engineer", "report-writer"],
+    enabledSkillLibraries: [{ libraryId: "pinned-library", versionId: "head" }],
+    skillSelectionMode: "selected",
+  });
+  const specialist = await store.createSpecialist({
+    capabilityAccess: "specific",
+    connectorIds: ["pubmed"],
+    description: "Only one connector and one skill",
+    enabledSkillIds: ["code-engineer"],
+    instructions: "Use only the selected sources.",
+    name: "Specific capabilities subject",
+  });
+  await store.updateSession(session.id, { specialistId: specialist.id });
+
+  const specific = computeSettingsSnapshot(store, session.id);
+  assert.deepEqual(specific.enabledConnectorIds, ["pubmed"], "only the Specialist's connector is available");
+  assert.deepEqual(specific.enabledSkillIds, ["code-engineer"], "only the Specialist's skill is available");
+  assert.deepEqual(specific.enabledSkillLibraries, [], "pinned libraries cannot add skills behind a specific selection");
+
+  // Specific with nothing selected means nothing, not the Session's sets.
+  await store.updateSpecialist(specialist.id, { connectorIds: [], enabledSkillIds: [] });
+  const empty = computeSettingsSnapshot(store, session.id);
+  assert.deepEqual(empty.enabledConnectorIds, []);
+  assert.deepEqual(empty.enabledSkillIds, []);
+
+  // Full access still inherits later Session additions.
+  await store.updateSpecialist(specialist.id, { capabilityAccess: "all", connectorIds: [], enabledSkillIds: [] });
+  await store.updateSession(session.id, {
+    enabledConnectorIds: ["pubmed", "arxiv", "europe-pmc", "biorxiv"],
+    enabledSkillIds: ["code-engineer", "report-writer", "literature-searcher"],
+  });
+  const all = computeSettingsSnapshot(store, session.id);
+  assert.deepEqual(all.enabledConnectorIds, ["pubmed", "arxiv", "europe-pmc", "biorxiv"]);
+  assert.deepEqual(all.enabledSkillIds, ["code-engineer", "report-writer", "literature-searcher"]);
+  assert.deepEqual(all.enabledSkillLibraries, [{ libraryId: "pinned-library", versionId: "head" }],
+    "full access still applies the Session's pinned libraries");
+
+  // A source the user disabled globally stays unavailable to the specific role.
+  await store.updateSpecialist(specialist.id, {
+    capabilityAccess: "specific",
+    connectorIds: ["pubmed"],
+    enabledSkillIds: ["code-engineer"],
+  });
+  await store.replaceSessionSettings(session.id, {
+    ...store.getSessionSettings(session.id).overrides,
+    plugins: { "connector.pubmed": { enabled: false } },
+  });
+  const disabled = computeSettingsSnapshot(store, session.id);
+  assert.deepEqual(disabled.enabledConnectorIds, [], "a disabled connector is not granted by being listed");
+  assert.deepEqual(disabled.enabledSkillIds, ["code-engineer"]);
+});
+
+test("a bound built-in Specialist is additive, not exclusive", async (context) => {
+  installApiTestModelCatalog();
+  const tempRoot = resolve(process.cwd(), ".tmp", `builtin-specialist-capabilities-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  const store = new SessionStore(tempRoot);
+  context.after(async () => {
+    store.close();
+    await rm(tempRoot, { force: true, recursive: true });
+  });
+  await store.load();
+  store.setAvailableSkillIds(["code-engineer", "report-writer", "literature-searcher"]);
+  const provider = await store.createProvider({ apiToken: "test-token", presetId: "openai" });
+  const model = await store.materializeProviderModel(provider.id, "gpt-5.5");
+  const project = await store.createProject("Built-in capabilities");
+  const session = await store.createSession(project.id, "Built-in capabilities", model.id);
+  await store.updateSession(session.id, {
+    enabledConnectorIds: ["pubmed", "arxiv"],
+    enabledSkillIds: ["code-engineer"],
+    enabledSkillLibraries: [{ libraryId: "pinned-library", versionId: "head" }],
+    skillSelectionMode: "selected",
+  });
+  // report-writer declares no connectors: with `all` it must not empty the
+  // Session, which is what a `specific` built-in would do.
+  await store.updateSession(session.id, { specialistId: "builtin-report-writer" });
+
+  const snapshot = computeSettingsSnapshot(store, session.id);
+  assert.deepEqual(snapshot.enabledConnectorIds, ["pubmed", "arxiv"], "a bound built-in keeps the Session's connectors");
+  assert.deepEqual(snapshot.enabledSkillIds, ["code-engineer", "report-writer"],
+    "a bound built-in adds its own skill to the Session's set");
+  assert.deepEqual(snapshot.enabledSkillLibraries, [{ libraryId: "pinned-library", versionId: "head" }],
+    "a bound built-in keeps the Session's pinned libraries");
+});
+
+test("delegated child capabilities follow the target Specialist mode", () => {
+  const installedConnectorIds = new Set(["pubmed", "arxiv", "biorxiv"]);
+  const installedSkillIds = new Set(["code-engineer", "report-writer", "literature-searcher"]);
+  const inherited = { connectorIds: ["pubmed", "arxiv"], skillIds: ["code-engineer", "report-writer"] };
+  const specific = resolveSpecialistCapabilities({
+    capabilityAccess: "specific",
+    connectorIds: ["pubmed"],
+    enabledSkillIds: ["code-engineer"],
+  }, inherited, { extraSkillIds: ["literature-searcher"], installedConnectorIds, installedSkillIds });
+  assert.deepEqual(specific.connectorIds, ["pubmed"]);
+  assert.deepEqual(specific.skillIds, ["code-engineer", "literature-searcher"], "the child role skill is kept");
+
+  const all = resolveSpecialistCapabilities({
+    capabilityAccess: "all",
+    connectorIds: ["biorxiv"],
+    enabledSkillIds: ["report-writer"],
+  }, inherited, { installedConnectorIds, installedSkillIds });
+  assert.deepEqual(all.connectorIds, ["pubmed", "arxiv", "biorxiv"]);
+  assert.deepEqual(all.skillIds, ["code-engineer", "report-writer"]);
+
+  const stale = resolveSpecialistCapabilities({
+    capabilityAccess: "specific",
+    connectorIds: ["pubmed", "removed-connector"],
+    enabledSkillIds: ["removed-skill"],
+  }, inherited, { installedConnectorIds, installedSkillIds });
+  assert.deepEqual(stale.connectorIds, ["pubmed"], "an uninstalled connector is not granted by a stored list");
+  assert.deepEqual(stale.skillIds, [], "an uninstalled skill is not granted by a stored list");
 });
 
 test("computeSettingsSnapshot rejects a session whose effective model was deleted", async (context) => {

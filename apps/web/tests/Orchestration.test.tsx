@@ -17,7 +17,7 @@ const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux",
 import assert from "node:assert/strict";
 
 
-import type { Subagent } from "@sciencediscovery/schema";
+import type { Specialist, Subagent } from "@sciencediscovery/schema";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -279,6 +279,76 @@ test("specialist editor starts collapsed behind the specialist list", () => {
   assert.match(html, />＋ New specialist</);
   assert.doesNotMatch(html, /specialist-form-card/);
   assert.doesNotMatch(html, /specialist-description-card/);
+});
+
+test("the web Specialist editor round-trips capability access and defaults a new role to all", async () => {
+  const legacy: Specialist = {
+    connectorIds: ["pubmed"],
+    createdAt: timestamp,
+    description: "Legacy role",
+    enabledSkillIds: [],
+    id: "legacy-role",
+    instructions: "Do the work.",
+    name: "Legacy role",
+    updatedAt: timestamp,
+  };
+  const calls: Array<{ body: Record<string, unknown>; id?: string; method: string }> = [];
+  const client = {
+    createSpecialist: async (body: Record<string, unknown>) => {
+      calls.push({ body, method: "create" });
+      return { ...legacy, ...body, id: "new-role" };
+    },
+    getReviewerSpecialistSettings: async () => ({ enabled: false }),
+    listSpecialists: async () => [legacy],
+    updateSpecialist: async (id: string, body: Record<string, unknown>) => {
+      calls.push({ body, id, method: "update" });
+      return { ...legacy, ...body };
+    },
+  } as unknown as ApiClient;
+  let renderer: ReactTestRenderer | undefined;
+  await act(async () => {
+    renderer = create(createElement(SpecialistManager, {
+      client,
+      connectors: [],
+      onChanged: () => undefined,
+      onError: () => undefined,
+      skills: [],
+    }));
+  });
+  try {
+    // A legacy record with a list is specific by inference; an edit keeps that
+    // meaning instead of silently turning the role additive.
+    const legacyButton = renderer!.root.findAllByType("button")
+      .find((button) => typeof button.props.title === "string" && button.props.title.startsWith("Legacy role"));
+    assert.ok(legacyButton);
+    await act(async () => { legacyButton.props.onClick(); });
+    await act(async () => {
+      await renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} });
+    });
+    assert.equal(calls.at(-1)?.method, "update");
+    assert.equal(calls.at(-1)?.body.capabilityAccess, "specific");
+
+    // A new role keeps the additive behavior the web editor had before the
+    // capability mode existed, even when a skill is selected.
+    const newButton = renderer!.root.findAllByType("button")
+      .find((button) => String(button.props.children).includes("New specialist"));
+    assert.ok(newButton);
+    await act(async () => { newButton.props.onClick(); });
+    const input = renderer!.root.findAllByType("input")[0]!;
+    const textareas = renderer!.root.findAllByType("textarea");
+    await act(async () => {
+      input.props.onChange({ target: { value: "New role" } });
+      textareas[0]!.props.onChange({ target: { value: "A new role" } });
+      textareas[1]!.props.onChange({ target: { value: "Do the new work." } });
+    });
+    await act(async () => {
+      await renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} });
+    });
+    assert.equal(calls.at(-1)?.method, "create");
+    assert.equal(calls.at(-1)?.body.capabilityAccess, "all");
+  } finally {
+    await act(async () => { renderer!.unmount(); });
+  }
 });
 
 test("parallel research lanes expose a source failure without prompts or telemetry", () => {

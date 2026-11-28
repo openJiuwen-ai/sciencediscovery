@@ -18,6 +18,7 @@ import { ProjectRecordSlot } from "./plugins/project-views.js";
 import { readSettingsCache, writeSettingsCache } from "./settings-cache.js";
 import { useEffect, useState, type FormEvent } from "react";
 
+import { specialistCapabilityAccess } from "@sciencediscovery/schema";
 import type {
   ConnectorManifest,
   ReviewerSpecialistLevel,
@@ -156,6 +157,7 @@ export function SpecialistManager({
   const [instructions, setInstructions] = useState("");
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
+  const [capabilityAccess, setCapabilityAccess] = useState<"all" | "specific">("all");
   const [busy, setBusy] = useState(false);
   const cachedReviewer = readSettingsCache<{ enabled: boolean }>(client, "reviewer-specialist-settings");
   const [reviewerEnabled, setReviewerEnabled] = useState<boolean | undefined>(cachedReviewer?.enabled);
@@ -234,6 +236,9 @@ export function SpecialistManager({
     setInstructions(specialist?.instructions ?? "");
     setSelectedSkills(specialist?.enabledSkillIds ?? []);
     setSelectedConnectors(specialist?.connectorIds ?? []);
+    // A legacy record has no stored mode; resolve it the same way the store
+    // does so an edit preserves its current additive or exclusive behavior.
+    setCapabilityAccess(specialistCapabilityAccess(specialist));
     setFormOpen(true);
   }
 
@@ -244,6 +249,7 @@ export function SpecialistManager({
     setInstructions("");
     setSelectedSkills([]);
     setSelectedConnectors([]);
+    setCapabilityAccess("all");
     setFormOpen(false);
   }
 
@@ -251,7 +257,7 @@ export function SpecialistManager({
     event.preventDefault();
     setBusy(true);
     try {
-      const body = { connectorIds: selectedConnectors as Specialist["connectorIds"], description, enabledSkillIds: selectedSkills, instructions, name };
+      const body = { capabilityAccess, connectorIds: selectedConnectors as Specialist["connectorIds"], description, enabledSkillIds: selectedSkills, instructions, name };
       if (editingId) await client.updateSpecialist(editingId, body);
       else await client.createSpecialist(body);
       closeEditor();

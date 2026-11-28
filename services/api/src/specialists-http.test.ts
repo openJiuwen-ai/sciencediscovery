@@ -121,6 +121,97 @@ describe("the Specialist routes answer a rejected input as a client error", () =
     assert.equal(enabled.body.description, "edited while disabled");
   });
 
+  test("specific capability access round-trips even with no lists", async () => {
+    const created = await request("POST", "/api/specialists", {
+      capabilityAccess: "specific",
+      connectorIds: [],
+      description: "d",
+      enabledSkillIds: [],
+      instructions: "i",
+      name: "specific empty subject",
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.capabilityAccess, "specific");
+    const listed = await request("GET", "/api/specialists");
+    const stored = (listed.body as unknown as Array<{ capabilityAccess?: string; id: string }>)
+      .find((entry) => entry.id === created.body.id);
+    assert.equal(stored?.capabilityAccess, "specific", "an empty specific selection is not confused with full access");
+  });
+
+  test("a legacy Specialist without capabilityAccess infers it from its lists", async () => {
+    const listed = await request("POST", "/api/specialists", {
+      connectorIds: ["pubmed"],
+      description: "d",
+      enabledSkillIds: [],
+      instructions: "i",
+      name: "legacy specific subject",
+    });
+    assert.equal(listed.status, 201);
+    assert.equal(listed.body.capabilityAccess, "specific", "a non-empty list keeps its restrictive meaning");
+    const empty = await request("POST", "/api/specialists", {
+      connectorIds: [],
+      description: "d",
+      enabledSkillIds: [],
+      instructions: "i",
+      name: "legacy all subject",
+    });
+    assert.equal(empty.status, 201);
+    assert.equal(empty.body.capabilityAccess, "all", "two empty lists keep the inherited meaning");
+  });
+
+  test("a PUT with an unavailable skill id is still rejected", async () => {
+    const created = await request("POST", "/api/specialists", {
+      description: "d",
+      instructions: "i",
+      name: "unavailable skill PUT subject",
+    });
+    assert.equal(created.status, 201);
+    const response = await request("PUT", `/api/specialists/${created.body.id}`, { enabledSkillIds: ["removed-skill"] });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, "Specialist skills are unavailable: removed-skill");
+  });
+
+  test("a name-only PUT keeps an all-mode Specialist's own lists", async () => {
+    const created = await request("POST", "/api/specialists", {
+      capabilityAccess: "all",
+      connectorIds: ["pubmed"],
+      description: "d",
+      enabledSkillIds: ["code-engineer"],
+      instructions: "i",
+      name: "all mode lists subject",
+    });
+    assert.equal(created.status, 201);
+    const updated = await request("PUT", `/api/specialists/${created.body.id}`, { name: "all mode lists renamed" });
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.capabilityAccess, "all");
+    assert.deepEqual(updated.body.connectorIds, ["pubmed"], "full access keeps its own connector");
+    assert.deepEqual(updated.body.enabledSkillIds, ["code-engineer"], "full access keeps its own skill");
+  });
+
+  test("a PUT without runtime preserves the stored advanced runtime options", async () => {
+    const runtime = {
+      execution: "direct",
+      fallback: false,
+      kind: "codex",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      timeoutSeconds: 120,
+    };
+    const created = await request("POST", "/api/specialists", {
+      description: "d",
+      instructions: "i",
+      name: "runtime preservation subject",
+      runtime,
+    });
+    assert.equal(created.status, 201);
+    const updated = await request("PUT", `/api/specialists/${created.body.id}`, {
+      description: "renamed only",
+      name: "runtime preservation renamed",
+    });
+    assert.equal(updated.status, 200);
+    assert.deepEqual(updated.body.runtime, runtime, "omitting runtime must not erase the stored options");
+  });
+
   test("a removed skill cannot block a custom Specialist's flag-only PUT", async () => {
     const skill = await request("POST", "/api/skills", { name: "removed-toggle-skill", description: "temporary", instructions: "Check data." });
     assert.equal(skill.status, 201);

@@ -89,6 +89,9 @@ test("TC-E2E-01 research team with custom Specialist and MCP signoff", { tag: ["
     const reviewerInstructions = "Use only your mounted deliverable_check MCP for delivery audit. Pass the supplied full report unchanged as report_text. Return the actual ok/missing/message result and the supplied artifact/version identity. Do not rewrite the report or invent a passing result.";
     const specialistResponse = await page.request.post(`${apiBaseUrl()}/api/specialists`, { headers, data: {
       name: "deliverable-reviewer", description: "Final delivery section audit with custom MCP", instructions: reviewerInstructions,
+      // The reviewer is meant to use only its own signoff MCP, so the mode is
+      // explicit rather than inferred from the non-empty connector list.
+      capabilityAccess: "specific",
       connectorIds: [connector], enabledSkillIds: [],
     } });
     expect(specialistResponse.ok()).toBe(true); specialist = (await specialistResponse.json()).id;
