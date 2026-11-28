@@ -1,7 +1,7 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 import { expect, test } from "@playwright/test";
-import { CREATED_AT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
+import { CREATED_AT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession, revealAndClick } from "./fixtures.js";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createJourneyReporter } from "../../../test/helpers/journey-report.ts";
@@ -94,7 +94,7 @@ test("a missing project reports a recoverable export error and stacked Escape on
   await test.step("1. Export after the project disappeared", async () => {
     await page.goto("/");
     await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
-    await page.getByRole("button", { name: "会话菜单", exact: true }).click();
+    await revealAndClick(page, page.getByRole("button", { name: "会话菜单", exact: true }));
     await page.getByRole("menuitem", { name: "导出会话" }).click();
     await expect(page.getByRole("dialog").getByRole("alert")).toContainText("会话或所属项目已不存在");
     await expect(page.getByRole("button", { name: "开始导出" })).toBeDisabled();
@@ -136,7 +136,7 @@ for (const locale of ["zh-CN", "en"]) {
       await capture("10-imported-read-only");
     });
     await test.step("2. Inspect export preparation and failure without losing the conversation", async () => {
-      await page.getByRole("button", { name: en ? "Session menu" : "会话菜单", exact: true }).click();
+      await revealAndClick(page, page.getByRole("button", { name: en ? "Session menu" : "会话菜单", exact: true }));
       await page.getByRole("menuitem", { name: en ? "Export conversation" : "导出会话" }).click();
       await page.getByRole("button", { name: en ? "Start export" : "开始导出" }).click();
       await expect(page.locator(".research-export-progress")).toContainText(en ? "export in progress" : "个导出进行中");
@@ -189,7 +189,7 @@ for (const { locale, phase, expected } of [
       await journey.step("1. Start exporting a conversation", "The export dialog opens and the export starts.", async () => {
         await page.goto("/");
         await expect(page.locator(".conversation")).toContainText("下文结论");
-        await page.getByRole("button", { name: en ? "Session menu" : "会话菜单", exact: true }).click();
+        await revealAndClick(page, page.getByRole("button", { name: en ? "Session menu" : "会话菜单", exact: true }));
         await page.getByRole("menuitem", { name: en ? "Export conversation" : "导出会话" }).click();
         await page.getByRole("button", { name: en ? "Start export" : "开始导出" }).click();
       });
@@ -227,7 +227,7 @@ test("session menu exports research with two scope cards", async ({ page }, info
     await page.goto("/");
     await expect(page.locator(".task-head-title")).toHaveText("晶体结构分析");
     await expect(page.locator(".research-package-bar")).toHaveCount(0);
-    await page.getByRole("button", { name: "会话菜单", exact: true }).click();
+    await revealAndClick(page, page.getByRole("button", { name: "会话菜单", exact: true }));
     // 归档 sits between 重命名 and 导出会话: it is a Session action like the other
     // three, so it belongs on this menu rather than in a toolbar of its own.
     await expect(page.getByRole("menuitem")).toHaveText(["✎重命名", "归档", "导出会话", "🗑删除"]);

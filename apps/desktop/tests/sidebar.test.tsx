@@ -15,6 +15,7 @@
 import { createTest } from "../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 // The test runner compiles JSX with the classic runtime, so React has to be in
 // scope even though the app itself uses the automatic one.
 import React from "react";
@@ -23,6 +24,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkspaceActions } from "../src/app/use-workspace.js";
 import { EN } from "../src/text/en.js";
 import { Sidebar } from "../src/views/Sidebar.js";
+
+import { act, create } from "./support/dom-renderer.js";
+import type { ReactTestRenderer } from "./support/dom-renderer.js";
+
+// `act` states its warnings only when the environment says it may be used; the
+// interaction case below mounts a real renderer, so the flag goes on here.
+Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, writable: true, value: true });
 
 const actions = { openSession: async () => {}, newSession: () => {}, createProject: async () => {} } as unknown as WorkspaceActions;
 
@@ -161,6 +169,173 @@ test("the active session is the only row marked active", () => {
     recent: [session("s1", "结构比对"), session("s2", "文献综述")],
   });
   assert.equal(markup.split('class="side-row side-sub is-active"').length - 1, 1);
+});
+
+test("the section labels take a row title's size, not its weight, in the muted colour", () => {
+  // 项目 and 会话 are headings over the rows they name, so they are no longer set
+  // smaller than those rows: the same 14px a Project or Session title takes. They
+  // stay regular rather than bold — the headings are a quiet caption over the
+  // list, and the eye should land on the Project and Session names first.
+  // Comments are stripped first: a comment line would otherwise be swallowed
+  // into the next rule's selector list by the matcher below.
+  const css = readFileSync(new URL("../src/styles/design.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//gu, "");
+  const rule = (selector: string) => {
+    // The selector may sit anywhere in a comma list, so match it as a whole
+    // selector line and return the block that list opens.
+    for (const match of css.matchAll(/^([^{}\n][^{}]*?)\{([^{}]*)\}/gmu)) {
+      const selectors = match[1]!.split(",").map((part) => part.trim());
+      if (selectors.includes(selector)) return `${match[1]}{${match[2]}}`;
+    }
+    assert.fail(`${selector} has no rule in design.css`);
+  };
+  const size = (block: string) => /font-size: ([\d.]+)px;/.exec(block)?.[1];
+  const label = rule(".side-label");
+  assert.equal(size(label), "14");
+  assert.equal(size(label), size(rule(".side-project")));
+  assert.equal(size(label), size(rule(".side-session")));
+  assert.match(label, /font-weight: 400;/);
+  assert.match(label, /color: #777;/);
+  // The `+` beside 项目 is the label's own size and weight, so it reads as a mark
+  // on the heading rather than as a louder control beside it.
+  const add = rule(".side-label-row .side-mini-button.is-add");
+  assert.equal(size(add), "14");
+  assert.match(add, /font-weight: 400;/);
+  // 新建项目 waits out of the way until the heading is pointed at, and comes
+  // back for the keyboard too: `opacity` keeps it in the tab order, where
+  // `display: none` would not.
+  assert.match(add, /opacity: 0;/);
+  assert.doesNotMatch(add, /display: none;|visibility: hidden;/);
+  assert.match(rule(".side-label-row:hover .side-mini-button.is-add"), /opacity: 1;/);
+  assert.match(rule(".side-label-row:focus-within .side-mini-button.is-add"), /opacity: 1;/);
+  assert.match(rule(".side-label-row .side-mini-button.is-add:focus-visible"), /opacity: 1;/);
+});
+
+test("a row's own actions wait for the pointer, on Project rows and Session rows alike", () => {
+  // A Project's 在项目中新建会话 `+` and its `⋯`, and a Session's `⋯`, stand beside
+  // the name only while the row is under the pointer or holds keyboard focus —
+  // including the row of the open Project and of the active Session.
+  // Comments are stripped first: a comment line would otherwise be swallowed
+  // into the next rule's selector list by the matcher below.
+  const css = readFileSync(new URL("../src/styles/design.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//gu, "");
+  const rule = (selector: string) => {
+    for (const match of css.matchAll(/^([^{}\n][^{}]*?)\{([^{}]*)\}/gmu)) {
+      const selectors = match[1]!.split(",").map((part) => part.trim());
+      if (selectors.includes(selector)) return `${match[1]}{${match[2]}}`;
+    }
+    assert.fail(`${selector} has no rule in design.css`);
+  };
+  const actions = rule(".side-row.side-sub .side-actions");
+  assert.match(actions, /opacity: 0;/);
+  assert.match(actions, /pointer-events: none;/);
+  assert.doesNotMatch(actions, /display: none;|visibility: hidden;/);
+  // They float over the row's right end instead of holding width in it, so the
+  // name keeps its full width at rest and does not re-truncate on hover.
+  assert.match(actions, /position: absolute;/);
+  assert.match(rule(".side-row.side-sub:hover .side-actions"), /opacity: 1;/);
+  assert.match(rule(".side-row.side-sub:focus-within .side-actions"), /opacity: 1;/);
+  assert.match(rule(".side-row.side-project:hover .side-actions"), /opacity: 1;/);
+  assert.match(rule(".side-row.side-project:focus-within .side-actions"), /opacity: 1;/);
+  // Neither the open Project nor the active Session keeps its controls out.
+  assert.doesNotMatch(css, /\.side-project\.is-active[^{]*\.side-actions/);
+  assert.doesNotMatch(css, /\.side-sub\.is-active[^{]*\.side-actions/);
+  // The strip floats over the last 50px of a Project's name, so the same reveal
+  // that shows it masks that band out: the name must not be read through two
+  // transparent buttons. A mask moves no glyph, so the name does not
+  // re-truncate on hover the way a wider `padding-right` would.
+  for (const selector of [
+    ".side-row.side-project:hover .side-project-toggle .label",
+    ".side-row.side-project:focus-within .side-project-toggle .label",
+  ]) {
+    const mask = rule(selector);
+    assert.match(mask, /mask-image: linear-gradient\(to right/u);
+    assert.match(mask, /transparent calc\(100% - 50px\)/u);
+  }
+});
+
+test("a device that cannot hover is shown the row controls without one", () => {
+  // A touch screen has no pointer to wait for, so the controls a reader there
+  // could never summon are simply shown: the first tap then lands on the
+  // control it can see rather than only on the row underneath it.
+  // Comments are stripped first: a comment line would otherwise be swallowed
+  // into the next rule's selector list by the matcher below.
+  const css = readFileSync(new URL("../src/styles/design.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//gu, "");
+  const media = /@media \(hover: none\) \{([\s\S]*?)\n\}/u.exec(css);
+  assert.ok(media, "design.css has no no-hover fallback");
+  const block = media[1]!;
+  for (const selector of [
+    ".side-label-row .side-mini-button.is-add",
+    ".side-row.side-project .side-actions",
+    ".side-row.side-sub .side-actions",
+  ]) {
+    assert.ok(block.includes(selector), `${selector} is not shown without a hover`);
+  }
+  assert.match(block, /opacity: 1;/u);
+  assert.match(block, /pointer-events: auto;/u);
+
+  // Showing the controls is only half of it: the room that keeps them off the
+  // text is made under `:hover`/`:focus-within`, which no device without a
+  // pointer ever reaches. Without the same room here, a long Project name is
+  // painted under the `+` and `⋯`, and a Session's clock under its `⋯`, on
+  // exactly the devices that cannot move them out of the way — so the media
+  // branch carries both compensations itself.
+  assert.ok(
+    block.includes(".side-row.side-project .side-project-toggle .label"),
+    "the no-hover branch shows a Project's strip over a name it does not fade",
+  );
+  assert.match(block, /mask-image: linear-gradient\(to right, #000 calc\(100% - 60px\), transparent calc\(100% - 50px\)\)/u);
+  assert.match(
+    block,
+    /\.side-row\.side-sub \{\n\s*padding-right: 46px;/u,
+    "the Session row keeps its own 12px plus the 34px the `⋯` needs, so the clock ends before the strip",
+  );
+});
+
+test("a project's name is its own fold control, with no chevron beside it", () => {
+  // The fold is the name: `aria-expanded` on the name's button says whether the
+  // Project's sessions are showing, and pressing the name folds or unfolds
+  // them. A `^`/`v` glyph beside it would say the same thing a second time.
+  const markup = render({ projects: [project("p1", "脓毒症研究")], sessionsByProject: { p1: [session("s1", "文献综述", undefined, "p1")] } });
+  assert.match(markup, /<button aria-expanded="true" class="side-project-toggle"/);
+  assert.doesNotMatch(markup, /class="chev"/);
+});
+
+test("pressing a project's name folds and unfolds its sessions, and aria-expanded follows", async () => {
+  // The name is a real `<button type="button">`, so Enter and Space activate it
+  // the way the browser activates any button — the test presses the handler the
+  // browser presses, and reads whether the sessions and the state move with it.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: false })) as unknown as typeof fetch;
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      renderer = create(
+        <Sidebar
+          actions={actions}
+          projects={[project("p1", "脓毒症研究")]}
+          recent={[]}
+          sessionsByProject={{ p1: [session("s1", "文献综述", undefined, "p1")] }}
+        />,
+      );
+    });
+    const fold = () => {
+      const button = renderer!.root.findAllByType("button").find((node) => node.props.className === "side-project-toggle");
+      assert.ok(button, "the project name is not a button");
+      assert.equal(button.props.type, "button");
+      return button;
+    };
+    const drawn = () => JSON.stringify(renderer!.toJSON());
+    assert.equal(fold().props["aria-expanded"], true);
+    assert.ok(drawn().includes("文献综述"), "the open Project does not list its session");
+    await act(async () => { fold().props.onClick(); });
+    assert.equal(fold().props["aria-expanded"], false);
+    assert.ok(!drawn().includes("文献综述"), "the folded Project still lists its session");
+    await act(async () => { fold().props.onClick(); });
+    assert.equal(fold().props["aria-expanded"], true);
+    assert.ok(drawn().includes("文献综述"), "the Project did not unfold");
+  } finally {
+    if (renderer) await act(async () => renderer!.unmount());
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("the project the open session belongs to is the only fold marked active", () => {

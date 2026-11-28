@@ -463,9 +463,10 @@ export function Sidebar({
                       <path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
                     </svg>
                     <span className="label">{project.name}</span>
-                    <svg aria-hidden="true" className="chev" fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="14">
-                      <path d="M6 9l6 6 6-6" />
-                    </svg>
+                    {/* No chevron beside the name: the name itself is the fold
+                        control. `aria-expanded` above carries the state, so a
+                        `^`/`v` glyph beside it would only repeat what the row
+                        already says — and fold the name's own reading. */}
                   </button>
                 )}
                 <div className="side-actions">

@@ -25,7 +25,7 @@
  * answer would let a spec pass while the app was calling an endpoint nobody
  * taught the mock about.
  */
-import type { Page, Route } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 
 export const TOKEN = "e2e-token";
 export const TOKEN_STORAGE_KEY = "sciencediscovery-token";
@@ -1515,4 +1515,21 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     },
     state,
   };
+}
+
+/**
+ * Presses one of the column's row controls, arriving on the row first.
+ *
+ * The column keeps a row's `+` and `⋯` out of sight until the pointer is on the
+ * row or the row holds focus (`opacity: 0` with `pointer-events: none`).
+ * Playwright hit-tests a click point before it moves the mouse, so a bare
+ * `.click()` is answered by whatever lies under the invisible control — a
+ * Session's clock, or the label the 新建项目 `+` belongs to — and retries until
+ * it times out. Pointing at the row is part of the gesture here rather than a
+ * workaround: it is what a reader does before pressing either control, and the
+ * row that reveals a control is the one that contains it.
+ */
+export async function revealAndClick(page: Page, control: Locator): Promise<void> {
+  await page.locator(".side-row, .side-label-row").filter({ has: control }).first().hover();
+  await control.click();
 }

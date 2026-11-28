@@ -23,7 +23,7 @@
 
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
-import { CREATED_AT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession } from "./fixtures.js";
+import { CREATED_AT, TOKEN, TOKEN_STORAGE_KEY, installMockApi, makeSession, revealAndClick } from "./fixtures.js";
 
 const LOCALE_KEY = "sciencediscovery-desktop:locale";
 
@@ -61,7 +61,7 @@ const files = [
 ];
 
 async function openExportDialog(page: Page, locale: "zh" | "en") {
-  await page.getByRole("button", { name: locale === "en" ? "Session menu" : "会话菜单", exact: true }).click();
+  await revealAndClick(page, page.getByRole("button", { name: locale === "en" ? "Session menu" : "会话菜单", exact: true }));
   await page.getByRole("menuitem", { name: locale === "en" ? "Export conversation" : "导出会话" }).click();
   const dialog = page.getByRole("dialog", { name: locale === "en" ? "Export conversation" : "导出会话" });
   await expect(dialog).toBeVisible();
